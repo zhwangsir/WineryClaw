@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Card, List, Button, Empty, Drawer, Tooltip, Form, Input, Select, message, Modal } from "antd";
+import { Card, List, Button, Empty, Drawer, Tooltip, Form, Input, Select, message, Modal, Switch, Tag } from "antd";
 import {
   GlobalOutlined,
   LinkOutlined,
@@ -58,6 +58,7 @@ export default function ChannelsPage() {
     fetchMessages,
     messages,
     deleteChannel,
+    setAutoReply,
   } = useChannelStore();
 
   const [msgDrawerOpen, setMsgDrawerOpen] = useState(false);
@@ -210,6 +211,35 @@ export default function ChannelsPage() {
                   </span>
                 </div>
                 <div style={{ fontSize: 12, color: "var(--c-text-3)", fontWeight: 300 }}>ID: {ch.id}</div>
+
+                {/* M5 — auto-reply toggle: when on, inbound messages are
+                    routed to chat_engine and the response is sent back */}
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 12,
+                    borderTop: "1px solid var(--c-border)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <Tooltip title="开启后,入站消息会经过 LLM 自动回复给原 sender(需要 channel 已连接 + 在接收)">
+                    <span style={{ fontSize: 13, color: "var(--c-text-2)" }}>
+                      自动回复
+                      {ch.auto_reply && (
+                        <Tag color="success" style={{ marginLeft: 8 }}>
+                          ON
+                        </Tag>
+                      )}
+                    </span>
+                  </Tooltip>
+                  <Switch
+                    size="small"
+                    checked={!!ch.auto_reply}
+                    onChange={(checked) => setAutoReply(ch.id, checked)}
+                  />
+                </div>
               </Card>
             </List.Item>
           )}

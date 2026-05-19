@@ -11,6 +11,8 @@
  *   POST   /channels/:id/receive/start    — begin polling/listening
  *   POST   /channels/:id/receive/stop     — stop receiving
  *   POST   /channels/:id/toggle           — toggle enabled flag
+ *   POST   /channels/:id/auto-reply       — set auto-reply flag (M5)
+ *   GET    /channels/:id/auto-reply       — query auto-reply flag (M5)
  *   DELETE /channels/:id                  — remove channel config
  */
 
@@ -91,6 +93,19 @@ export function registerChannelsRoutes(app: FastifyInstance, deps: ChannelsRoute
   app.post("/channels/:id/toggle", async (request) => {
     const { id } = request.params as { id: string };
     return deps.channelManager.toggle(id);
+  });
+
+  // M5 — auto-reply (inbound → chat → outbound) toggle.
+  app.post("/channels/:id/auto-reply", async (request) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as { enabled?: boolean }) ?? {};
+    const enabled = body.enabled === true;
+    return deps.channelManager.setAutoReply(id, enabled);
+  });
+
+  app.get("/channels/:id/auto-reply", async (request) => {
+    const { id } = request.params as { id: string };
+    return { ok: true, auto_reply: deps.channelManager.getAutoReply(id) };
   });
 
   app.delete("/channels/:id", async (request) => {

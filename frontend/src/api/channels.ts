@@ -11,4 +11,7 @@ export const channelsApi = {
   startReceiving: (id: string) => api.post(`/api/channels/${id}/receive/start`),
   stopReceiving: (id: string) => api.post(`/api/channels/${id}/receive/stop`),
   delete: (id: string) => api.delete(`/api/channels/${id}`).then((r: any) => r.ok),
+  // M5 — per-channel auto-reply toggle
+  setAutoReply: (id: string, enabled: boolean) =>
+    api.post<{ ok: boolean; auto_reply: boolean }>(`/api/channels/${id}/auto-reply`, { enabled }),
 };

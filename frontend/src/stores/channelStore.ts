@@ -22,6 +22,7 @@ interface ChannelState {
   connectChannel: (channel: string, config?: Record<string, unknown>) => Promise<void>;
   disconnectChannel: (channelId: string) => Promise<void>;
   toggleChannel: (id: string) => Promise<void>;
+  setAutoReply: (id: string, enabled: boolean) => Promise<void>;
   deleteChannel: (id: string) => Promise<void>;
 }
 
@@ -91,6 +92,21 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
       await channelsApi.toggle(id);
     } catch (e: any) {
       message.error(e.message || "切换通道状态失败");
+      set({ channels: prev });
+    }
+  },
+
+  // M5 — auto-reply per channel with optimistic update + rollback on error
+  setAutoReply: async (id: string, enabled: boolean) => {
+    const prev = get().channels;
+    set((s) => ({
+      channels: s.channels.map((c) => (c.id === id ? { ...c, auto_reply: enabled } : c)),
+    }));
+    try {
+      await channelsApi.setAutoReply(id, enabled);
+      message.success(enabled ? "已开启自动回复" : "已关闭自动回复");
+    } catch (e: any) {
+      message.error(e.message || "设置自动回复失败");
       set({ channels: prev });
     }
   },

@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { ToolExecutor } from "./tools/tool-executor.js";
 import { ChannelManager } from "./channels/channel-manager.js";
+import { ChannelAutoReply } from "./channels/channel-auto-reply.js";
 import { PluginLoader } from "./plugins/plugin-loader.js";
 import { EcosystemHub } from "./ecosystem/ecosystem-hub.js";
 import { DokobotClient } from "./dokobot/dokobot-client.js";
@@ -139,6 +140,25 @@ const state = {
 await state.toolExecutor.initialize();
 await state.channelManager.initialize();
 state.channelManager.setBroadcastHandler((msg: unknown) => wsHub.broadcast(msg));
+
+// M5: wire channel auto-reply — inbound messages on auto_reply-enabled
+// channels are forwarded to main-brain /chat and the reply is sent
+// back through the same channel.
+const channelAutoReply = new ChannelAutoReply({
+  channelManager: state.channelManager,
+  chatFn: async ({ message, session_id, agent_id }) => {
+    const axios = (await import("axios")).default;
+    const resp = await axios.post(
+      `${MAIN_BRAIN_URL}/chat`,
+      { message, session_id, agent_id, tools_enabled: false },
+      USE_UDS
+        ? { socketPath: MAIN_BRAIN_UDS, timeout: 120000 }
+        : { timeout: 120000 },
+    );
+    return { reply: resp.data?.reply ?? "" };
+  },
+});
+state.channelManager.setInboundHandler(channelAutoReply.handleInbound);
 await Promise.all([
   state.pluginLoader.initialize(),
   state.ecosystemHub.initialize(),

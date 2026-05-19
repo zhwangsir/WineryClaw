@@ -89,4 +89,17 @@ describe("channels API", () => {
     expect(true).toBe(true);  // API call succeeded
   });
 
+  // M5 — auto-reply
+  it("setAutoReply posts {enabled: true} to /api/channels/:id/auto-reply", async () => {
+    vi.mocked(api.post).mockResolvedValue({ ok: true, auto_reply: true });
+    await channelsApi.setAutoReply("c1", true);
+    expect(api.post).toHaveBeenCalledWith("/api/channels/c1/auto-reply", { enabled: true });
+  });
+
+  it("setAutoReply posts {enabled: false} when disabling", async () => {
+    vi.mocked(api.post).mockResolvedValue({ ok: true, auto_reply: false });
+    await channelsApi.setAutoReply("c2", false);
+    expect(api.post).toHaveBeenCalledWith("/api/channels/c2/auto-reply", { enabled: false });
+  });
+
 });

@@ -22,6 +22,9 @@ export interface Channel {
   type: string;
   name: string;
   connected: boolean;
+  /** M5: when true, inbound messages on this channel are auto-routed
+   * to chat_engine and the reply is sent back to the sender. */
+  autoReply: boolean;
   config: ChannelConfig;
   protocol: ChannelProtocol;
 }
@@ -37,7 +40,22 @@ export interface InboundMessage {
   sender: string;
   content: string;
   timestamp: string;
+  /** M5: channel-specific identifier needed to reply back. For Telegram
+   * this is the chat_id; for Discord, the channel_id; for Slack, the
+   * conversation id. Falls back to `sender` for protocols where the
+   * sender handle is also the reply target (iMessage, Email). */
+  reply_to?: string;
 }
+
+/** Callback fired by the manager when a message is stored with
+ * direction="inbound". Used by ChannelAutoReply (M5) to route the
+ * message into chat_engine and send the response back through the
+ * same channel. Sync or async — return value is ignored. */
+export type InboundMessageHandler = (
+  channelId: string,
+  channelType: string,
+  message: InboundMessage,
+) => void | Promise<void>;
 
 // Telegram Bot API protocol
 const TelegramProtocol: ChannelProtocol = {
@@ -264,10 +282,16 @@ export class ChannelManager {
   private channels = new Map<string, Channel>();
   private db = subBrainDB.getDb();
   private broadcast: ((msg: any) => void) | null = null;
+  private inboundHandler: InboundMessageHandler | null = null;
   private receivers = new Map<string, { stop: () => void }>();
 
   setBroadcastHandler(handler: (msg: any) => void): void {
     this.broadcast = handler;
+  }
+
+  /** M5: register a handler invoked for every inbound message. */
+  setInboundHandler(handler: InboundMessageHandler | null): void {
+    this.inboundHandler = handler;
   }
 
   async initialize(): Promise<void> {
@@ -282,6 +306,7 @@ export class ChannelManager {
           type: row.type,
           name: row.name,
           connected: !!row.connected,
+          autoReply: !!row.auto_reply,
           config,
           protocol,
         });
@@ -306,8 +331,9 @@ export class ChannelManager {
     const channel: Channel = {
       id,
       type: channelType,
-      name: config.channelId || channelType,
+      name: (config.channelId as string) || channelType,
       connected: true,
+      autoReply: false,
       config,
       protocol,
     };
@@ -316,11 +342,36 @@ export class ChannelManager {
 
     // Persist to SQLite
     const stmt = this.db.prepare(
-      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, auto_reply, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
-    stmt.run(id, channelType, channel.name, 1, JSON.stringify(config), new Date().toISOString(), new Date().toISOString());
+    stmt.run(
+      id,
+      channelType,
+      channel.name,
+      1,
+      JSON.stringify(config),
+      0,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
 
     return { ok: true, channel_id: id };
+  }
+
+  /** M5: toggle auto-reply state for a channel. Persists to SQLite. */
+  async setAutoReply(channelId: string, enabled: boolean): Promise<{ ok: boolean; auto_reply?: boolean; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+    channel.autoReply = enabled;
+    const stmt = this.db.prepare("UPDATE channels SET auto_reply = ?, updated_at = ? WHERE id = ?");
+    stmt.run(enabled ? 1 : 0, new Date().toISOString(), channelId);
+    return { ok: true, auto_reply: enabled };
+  }
+
+  /** M5: query auto-reply state. */
+  getAutoReply(channelId: string): boolean {
+    const channel = this.channels.get(channelId);
+    return channel ? channel.autoReply : false;
   }
 
   async send(channelIdOrType: string, recipient: string, content: string): Promise<{ ok: boolean; error?: string; result?: any }> {
@@ -409,12 +460,13 @@ export class ChannelManager {
     return { ok: true };
   }
 
-  listChannels(): Array<{ id: string; name: string; type: string; connected: boolean }> {
+  listChannels(): Array<{ id: string; name: string; type: string; connected: boolean; auto_reply: boolean }> {
     return Array.from(this.channels.values()).map((c) => ({
       id: c.id,
       name: c.name,
       type: c.type,
       connected: c.connected,
+      auto_reply: c.autoReply,
     }));
   }
 
@@ -433,6 +485,24 @@ export class ChannelManager {
     stmt.run(channelId, msg.sender, msg.content, msg.timestamp, direction, new Date().toISOString());
     if (this.broadcast) {
       this.broadcast({ type: "channel.message", channelId, message: { ...msg, direction } });
+    }
+    // M5: dispatch inbound messages to the registered handler (auto-reply
+    // engine). Fire-and-forget — handler errors must not break inbound
+    // message persistence. We swallow rejections after logging.
+    if (direction === "inbound" && this.inboundHandler) {
+      const channel = this.channels.get(channelId);
+      if (channel) {
+        try {
+          const result = this.inboundHandler(channelId, channel.type, msg);
+          if (result && typeof (result as Promise<void>).then === "function") {
+            (result as Promise<void>).catch((err) =>
+              console.error(`[channel-manager] inbound handler failed for ${channelId}:`, err),
+            );
+          }
+        } catch (err) {
+          console.error(`[channel-manager] inbound handler threw for ${channelId}:`, err);
+        }
+      }
     }
   }
 
@@ -495,10 +565,15 @@ export class ChannelManager {
             if (update.message) {
               const from = update.message.from || {};
               const sender = [from.first_name, from.last_name].filter(Boolean).join(" ").trim() || from.username || "unknown";
+              // chat.id is the reply target. For private chats it equals the
+              // user id; for groups it's the group id. Either way, this is
+              // what `sendMessage` needs.
+              const replyTo = update.message.chat?.id != null ? String(update.message.chat.id) : sender;
               this.storeMessage(channel.id, {
                 sender,
                 content: update.message.text || "",
                 timestamp: new Date(update.message.date * 1000).toISOString(),
+                reply_to: replyTo,
               });
             }
             offset = update.update_id + 1;
@@ -574,6 +649,8 @@ export class ChannelManager {
                   sender: author.username || author.global_name || "unknown",
                   content: payload.d.content || "",
                   timestamp: new Date(payload.d.timestamp || Date.now()).toISOString(),
+                  // Discord's reply target is the channel the message arrived in.
+                  reply_to: payload.d.channel_id || undefined,
                 });
               }
               break;
@@ -674,6 +751,8 @@ export class ChannelManager {
               sender: msg.user,
               content: msg.text || "",
               timestamp: new Date(parseFloat(msg.ts) * 1000).toISOString(),
+              // Slack replies go to the conversation id, not the user.
+              reply_to: conv.id,
             });
           }
         }

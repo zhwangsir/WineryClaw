@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（M4b 完成 — webrain 自身作为 MCP server 暴露,JSON-RPC 2.0 over HTTP + stdio bridge + 6 个只读工具 + 前端信息面板）
+> **最后更新**：2026-05-19（M5 完成 — channel inbound 消息自动经 chat 引擎回复,前端 per-channel Switch 开关;顺手修复 reply_to chat_id 丢失 bug）
 
 ---
 
@@ -537,7 +537,114 @@ frontend    vitest run                                            → 120 files 
 
 客户端拿到 6 个工具后,可以让 LLM 自主调用 `webrain_memory_query` / `webrain_rag_query` 等访问 webrain 的"记忆 + 文档"图谱,无需用户手动复制粘贴。
 
-### 6.10 自学习闭环的物理路径（已全线打通）
+### 6.10 M5 — Channel inbound → chat auto-reply pipeline（本轮）
+
+之前的 channel-manager 有完整协议层(Telegram / Discord / Slack / iMessage / Email)+ 入站消息持久化 + WebSocket 广播,**但 inbound 消息只是被存进 SQLite 就死掉了——没有路由到 chat 引擎,所以"channel 集成"是个有形无实的壳**。M5 把这条路打通。
+
+**核心改动**:新增 `ChannelAutoReply` 引擎,订阅 inbound → 调 `/chat` → 回信回 sender。
+
+**顺手修的 bug**:Telegram/Discord/Slack 的 receiver 之前只存 `sender`(用户名),丢了回信需要的 `chat_id`/`channel_id`/`conv_id`。新增 `InboundMessage.reply_to` 字段并在三个 receiver 都填充。iMessage / Email 因为 sender 本身就是回信目标,fallback `recipient = msg.reply_to || msg.sender`。
+
+**新增 `sub-brain/src/channels/channel-auto-reply.ts`(115 行)**:
+
+- `ChannelAutoReply(deps)` —— `chatFn` 注入(production 是 axios POST `/chat`,测试是 mock)
+- `handleInbound(channelId, type, message)`:
+  - 查 channel 是否 `auto_reply=true`,否则 silent return
+  - 空 content 跳过
+  - **Per-sender sticky session_id**:`ch-{channelId}-{sha256-hash:12}` —— 同一外部联系人多次发消息共享对话上下文
+  - **In-flight 串行化**:同一 (channelId, sender) 的消息按顺序处理,避免 LLM 慢调用时两条消息并行产生乱序回复
+  - chatFn 异常 → 日志 + 不阻塞下一条;LLM 空 reply → 不发(节省 channel 配额)
+  - 用 `message.reply_to || message.sender` 选择 recipient
+- 静态方法 `sessionId(channelId, sender)` 暴露给测试 + 跨 channel 同 sender 不串扰验证
+
+**Schema 改动**:
+
+- `sub-brain/src/db/sub-brain-db.ts`:`channels` 表新增 `auto_reply INTEGER DEFAULT 0`。`CREATE TABLE` 含此列,`ALTER TABLE ADD COLUMN` 用 try/catch 包裹做幂等 migration(已存在的库第一次跑会加列,后续 catch 掉 duplicate column 报错)
+
+**ChannelManager 改动**:
+
+- `Channel.autoReply: boolean` 字段
+- `InboundMessage.reply_to?: string` 字段
+- `InboundMessageHandler` type:`(channelId, channelType, message) => void | Promise<void>`
+- `setInboundHandler(handler)` setter
+- `setAutoReply(id, enabled)` 持久化 + 内存同步
+- `getAutoReply(id)` 查询
+- `listChannels()` 返回值增加 `auto_reply: boolean`
+- `storeMessage()` 在 direction==="inbound" 时调用 inboundHandler;fire-and-forget,错误捕获 + log,不阻塞 broadcast
+- Telegram polling:`reply_to = update.message.chat.id`(私聊 = user id,群组 = group id)
+- Discord gateway:`reply_to = payload.d.channel_id`
+- Slack polling:`reply_to = conv.id`
+
+**main.ts wiring**:
+
+```typescript
+const channelAutoReply = new ChannelAutoReply({
+  channelManager: state.channelManager,
+  chatFn: async ({ message, session_id, agent_id }) => {
+    const resp = await axios.post(`${MAIN_BRAIN_URL}/chat`,
+      { message, session_id, agent_id, tools_enabled: false },
+      USE_UDS ? { socketPath: MAIN_BRAIN_UDS, timeout: 120000 } : { timeout: 120000 });
+    return { reply: resp.data?.reply ?? "" };
+  },
+});
+state.channelManager.setInboundHandler(channelAutoReply.handleInbound);
+```
+
+注意 `tools_enabled: false`—— channel 回复不开放工具调用,防止 channel 这条路径被滥用 shell。
+
+**新增 endpoint**:
+
+- `POST /channels/:id/auto-reply` body `{enabled: boolean}` → 持久化
+- `GET /channels/:id/auto-reply` → 查询
+
+**前端改动**:
+
+- `frontend/src/api/types.ts`:`ChannelInfo.auto_reply?: boolean`
+- `frontend/src/api/channels.ts`:`setAutoReply(id, enabled)` 方法
+- `frontend/src/stores/channelStore.ts`:`setAutoReply` action,乐观更新 + 失败回滚 + toast 反馈
+- `frontend/src/pages/ChannelsPage.tsx`:每张 channel card 底部新增「自动回复」开关 + ON 时显示绿色 Tag 徽章 + Tooltip 提示
+
+**测试**:
+
+- `sub-brain/tests/channel-auto-reply.test.ts`(11 用例):
+  - 未注册 channel / autoReply=false / 空 content → 不触发 chatFn
+  - 正常 routing → 调 chatFn + 用 reply_to 回信
+  - reply_to 缺失时 fallback sender
+  - Sticky session(同 sender 多次消息相同 session_id)+ 不同 sender 不同 session
+  - sessionId 包含 channelId(不同 channel 同 sender 不串扰)
+  - LLM 空 reply → 不发送
+  - chatFn rejection → 不影响后续消息
+  - **同 sender 并发消息串行化**(确保 end-A < start-B)
+  - 自定义 defaultAgentId 透传
+- `sub-brain/tests/channels-routes.test.ts` +3 用例:POST 开启 / POST 默认关闭 / GET 状态查询
+- `frontend/src/api/channels.test.ts` +2 setAutoReply 用例
+
+**运行验收**:
+
+```
+sub-brain  pnpm exec tsc --noEmit                       → 0 errors
+sub-brain  pnpm exec vitest run                         → 33 files / 367 pass(+14)
+frontend   tsc --noEmit                                  → 0 errors  
+frontend   vitest run                                    → 120 files / 1201 pass(+3)
+```
+
+**用户操作流程**:
+
+1. 在 ChannelsPage 连接 Telegram(填 botToken)
+2. 点击"开始接收"启动 polling
+3. 把「自动回复」Switch 打开
+4. 外部用户向你的 bot 发 Telegram 消息 → bot 自动回复 LLM 生成的内容,**每个外部用户独立会话上下文**
+5. Switch 关掉后,inbound 仍然存库 + 推 WebSocket(供 UI 查看),但不自动回信
+
+**故意未做(M5.1 follow-up)**:
+
+- ❌ 每个 channel 独立 agent_id(目前共用 `agent-default`)
+- ❌ Channel 入站消息开放 `tools_enabled`(安全考虑:外部消息能让 LLM 调 shell 是大坑)
+- ❌ Inbound 消息的过滤规则(关键词触发 / 时段限制 / 黑名单)
+- ❌ 流式回复到 channel(Telegram 不支持逐字流,Discord 支持但需要编辑消息;大多数 IM 期望整段回复)
+- ❌ 回复延迟控制(防止机器人回复过快显得不真实)
+
+### 6.11 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -586,11 +693,13 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 
 | 优先 | 任务 | 说明 |
 |---|---|---|
-| 🔥 | **M5 多 channel 集成** | 接入 Telegram / Discord(自托管 IM 优先,云依赖避免);消息从外部 channel → sub-brain → main-brain chat 闭环。涉及 channel manager 设计。 |
+| 🔥 | **M6 桌面壳(Tauri/Electron)+ Skill 执行隔离** | 把 webrain 打包成桌面应用,自带 sub-brain/main-brain 启动。Skill 执行从 `node -e` 改 worker_threads 隔离。Roadmap 最后一块。 |
+| 🔥 | M5.1 Channel 高级控制 | per-channel agent_id / 关键词过滤 / 时段限制 / 黑白名单 / 回复延迟模拟。 |
 | 🔥 | M4b.1 MCP 鉴权 + write 工具 | bearer token + 白名单。鉴权落地后开放 `memory_store` / `wiki_create` / `rag_index_file` 等 write 类工具。 |
 | 🔥 | M4a.1 流式 failover | 当前流路径仍用 `get_primary()`,首 chunk 之前若失败需要 failover。需要 stream 启动失败检测 + endpoint 切换。 |
 | 🔥 | M3.5 PlanExecutor 流式进度 | 当前 `/plan/execute` 是同步返回。后续做 SSE,每个 attempt 完成实时推送给前端,UI 显示「task 2/5 第 3 次尝试中...」。 |
 | 📦 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
+| ✅ | ~~M5 Channel inbound → chat 自动回复~~ | 完成于 2026-05-19(§6.10)。 |
 | ✅ | ~~M4b MCP server 暴露~~ | 完成于 2026-05-19(§6.9)。 |
 | ✅ | ~~M4a Multi-LLM failover + 健康面板~~ | 完成于 2026-05-19(§6.8)。 |
 | ✅ | ~~M3 Planner Verify+Retry~~ | 完成于 2026-05-19(§6.7)。 |

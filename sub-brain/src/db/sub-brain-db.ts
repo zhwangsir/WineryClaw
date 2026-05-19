@@ -31,10 +31,21 @@ export class SubBrainDB {
         name TEXT NOT NULL,
         connected INTEGER DEFAULT 0,
         config TEXT DEFAULT '{}',
+        auto_reply INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT
       )
     `);
+    // M5 migration: add auto_reply column to pre-existing channels tables.
+    // SQLite's ALTER TABLE ADD COLUMN succeeds at most once; subsequent
+    // runs raise "duplicate column" which we catch and ignore. The CREATE
+    // above declares the column for fresh installs; the ALTER is only
+    // for installs that were created before M5.
+    try {
+      this.db.exec("ALTER TABLE channels ADD COLUMN auto_reply INTEGER DEFAULT 0");
+    } catch {
+      // Column already exists — expected on second-and-later runs.
+    }
 
     // Messages table
     this.db.exec(`

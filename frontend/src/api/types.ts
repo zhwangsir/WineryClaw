@@ -116,6 +116,9 @@ export interface ChannelInfo {
   name: string;
   type: string;
   connected: boolean;
+  /** M5: when true, inbound messages are auto-routed through chat
+   * and a reply is sent back through the same channel. */
+  auto_reply?: boolean;
   config?: Record<string, unknown>;
 }
 
