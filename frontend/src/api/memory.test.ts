@@ -57,4 +57,42 @@ describe("memory API", () => {
     expect(true).toBe(true);  // API call succeeded
   });
 
+  // M-Memory-1: conflicts + lineage + dreaming
+  it("list accepts level filter and forwards as query param", async () => {
+    vi.mocked(api.get).mockResolvedValue({ memories: [] });
+    await memoryApi.list("L3", 25);
+    expect(api.get).toHaveBeenCalledWith(expect.stringContaining("level=L3"));
+    expect(api.get).toHaveBeenCalledWith(expect.stringContaining("limit=25"));
+  });
+
+  it("list without filter uses bare /memory/recent path", async () => {
+    vi.mocked(api.get).mockResolvedValue({ memories: [] });
+    await memoryApi.list();
+    expect(api.get).toHaveBeenCalledWith("/brain/memory/recent");
+  });
+
+  it("conflicts hits /memory/conflicts", async () => {
+    vi.mocked(api.get).mockResolvedValue({ groups: [], count: 0 });
+    await memoryApi.conflicts();
+    expect(api.get).toHaveBeenCalledWith("/brain/memory/conflicts");
+  });
+
+  it("markCurrent posts to the resolve endpoint", async () => {
+    vi.mocked(api.post).mockResolvedValue({ ok: true });
+    await memoryApi.markCurrent("mem-123");
+    expect(api.post).toHaveBeenCalledWith("/brain/memory/conflicts/mem-123/mark-current", {});
+  });
+
+  it("lineage hits /memory/:id", async () => {
+    vi.mocked(api.get).mockResolvedValue({ ok: true, memory: {}, sources: [], supersedes: [], superseded_by: null });
+    await memoryApi.lineage("mem-xyz");
+    expect(api.get).toHaveBeenCalledWith("/brain/memory/mem-xyz");
+  });
+
+  it("runDreaming posts to /dreaming/run", async () => {
+    vi.mocked(api.post).mockResolvedValue({});
+    await memoryApi.runDreaming();
+    expect(api.post).toHaveBeenCalledWith("/brain/dreaming/run", {});
+  });
+
 });

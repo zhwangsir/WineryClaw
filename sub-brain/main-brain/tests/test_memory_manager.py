@@ -320,3 +320,121 @@ class TestRetrievalReinforcement:
         assert any(item["id"] == r["id"] for item in results), "expected to retrieve the seed memory"
         bumped = self._row(mm, r["id"])["importance"]
         assert bumped > initial
+
+
+# ---------------------------------------------------------------------------
+# M-Memory-1: list_conflicts / mark_current / get_with_lineage
+# ---------------------------------------------------------------------------
+
+
+class TestConflictsAndLineageAPIs:
+    @pytest.fixture
+    def mm(self, temp_dir, mock_llm_config):
+        return MemoryManager(db_path=str(temp_dir / "test_conflict_api.db"), llm_config=mock_llm_config)
+
+    @pytest.mark.asyncio
+    async def test_list_conflicts_groups_correctly(self, mm):
+        now = datetime.now(timezone.utc).isoformat()
+        with mm._connect() as conn:
+            conn.execute(
+                """INSERT INTO memories (id, level, content, source, session_id, created_at,
+                   importance, last_accessed_at, conflict_group, is_current)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("a", "L3", "Beijing", "t", "s", now, 0.7, now, "G1", 1),
+            )
+            conn.execute(
+                """INSERT INTO memories (id, level, content, source, session_id, created_at,
+                   importance, last_accessed_at, conflict_group, is_current)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("b", "L3", "Shanghai", "t", "s", now, 0.7, now, "G1", 0),
+            )
+            # Unrelated, no group
+            conn.execute(
+                """INSERT INTO memories (id, level, content, source, session_id, created_at,
+                   importance, last_accessed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("c", "L3", "Unrelated", "t", "s", now, 0.7, now),
+            )
+            conn.commit()
+
+        result = await mm.list_conflicts()
+        assert result["count"] == 1
+        grp = result["groups"][0]
+        assert grp["conflict_group"] == "G1"
+        assert len(grp["memories"]) == 2
+        assert grp["current_id"] == "a"
+
+    @pytest.mark.asyncio
+    async def test_list_conflicts_empty_when_no_conflicts(self, mm):
+        result = await mm.list_conflicts()
+        assert result == {"groups": [], "count": 0}
+
+    @pytest.mark.asyncio
+    async def test_mark_current_flips_within_group(self, mm):
+        now = datetime.now(timezone.utc).isoformat()
+        with mm._connect() as conn:
+            for mid, current in (("x", 1), ("y", 0), ("z", 0)):
+                conn.execute(
+                    """INSERT INTO memories (id, level, content, source, session_id, created_at,
+                       importance, last_accessed_at, conflict_group, is_current)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (mid, "L3", f"v-{mid}", "t", "s", now, 0.7, now, "G3", current),
+                )
+            conn.commit()
+        # Pick z as current; both x and y must become 0
+        await mm.mark_current("z")
+        with mm._connect() as conn:
+            states = {
+                r["id"]: r["is_current"]
+                for r in conn.execute(
+                    "SELECT id, is_current FROM memories WHERE conflict_group = ?", ("G3",)
+                ).fetchall()
+            }
+        assert states == {"x": 0, "y": 0, "z": 1}
+
+    @pytest.mark.asyncio
+    async def test_mark_current_errors_without_group(self, mm):
+        now = datetime.now(timezone.utc).isoformat()
+        with mm._connect() as conn:
+            conn.execute(
+                """INSERT INTO memories (id, level, content, source, session_id, created_at,
+                   importance, last_accessed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("solo", "L3", "no group", "t", "s", now, 0.7, now),
+            )
+            conn.commit()
+        result = await mm.mark_current("solo")
+        assert result["ok"] is False
+        assert "conflict group" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_get_with_lineage_walks_one_level(self, mm):
+        l1 = await mm.store({"content": "L1 raw", "level": "L1"})
+        l2 = await mm.store({
+            "content": "L2 summary",
+            "level": "L2",
+            "provenance_source": "consolidation_l1_l2",
+            "provenance_refs": [l1["id"]],
+        })
+        with mm._connect() as conn:
+            conn.execute(
+                "UPDATE memories SET superseded_by = ? WHERE id = ?",
+                (l2["id"], l1["id"]),
+            )
+            conn.commit()
+
+        result = await mm.get_with_lineage(l2["id"])
+        assert result["ok"] is True
+        assert result["memory"]["id"] == l2["id"]
+        assert [s["id"] for s in result["sources"]] == [l1["id"]]
+        assert [s["id"] for s in result["supersedes"]] == [l1["id"]]
+        assert result["superseded_by"] is None
+
+        # From L1 perspective
+        l1_lineage = await mm.get_with_lineage(l1["id"])
+        assert l1_lineage["superseded_by"]["id"] == l2["id"]
+
+    @pytest.mark.asyncio
+    async def test_get_with_lineage_unknown_id_returns_error(self, mm):
+        result = await mm.get_with_lineage("nonexistent")
+        assert result["ok"] is False

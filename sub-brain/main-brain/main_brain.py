@@ -738,6 +738,38 @@ async def memory_restore(memory_id: str):
     return result
 
 
+# ========== Memory M-Memory-1 — conflict + provenance APIs ==========
+
+
+@app.get("/memory/conflicts")
+async def memory_conflicts():
+    """List all L3 conflict groups (M-Memory-1).
+
+    Each group is one or more L3 memories that the conflict detector marked
+    as mutually contradicting. The UI groups them as side-by-side pairs and
+    shows which one is currently active (is_current=1).
+    """
+    return await _state["memory"].list_conflicts()
+
+
+@app.post("/memory/conflicts/{memory_id}/mark-current")
+async def memory_mark_current(memory_id: str):
+    """User override: pick which memory in a conflict group is currently true.
+
+    Sets is_current=1 on the target memory and is_current=0 on the other
+    members of the same conflict_group. Default policy (newer wins) applied
+    automatically on store(); this endpoint exists for manual correction.
+    """
+    return await _state["memory"].mark_current(memory_id)
+
+
+@app.get("/memory/{memory_id}")
+async def memory_get(memory_id: str):
+    """Fetch a single memory by id, including provenance lineage walked
+    one level (the source memories named in provenance_refs)."""
+    return await _state["memory"].get_with_lineage(memory_id)
+
+
 # ========== Reasoning API ==========
 @app.post("/reasoning/analyze")
 async def reasoning_analyze(request: Dict[str, Any]):

@@ -1194,6 +1194,135 @@ class MemoryManager:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # ========== M-Memory-1: conflict listing + manual resolution ==========
+
+    async def list_conflicts(self) -> Dict[str, Any]:
+        """Group all rows that share a non-null conflict_group into pairs/sets.
+
+        Returns:
+            {
+              "groups": [
+                {
+                  "conflict_group": "<uuid>",
+                  "memories": [<row dict>, <row dict>, ...],
+                  "current_id": "<id of is_current=1 row>",
+                },
+                ...
+              ]
+            }
+
+        Skips conflict groups where every member has is_current=1 — that's
+        a malformed state that shouldn't happen but we don't surface it.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM memories
+                   WHERE conflict_group IS NOT NULL AND conflict_group != ''
+                   ORDER BY conflict_group, created_at DESC"""
+            ).fetchall()
+
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            groups.setdefault(row["conflict_group"], []).append(dict(row))
+
+        out: List[Dict[str, Any]] = []
+        for cg, members in groups.items():
+            current = next((m for m in members if m.get("is_current") == 1), None)
+            out.append({
+                "conflict_group": cg,
+                "memories": members,
+                "current_id": current["id"] if current else None,
+            })
+        return {"groups": out, "count": len(out)}
+
+    async def mark_current(self, memory_id: str) -> Dict[str, Any]:
+        """User-driven override: pick which row in a conflict group is current.
+
+        Flips is_current to 1 on the named memory; sets is_current=0 on every
+        other member of the same conflict_group. No-op if the memory has no
+        conflict_group (return ok=False with explanation).
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT conflict_group FROM memories WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if not row:
+                return {"ok": False, "error": f"Memory {memory_id} not found"}
+            cg = row["conflict_group"]
+            if not cg:
+                return {"ok": False, "error": "Memory is not part of a conflict group"}
+            conn.execute(
+                "UPDATE memories SET is_current = 0 WHERE conflict_group = ?", (cg,),
+            )
+            conn.execute(
+                "UPDATE memories SET is_current = 1 WHERE id = ?", (memory_id,),
+            )
+            conn.commit()
+        return {"ok": True, "current_id": memory_id, "conflict_group": cg}
+
+    # ========== M-Memory-1: provenance lineage walk ==========
+
+    async def get_with_lineage(self, memory_id: str) -> Dict[str, Any]:
+        """Fetch a memory + one-level provenance lineage.
+
+        Returns:
+            {
+              "memory": <row dict>,
+              "sources": [<row dict>, ...],   # one-level ancestors via provenance_refs
+              "supersedes": <row dict | None>, # what this row replaced (L1→L2)
+              "superseded_by": <row dict | None>, # what replaced this row (L1 perspective)
+            }
+
+        We walk exactly ONE level. Deeper lineage (L4 → L3 → L2 → L1) would
+        require recursion + cycle guards; the v1 UI only renders one level.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM memories WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if not row:
+                return {"ok": False, "error": f"Memory {memory_id} not found"}
+            mem = dict(row)
+
+            # Sources: rows named in this memory's provenance_refs
+            try:
+                refs = json.loads(mem.get("provenance_refs") or "[]")
+            except (ValueError, TypeError):
+                refs = []
+            sources: List[Dict[str, Any]] = []
+            if refs:
+                placeholders = ",".join(["?"] * len(refs))
+                src_rows = conn.execute(
+                    f"SELECT * FROM memories WHERE id IN ({placeholders})",
+                    tuple(refs),
+                ).fetchall()
+                sources = [dict(r) for r in src_rows]
+
+            # supersedes: what THIS memory replaced (when level == L2,
+            # we can find L1s whose superseded_by == memory_id)
+            supersedes_rows = conn.execute(
+                "SELECT * FROM memories WHERE superseded_by = ? LIMIT 50",
+                (memory_id,),
+            ).fetchall()
+            supersedes = [dict(r) for r in supersedes_rows] if supersedes_rows else []
+
+            # superseded_by: the L2 that replaced this memory
+            superseded_by_row = None
+            if mem.get("superseded_by"):
+                sb = conn.execute(
+                    "SELECT * FROM memories WHERE id = ?", (mem["superseded_by"],),
+                ).fetchone()
+                if sb:
+                    superseded_by_row = dict(sb)
+
+        return {
+            "ok": True,
+            "memory": mem,
+            "sources": sources,
+            "supersedes": supersedes,
+            "superseded_by": superseded_by_row,
+        }
+
     async def get_knowledge_context(self, query: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Get combined L3+L4 knowledge context for a query."""
         memories = await self.query({"query": query, "levels": ["L2", "L3", "L4"], "limit": 10})
