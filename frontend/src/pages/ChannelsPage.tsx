@@ -234,11 +234,7 @@ export default function ChannelsPage() {
                       )}
                     </span>
                   </Tooltip>
-                  <Switch
-                    size="small"
-                    checked={!!ch.auto_reply}
-                    onChange={(checked) => setAutoReply(ch.id, checked)}
-                  />
+                  <Switch size="small" checked={!!ch.auto_reply} onChange={(checked) => setAutoReply(ch.id, checked)} />
                 </div>
               </Card>
             </List.Item>

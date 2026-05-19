@@ -14,6 +14,8 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
+import { runJsSkill } from "./runtime/run-js-skill.js";
+import { runPythonSkill } from "./runtime/run-python-skill.js";
 
 // --------------------------------------------------------------------------------
 // Types
@@ -311,28 +313,30 @@ export class SkillManager {
     let result: unknown;
     let error: string | undefined;
 
-    try {
-      if (skill.language === "python") {
-        const { execSync } = await import("child_process");
-        const paramJson = JSON.stringify(params).replace(/"/g, '\\"');
-        const wrapped = `import json\nparams = json.loads("${paramJson}")\n${skill.code}`;
-        result = execSync(`python3 -c "${wrapped.replace(/"/g, '\\"')}"`, {
-          encoding: "utf-8",
-          timeout: 30000,
-        });
+    // M6a: isolated runtimes — see ./runtime/run-{js,python}-skill.ts.
+    // Params arrive via structured clone (JS) or stdin JSON (Python),
+    // never shell-interpolated. Timeouts terminate cleanly. The runners
+    // never throw; ok=false carries the error message back.
+    if (skill.language === "python") {
+      const r = await runPythonSkill({ code: skill.code, params });
+      if (r.ok) {
+        result = r.result;
         success = true;
-      } else if (skill.language === "javascript" || skill.language === "typescript") {
-        const paramJson = JSON.stringify(params);
-        const wrapped = `const params = ${paramJson};\n${skill.code}`;
-        const { execSync } = await import("child_process");
-        result = execSync(`node -e "${wrapped.replace(/"/g, '\\"')}"`, {
-          encoding: "utf-8",
-          timeout: 30000,
-        });
-        success = true;
+      } else {
+        error = r.error;
+        result = error;
       }
-    } catch (err: any) {
-      error = String(err.message || err);
+    } else if (skill.language === "javascript" || skill.language === "typescript") {
+      const r = await runJsSkill({ code: skill.code, params });
+      if (r.ok) {
+        result = r.result;
+        success = true;
+      } else {
+        error = r.error;
+        result = error;
+      }
+    } else {
+      error = `unsupported skill language: ${skill.language}`;
       result = error;
     }
 

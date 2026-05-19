@@ -111,11 +111,8 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
     }
   },
 
-  deleteChannel: createOptimisticDelete<ChannelInfo>(
-    get,
-    set,
-    "channels",
-    channelsApi.delete,
-    { successMsg: "通道已删除", errorMsg: "删除通道失败" }
-  ),
+  deleteChannel: createOptimisticDelete<ChannelInfo>(get, set, "channels", channelsApi.delete, {
+    successMsg: "通道已删除",
+    errorMsg: "删除通道失败",
+  }),
 }));
