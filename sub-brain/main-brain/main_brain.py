@@ -123,7 +123,16 @@ async def _fetch_llm_config(sub_brain_url: str) -> Dict[str, Any]:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> None:
     """Initialize and cleanup main brain services."""
-    data_dir = Path(__file__).parent.parent / "data" / "main-brain"
+    # Allow env override so smoke tests can isolate to a tmpdir, and so
+    # docker / CI / multi-process deploys can point at a shared volume.
+    # Without this every smoke run polluted the project's data/main-brain
+    # directory, leaking 50+ rows across runs — the C2 smoke test had to
+    # filter by session_id to dodge unrelated accumulated L2s.
+    data_dir_env = os.environ.get("WEBRAIN_DATA_DIR")
+    if data_dir_env:
+        data_dir = Path(data_dir_env).expanduser()
+    else:
+        data_dir = Path(__file__).parent.parent / "data" / "main-brain"
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # Check dependencies on startup

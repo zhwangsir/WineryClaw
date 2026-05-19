@@ -140,12 +140,12 @@ def _spawn_main_brain(
     """Start main-brain bound to a specific port with an isolated data dir.
 
     Critical: we point HOME at a tmpdir so the persisted mcp_token and any
-    ~/.webrain artifacts don't leak between runs. The data dir override
-    via WEBRAIN_DATA_DIR (read by main_brain.py? — actually it computes
-    data_dir from `Path(__file__).parent.parent / "data" / "main-brain"`,
-    NOT from an env var. So data isolation works via HOME for ~/.webrain
-    but the main DB still goes to the project's data/ dir. We accept this
-    for now and clean up any data left behind in teardown.
+    ~/.webrain artifacts don't leak between runs. WEBRAIN_DATA_DIR also
+    redirects the main memory.db etc. to the tmpdir so each smoke run
+    starts with a fresh DB — no cross-run contamination, no dev DB
+    pollution. (Added 2026-05-20; prior to that smoke runs accumulated
+    rows in the project's data/main-brain dir and tests had to filter
+    by unique session_id to dodge the cruft.)
 
     sub_brain_port: if known up-front, set WEBRAIN_SUB_BRAIN_URL so main-brain's
     _fetch_llm_config() can reach the smoke's sub-brain rather than the
@@ -165,6 +165,9 @@ def _spawn_main_brain(
     env["WEBRAIN_CONFLICT_LLM_TIMEOUT_S"] = "2"
     # Force HOME to tmp so persisted files don't leak
     env["HOME"] = str(tmp_data_dir)
+    # Redirect main-brain's data dir to the same tmp so memory.db,
+    # vectors, RAG state, etc. all stay isolated per smoke run.
+    env["WEBRAIN_DATA_DIR"] = str(tmp_data_dir / "main-brain-data")
     # Speed up boot — skip Tokenizers parallelism warnings
     env["TOKENIZERS_PARALLELISM"] = "false"
     if sub_brain_port is not None:
