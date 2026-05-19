@@ -12,6 +12,19 @@ import {
   HistoryOutlined,
   AppstoreOutlined,
   ThunderboltOutlined,
+  FileTextOutlined,
+  BranchesOutlined,
+  SafetyOutlined,
+  ApiOutlined,
+  UserOutlined,
+  CloudOutlined,
+  RobotOutlined,
+  CheckCircleOutlined,
+  SendOutlined,
+  CodeOutlined,
+  AppstoreAddOutlined,
+  FileOutlined,
+  BarChartOutlined,
 } from "@ant-design/icons";
 
 const menuItems = [
@@ -25,6 +38,23 @@ const menuItems = [
   { key: "/wiki", icon: <BookOutlined />, label: "知识库" },
   { key: "/kg", icon: <ApartmentOutlined />, label: "知识图谱" },
   { key: "/channels", icon: <GlobalOutlined />, label: "通道" },
+  { key: "/templates", icon: <FileTextOutlined />, label: "模板" },
+  { key: "/workflows", icon: <BranchesOutlined />, label: "工作流" },
+  { key: "/sandbox", icon: <SafetyOutlined />, label: "沙箱" },
+  { key: "/mcp", icon: <ApiOutlined />, label: "MCP" },
+  { key: "/browser", icon: <GlobalOutlined />, label: "浏览器" },
+  { key: "/identity", icon: <UserOutlined />, label: "身份" },
+  { key: "/ecosystem", icon: <CloudOutlined />, label: "生态" },
+  { key: "/dokobot", icon: <RobotOutlined />, label: "Dokobot" },
+  { key: "/proposals", icon: <CheckCircleOutlined />, label: "提案" },
+  { key: "/a2a", icon: <SendOutlined />, label: "A2A" },
+  { key: "/cli", icon: <CodeOutlined />, label: "CLI" },
+  { key: "/skillhub", icon: <AppstoreAddOutlined />, label: "Skillhub" },
+  { key: "/rag", icon: <FileTextOutlined />, label: "RAG 检索" },
+  { key: "/config", icon: <SettingOutlined />, label: "配置" },
+  { key: "/uploads", icon: <FileOutlined />, label: "上传" },
+  { key: "/hooks", icon: <ApiOutlined />, label: "Hooks" },
+  { key: "/metrics", icon: <BarChartOutlined />, label: "指标" },
   { key: "/cron", icon: <ClockCircleOutlined />, label: "定时任务" },
   { key: "/settings", icon: <SettingOutlined />, label: "设置" },
 ];
@@ -184,7 +214,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
           letterSpacing: "0.02em",
         }}
       >
-        v1.0.1
+        v1.0.2
       </div>
     </aside>
   );

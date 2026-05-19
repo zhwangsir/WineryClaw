@@ -13,5 +13,7 @@ transformers>=4.38.0
 spacy>=3.7.0
 schedule>=1.2.0
 croniter>=2.0.0
+psutil>=5.9.0
+watchdog>=4.0.0
 # sqlite-vec is preferred but requires load_extension support;
 # fallback uses numpy + sklearn NearestNeighbors (already in deps above)

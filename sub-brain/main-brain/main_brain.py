@@ -27,8 +27,13 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from memory.memory_manager import MemoryManager
+from memory.rag_retriever import RAGRetriever
+from memory.rag_watcher import RAGFileWatcher
 from reasoning.reasoning_engine import ReasoningEngine
 from evolution.evolution_engine import EvolutionEngine
+from evolution.skill_reflector import SkillReflector
+from evolution.skill_improvement_cycle import SkillImprovementCycle
+from evolution.llm_client import make_llm_call_from_config
 from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
@@ -130,6 +135,25 @@ async def lifespan(app: FastAPI) -> None:
 
     _state["memory"] = MemoryManager(db_path=str(data_dir / "memory.db"), llm_config=llm_config)
 
+    # RAG retriever — lazy embedder load so cold start isn't blocked.
+    # Loads SentenceTransformer on first index/query call only.
+    _state["rag"] = _build_rag_retriever(data_dir)
+
+    # RAG file watcher — optional, opt-in via WEBRAIN_RAG_WATCH_PATHS env var.
+    # Comma-separated absolute or ~-expanded paths.
+    _watch_paths_raw = os.environ.get("WEBRAIN_RAG_WATCH_PATHS", "").strip()
+    if _watch_paths_raw:
+        _watch_paths = [p.strip() for p in _watch_paths_raw.split(",") if p.strip()]
+        _watcher = RAGFileWatcher(
+            retriever=_state["rag"],
+            watch_paths=_watch_paths,
+            glob=os.environ.get("WEBRAIN_RAG_WATCH_GLOB", "**/*.md"),
+            debounce_ms=int(os.environ.get("WEBRAIN_RAG_DEBOUNCE_MS", "500")),
+        )
+        started = _watcher.start()
+        _state["rag_watcher"] = _watcher
+        logger.info(f"RAG file watcher started on {len(started)} path(s)")
+
     _state["reasoning"] = ReasoningEngine(memory_manager=_state["memory"], llm_config=llm_config)
     _state["evolution"] = EvolutionEngine(memory_manager=_state["memory"])
     _state["decision"] = DecisionCenter(
@@ -174,9 +198,18 @@ async def lifespan(app: FastAPI) -> None:
     _state["metrics"] = MetricsCollector()
     _state["_metrics_persist_task"] = asyncio.create_task(_metrics_persistence_loop())
 
+    # Initialize Skill Self-Improvement (Hermes-style nudges)
+    _state["skill_reflector"] = SkillReflector(make_llm_call_from_config(llm_config))
+    _state["skill_evolution_cycle"] = SkillImprovementCycle(
+        reflector=_state["skill_reflector"],
+        sub_brain_url=sub_brain_url,
+    )
+    logger.info(f"Skill self-improvement cycle initialized (sub-brain={sub_brain_url})")
+
     # Start background tasks
     _state["_heartbeat_task"] = asyncio.create_task(_heartbeat_monitor())
     _state["_dreaming_task"] = asyncio.create_task(_dreaming_scheduler())
+    _state["_skill_evolution_task"] = asyncio.create_task(_skill_evolution_scheduler())
 
     logger.info("Main Brain initialized. All systems online.")
     yield
@@ -194,12 +227,20 @@ async def lifespan(app: FastAPI) -> None:
             await _state["_dreaming_task"]
         except asyncio.CancelledError:
             pass
+    if "_skill_evolution_task" in _state:
+        _state["_skill_evolution_task"].cancel()
+        try:
+            await _state["_skill_evolution_task"]
+        except asyncio.CancelledError:
+            pass
     if "_metrics_persist_task" in _state:
         _state["_metrics_persist_task"].cancel()
         try:
             await _state["_metrics_persist_task"]
         except asyncio.CancelledError:
             pass
+    if "rag_watcher" in _state:
+        _state["rag_watcher"].stop()
     if "cron" in _state:
         await _state["cron"].stop()
     for key in list(_state.keys()):
@@ -331,6 +372,38 @@ async def _dreaming_scheduler():
         except Exception as e:
             logger.warning(f"[DREAMING] Scheduler error: {e}")
             await asyncio.sleep(3600)  # Retry in 1 hour on error
+
+
+async def _skill_evolution_scheduler():
+    """Background task: reflect on failing skills and write improved forks.
+
+    Runs once an hour with a 5-minute warmup so sub-brain has time to come up.
+    Override the interval with WEBRAIN_SKILL_CYCLE_INTERVAL_S (in seconds).
+    """
+    warmup_s = int(os.environ.get("WEBRAIN_SKILL_CYCLE_WARMUP_S", "300"))
+    interval_s = int(os.environ.get("WEBRAIN_SKILL_CYCLE_INTERVAL_S", "3600"))
+    await asyncio.sleep(warmup_s)
+
+    while True:
+        try:
+            cycle = _state.get("skill_evolution_cycle")
+            if cycle:
+                report = await cycle.run_once()
+                logger.info(
+                    f"[SKILL-EVO] Cycle complete: checked={report.checked} "
+                    f"improved={report.improved} skipped={report.skipped} "
+                    f"errors={len(report.errors)}"
+                )
+            else:
+                logger.warning("[SKILL-EVO] Cycle not available, skipping")
+
+            await asyncio.sleep(interval_s)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[SKILL-EVO] Scheduler error: {e}")
+            await asyncio.sleep(min(interval_s, 1800))  # Retry in ≤30 min
 
 
 # ─── Unified Error Response ────────────────────────────────────────
@@ -565,6 +638,12 @@ async def memory_sync():
     return await _state["memory"].get_stats()
 
 
+@app.delete("/memory/{memory_id}")
+async def memory_delete(memory_id: str):
+    result = await _state["memory"].delete(memory_id)
+    return result
+
+
 @app.post("/memory/archive/run")
 async def memory_archive_run():
     """Manually trigger archiving of expired memories."""
@@ -613,6 +692,196 @@ async def evolution_run(request: Dict[str, Any]):
 async def evolution_stats():
     stats = await _state["evolution"].get_stats()
     return stats
+
+
+@app.post("/evolution/skill-cycle/run")
+async def evolution_skill_cycle_run():
+    """Manually trigger one skill self-improvement pass.
+
+    Reads candidates from sub-brain, asks the local LLM for fixes, and
+    writes improved forks back via the skillhub HTTP API. Returns a
+    report (checked / improved / skipped / errors).
+    """
+    cycle = _state.get("skill_evolution_cycle")
+    if not cycle:
+        return {"ok": False, "error": "skill_evolution_cycle not initialized"}
+    report = await cycle.run_once()
+    return {"ok": True, "report": report.to_dict()}
+
+
+# ========== RAG (document grounding) ==========
+
+
+def _build_rag_retriever(data_dir: Path) -> RAGRetriever:
+    """Construct RAGRetriever with a lazy SentenceTransformer embedder.
+
+    Embedder isn't loaded until the first index/query call so cold start
+    isn't blocked by HuggingFace model download / load.
+    """
+    class LazyEmbedder:
+        _model = None
+
+        def encode(self, texts):
+            if self._model is None:
+                from sentence_transformers import SentenceTransformer
+                # Multilingual default — works for zh + en alike.
+                self._model = SentenceTransformer(
+                    "paraphrase-multilingual-MiniLM-L12-v2"
+                )
+            return self._model.encode(list(texts), convert_to_numpy=True)
+
+    return RAGRetriever(db_path=str(data_dir / "rag.db"), embedder=LazyEmbedder())
+
+
+@app.post("/rag/index_file")
+async def rag_index_file(request: Dict[str, Any]):
+    """Index a single file. body: {path}"""
+    path = request.get("path")
+    if not path:
+        return {"ok": False, "error": "path required"}
+    rag = _state.get("rag")
+    if not rag:
+        return {"ok": False, "error": "RAG not initialized"}
+    result = rag.index_file(str(path))
+    return {
+        "ok": True,
+        "indexed": result.indexed,
+        "chunks_count": result.chunks_count,
+        "reason": result.reason,
+        "path": result.path,
+    }
+
+
+@app.post("/rag/index_dir")
+async def rag_index_dir(request: Dict[str, Any]):
+    """Index a directory. body: {dir_path, glob?}"""
+    dir_path = request.get("dir_path")
+    if not dir_path:
+        return {"ok": False, "error": "dir_path required"}
+    glob = request.get("glob", "**/*")
+    rag = _state.get("rag")
+    if not rag:
+        return {"ok": False, "error": "RAG not initialized"}
+    results = rag.index_dir(str(dir_path), glob=str(glob))
+    return {
+        "ok": True,
+        "files": [
+            {"path": r.path, "indexed": r.indexed, "chunks": r.chunks_count, "reason": r.reason}
+            for r in results
+        ],
+        "indexed_count": sum(1 for r in results if r.indexed),
+    }
+
+
+@app.post("/rag/query")
+async def rag_query(request: Dict[str, Any]):
+    """Retrieve top-k chunks for a query. body: {query, k?}"""
+    query = request.get("query", "")
+    k = int(request.get("k", 5))
+    rag = _state.get("rag")
+    if not rag:
+        return {"ok": False, "error": "RAG not initialized"}
+    chunks = rag.retrieve(str(query), k=k)
+    return {
+        "ok": True,
+        "chunks": [
+            {
+                "doc_path": c.doc_path,
+                "chunk_idx": c.chunk_idx,
+                "text": c.text,
+                "score": c.score,
+            }
+            for c in chunks
+        ],
+    }
+
+
+@app.get("/rag/stats")
+async def rag_stats():
+    rag = _state.get("rag")
+    if not rag:
+        return {"ok": False, "error": "RAG not initialized"}
+    s = rag.stats()
+    return {
+        "ok": True,
+        "docs_count": s.docs_count,
+        "chunks_count": s.chunks_count,
+        "embedding_dim": s.embedding_dim,
+        "documents": rag.list_documents(),
+    }
+
+
+@app.delete("/rag/file")
+async def rag_remove_file(request: Dict[str, Any]):
+    """Remove a file from the RAG index. body: {path}"""
+    path = request.get("path")
+    if not path:
+        return {"ok": False, "error": "path required"}
+    rag = _state.get("rag")
+    if not rag:
+        return {"ok": False, "error": "RAG not initialized"}
+    removed = rag.remove_file(str(path))
+    return {"ok": True, "removed": removed}
+
+
+@app.post("/rag/watcher/start")
+async def rag_watcher_start(request: Dict[str, Any]):
+    """Start or restart the RAG file watcher.
+
+    body: {paths: [str], glob?: str, debounce_ms?: int}
+
+    If a watcher is already running, it is stopped first.
+    """
+    paths = request.get("paths") or []
+    if not isinstance(paths, list) or not paths:
+        return {"ok": False, "error": "paths (non-empty list) required"}
+
+    rag = _state.get("rag")
+    if not rag:
+        return {"ok": False, "error": "RAG not initialized"}
+
+    # Stop existing watcher if any
+    if "rag_watcher" in _state:
+        _state["rag_watcher"].stop()
+
+    watcher = RAGFileWatcher(
+        retriever=rag,
+        watch_paths=[str(p) for p in paths],
+        glob=str(request.get("glob", "**/*.md")),
+        debounce_ms=int(request.get("debounce_ms", 500)),
+    )
+    scheduled = watcher.start()
+    _state["rag_watcher"] = watcher
+    return {
+        "ok": True,
+        "watching": sorted(scheduled),
+        "glob": watcher.glob,
+        "debounce_ms": int(watcher.debounce_s * 1000),
+    }
+
+
+@app.post("/rag/watcher/stop")
+async def rag_watcher_stop():
+    """Stop the RAG file watcher."""
+    if "rag_watcher" in _state:
+        _state["rag_watcher"].stop()
+        _state.pop("rag_watcher", None)
+    return {"ok": True}
+
+
+@app.get("/rag/watcher/status")
+async def rag_watcher_status():
+    """Return whether the watcher is running and its config."""
+    watcher = _state.get("rag_watcher")
+    if not watcher:
+        return {"running": False}
+    return {
+        "running": watcher.is_running,
+        "watching": sorted(watcher.watch_paths),
+        "glob": watcher.glob,
+        "debounce_ms": int(watcher.debounce_s * 1000),
+        "pending_count": watcher.pending_count,
+    }
 
 
 # ========== Decision API ==========
@@ -1077,6 +1346,22 @@ async def kg_stats():
     if not kg:
         return {"error": "Knowledge Graph not initialized"}
     return kg.get_stats()
+
+
+@app.delete("/kg/entities/{eid}")
+async def kg_delete_entity(eid: str):
+    kg = _state.get("kg")
+    if not kg:
+        return {"error": "Knowledge Graph not initialized"}
+    return {"ok": kg.delete_entity(eid)}
+
+
+@app.delete("/kg/relations/{rid}")
+async def kg_delete_relation(rid: str):
+    kg = _state.get("kg")
+    if not kg:
+        return {"error": "Knowledge Graph not initialized"}
+    return {"ok": kg.delete_relation(rid)}
 
 
 # ========== Active Memory ==========
