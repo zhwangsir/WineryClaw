@@ -1,11 +1,15 @@
 import { create } from "zustand";
 import { message } from "antd";
 import { configApi } from "../api/config";
+import { createOptimisticDelete } from "./utils";
 import type { ModelConfig, GlobalConfig } from "../api/types";
+import type { Workspace, AgentConfig } from "../api/config";
 
 interface ConfigState {
   modelConfig: ModelConfig | null;
   globalConfig: GlobalConfig | null;
+  workspaces: Workspace[];
+  agents: AgentConfig[];
   loading: boolean;
   detecting: boolean;
   detectResult: { ok: boolean; message: string; details?: any } | null;
@@ -16,11 +20,17 @@ interface ConfigState {
   resetModel: () => Promise<void>;
   fetchGlobalConfig: () => Promise<void>;
   saveGlobalConfig: (config: Partial<GlobalConfig>) => Promise<void>;
+  fetchWorkspaces: () => Promise<void>;
+  createWorkspace: (data: Partial<Workspace>) => Promise<void>;
+  fetchWorkspaceAgents: (id: string) => Promise<void>;
+  deleteWorkspace: (id: string) => Promise<void>;
 }
 
-export const useConfigStore = create<ConfigState>((set) => ({
+export const useConfigStore = create<ConfigState>((set, get) => ({
   modelConfig: null,
   globalConfig: null,
+  workspaces: [],
+  agents: [],
   loading: false,
   detecting: false,
   detectResult: null,
@@ -93,4 +103,42 @@ export const useConfigStore = create<ConfigState>((set) => ({
       set({ loading: false });
     }
   },
+
+  fetchWorkspaces: async () => {
+    set({ loading: true });
+    try {
+      const workspaces = await configApi.workspaces();
+      set({ workspaces, loading: false });
+    } catch (e: any) {
+      set({ loading: false });
+      message.error(e.message || "获取工作空间失败");
+    }
+  },
+
+  createWorkspace: async (data) => {
+    try {
+      await configApi.createWorkspace(data);
+      message.success("工作空间创建成功");
+      await get().fetchWorkspaces();
+    } catch (e: any) {
+      message.error(e.message || "创建工作空间失败");
+    }
+  },
+
+  fetchWorkspaceAgents: async (id: string) => {
+    try {
+      const agents = await configApi.workspaceAgents(id);
+      set({ agents });
+    } catch (e: any) {
+      message.error(e.message || "获取代理配置失败");
+    }
+  },
+
+  deleteWorkspace: createOptimisticDelete<Workspace>(
+    get,
+    set,
+    "workspaces",
+    configApi.deleteWorkspace,
+    { successMsg: "工作空间已删除", errorMsg: "删除工作空间失败" }
+  ),
 }));

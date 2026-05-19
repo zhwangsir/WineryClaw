@@ -24,7 +24,7 @@ export default function ChatPage() {
     sendStream,
     stopStream,
     newSession,
-    loadHistory,
+    fetchHistory,
     deleteSession,
     clearCurrentChat,
     init,
@@ -275,7 +275,7 @@ export default function ChatPage() {
         sessions={sessions}
         currentSessionId={currentSessionId}
         onSelectSession={(id) => {
-          loadHistory(id);
+          fetchHistory(id);
           setInputValue("");
         }}
         onNewSession={() => {

@@ -1,76 +1,98 @@
-/**
- * WeBrain API Client — Centralized HTTP layer
- * Features: interceptors, error handling, request deduplication, retry
- */
+import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
+import { SSEClient } from "./sse-client";
 
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosError } from "axios";
+const BASE_URL = "";
+const MAX_RETRIES = 1;
 
-const BASE_URL = ""; // Use relative URLs — Vite dev proxy handles routing in dev, nginx/static serve in prod
+/** Error classification for downstream handling */
+export type ErrorCategory = "network" | "timeout" | "client" | "server" | "auth" | "unknown";
 
-class ApiClient {
+function classifyError(status: number, axiosMessage: string): ErrorCategory {
+  if (status === 401) return "auth";
+  if (status >= 400 && status < 500) return "client";
+  if (status >= 500) return "server";
+  if (axiosMessage.includes("timeout") || axiosMessage.includes("ETIMEDOUT")) return "timeout";
+  if (
+    axiosMessage.includes("Network Error") ||
+    axiosMessage.includes("ECONNRESET") ||
+    axiosMessage.includes("ECONNREFUSED") ||
+    axiosMessage.includes("ENOTFOUND")
+  ) {
+    return "network";
+  }
+  return "unknown";
+}
+
+function isRetryable(status: number, category: ErrorCategory): boolean {
+  return category === "network" || category === "timeout" || status >= 500;
+}
+
+export class ApiClient {
   private instance: AxiosInstance;
   private pendingRequests = new Map<string, AbortController>();
 
   constructor() {
-    this.instance = axios.create({
-      baseURL: BASE_URL,
-      timeout: 60000,
-      headers: { "Content-Type": "application/json" },
+    this.instance = axios.create({ baseURL: BASE_URL, timeout: 60000 });
+
+    this.instance.interceptors.request.use((config) => {
+      const token = localStorage.getItem("webrain-api-key");
+      if (token) config.headers.Authorization = `Bearer ${token}`;
+
+      // Deduplication for mutating requests
+      const method = config.method?.toLowerCase();
+      if (method && method !== "get" && method !== "head") {
+        const key = `${method}_${config.url}_${JSON.stringify(config.params ?? {})}_${JSON.stringify(config.data ?? {})}`;
+        if (this.pendingRequests.has(key)) {
+          this.pendingRequests.get(key)!.abort();
+        }
+        const controller = new AbortController();
+        config.signal = controller.signal;
+        this.pendingRequests.set(key, controller);
+      }
+
+      // Retry counter
+      config.headers["x-retry-count"] = config.headers["x-retry-count"] ?? 0;
+
+      return config;
     });
 
-    this.instance.interceptors.request.use(
-      (config) => {
-        const token = localStorage.getItem("webrain-api-key");
-        if (token) config.headers.Authorization = `Bearer ${token}`;
-        // Only deduplicate mutating requests (POST/PUT/DELETE/PATCH)
-        // GET requests are idempotent; cancelling them causes "Request cancelled" errors on re-mounts
-        const method = config.method?.toLowerCase();
-        if (method && method !== "get" && method !== "head") {
-          const key = `${config.method}_${config.url}_${JSON.stringify(config.params || {})}_${JSON.stringify(config.data || {})}`;
-          if (this.pendingRequests.has(key)) {
-            this.pendingRequests.get(key)!.abort();
-          }
-          const controller = new AbortController();
-          config.signal = controller.signal;
-          this.pendingRequests.set(key, controller);
-        }
-        return config;
-      },
-      (error) => Promise.reject(error)
-    );
-
     this.instance.interceptors.response.use(
-      (response) => {
-        const config = response.config;
-        const method = config.method?.toLowerCase();
-        if (method && method !== "get" && method !== "head") {
-          const key = `${config.method}_${config.url}_${JSON.stringify(config.params || {})}_${JSON.stringify(config.data || {})}`;
-          this.pendingRequests.delete(key);
-        }
-        return response;
+      (res) => {
+        this.clearRequest(res.config);
+        return res;
       },
-      (error: AxiosError) => {
-        const cfg = error.config;
-        if (cfg) {
-          const method = cfg.method?.toLowerCase();
-          if (method && method !== "get" && method !== "head") {
-            const key = `${cfg.method}_${cfg.url}_${JSON.stringify(cfg.params || {})}_${JSON.stringify(cfg.data || {})}`;
-            this.pendingRequests.delete(key);
-          }
-        }
-        if (axios.isCancel(error)) {
-          return Promise.reject(new Error("Request cancelled"));
-        }
-        const status = error.response?.status;
-        const message = (error.response?.data as any)?.message || error.message;
+      async (err) => {
+        if (err.config) this.clearRequest(err.config);
+
+        const status = err.response?.status || 0;
+        const rawMessage = err.response?.data?.error || err.message || "Request failed";
+        const category = classifyError(status, err.message || "");
+
+        // Auth: clear token and redirect
         if (status === 401) {
-          console.error("[API] Unauthorized — check API key");
-        } else if (status === 429) {
-          console.error("[API] Rate limited — please slow down");
+          localStorage.removeItem("webrain-api-key");
+          window.location.href = "/";
+          throw new ApiError(status, rawMessage, category);
         }
-        return Promise.reject(new ApiError(status || 0, message));
+
+        // Automatic retry for transient failures
+        const retryCount = Number(err.config?.headers?.["x-retry-count"] ?? 0);
+        if (retryCount < MAX_RETRIES && isRetryable(status, category)) {
+          err.config.headers["x-retry-count"] = retryCount + 1;
+          return this.instance.request(err.config);
+        }
+
+        throw new ApiError(status, rawMessage, category);
       }
     );
+  }
+
+  private clearRequest(config: AxiosRequestConfig) {
+    const method = config.method?.toLowerCase();
+    if (method && method !== "get" && method !== "head") {
+      const key = `${method}_${config.url}_${JSON.stringify(config.params ?? {})}_${JSON.stringify(config.data ?? {})}`;
+      this.pendingRequests.delete(key);
+    }
   }
 
   get<T>(url: string, config?: AxiosRequestConfig) {
@@ -89,19 +111,35 @@ class ApiClient {
     return this.instance.delete<T>(url, config).then((r) => r.data);
   }
 
-  stream(url: string, data?: Record<string, unknown>, signal?: AbortSignal) {
+  /** SSE streaming with auto-reconnect, heartbeat, and auth */
+  stream(url: string, data?: Record<string, unknown>) {
     const qs = data ? "?" + new URLSearchParams(data as Record<string, string>).toString() : "";
-    return fetch(url + qs, { method: "GET", signal });
+    const client = new SSEClient({ maxRetries: 3, heartbeatTimeoutMs: 60000, requestTimeoutMs: 30000 });
+    return {
+      client,
+      url: url + qs,
+    };
   }
 }
 
 export class ApiError extends Error {
   constructor(
     public status: number,
-    message: string
+    message: string,
+    public category: ErrorCategory = "unknown"
   ) {
     super(message);
     this.name = "ApiError";
+  }
+
+  /** True for network, timeout, or 5xx errors */
+  get isRetryable(): boolean {
+    return isRetryable(this.status, this.category);
+  }
+
+  /** True for 4xx client errors (excluding auth) */
+  get isClientError(): boolean {
+    return this.status >= 400 && this.status < 500 && this.status !== 401;
   }
 }
 

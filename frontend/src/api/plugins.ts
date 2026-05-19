@@ -25,4 +25,5 @@ export const pluginsApi = {
   unload: (plugin_id: string) => api.post("/api/plugins/unload", { plugin_id }),
   load: (plugin_id: string, config?: Record<string, unknown>) => api.post("/api/plugins/load", { plugin_id, config }),
   manifest: (id: string) => api.get<{ manifest: PluginManifest }>(`/api/plugins/${id}/manifest`).then((r) => r.manifest),
+  delete: (id: string) => api.delete(`/api/plugins/${id}`).then((r: any) => r.ok),
 };

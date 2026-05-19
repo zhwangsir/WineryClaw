@@ -2,7 +2,7 @@
   "app": {
     "name": "WeBrain",
     "tagline": "AI 智能体集成平台",
-    "version": "v1.0.0"
+    "version": "v1.0.2"
   },
   "nav": {
     "chat": "对话",

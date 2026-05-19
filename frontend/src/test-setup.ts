@@ -13,3 +13,8 @@ if (typeof window !== "undefined") {
     dispatchEvent: vi.fn(),
   });
 }
+
+// Polyfill scrollTo for jsdom
+if (typeof Element !== "undefined" && !Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = vi.fn() as any;
+}

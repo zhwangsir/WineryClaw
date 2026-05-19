@@ -28,4 +28,6 @@ export const kgApi = {
     api.get<any>("/brain/kg/subgraph", { params: { center_id: centerId, depth } }),
   extract: (text: string) => api.post<any>("/brain/kg/extract", { text }),
   stats: () => api.get<any>("/brain/kg/stats"),
+  deleteEntity: (id: string) => api.delete(`/brain/kg/entities/${id}`).then((r: any) => r.ok),
+  deleteRelation: (id: string) => api.delete(`/brain/kg/relations/${id}`).then((r: any) => r.ok),
 };

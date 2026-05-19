@@ -2,7 +2,7 @@
   "app": {
     "name": "WeBrain",
     "tagline": "AI Agent Integration Platform",
-    "version": "v1.0.0"
+    "version": "v1.0.2"
   },
   "nav": {
     "chat": "Chat",

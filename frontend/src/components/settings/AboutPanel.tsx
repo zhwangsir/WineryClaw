@@ -21,7 +21,7 @@ export default function AboutPanel() {
         style={{ marginBottom: 32 }}
       >
         <Descriptions.Item label="版本">
-          <span style={{ color: "var(--c-text-2)", fontWeight: 300 }}>1.0.0</span>
+          <span style={{ color: "var(--c-text-2)", fontWeight: 300 }}>1.0.2</span>
         </Descriptions.Item>
         <Descriptions.Item label="构建时间">
           <span style={{ color: "var(--c-text-2)", fontWeight: 300 }}>2026-05-06</span>

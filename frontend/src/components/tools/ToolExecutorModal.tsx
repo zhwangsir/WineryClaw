@@ -24,7 +24,7 @@ const presets: Record<string, Record<string, unknown>> = {
   datetime: { format: "iso", timezone: "" },
   calculator: { expression: "2 + 2 * 3" },
   url_parse: { url: "https://github.com/zhwangsir/WeBrain" },
-  json_parse: { text: '{"name":"WeBrain","version":"1.0.0"}', pretty: true },
+  json_parse: { text: '{"name":"WeBrain","version":"1.0.2"}', pretty: true },
 };
 
 export default function ToolExecutorModal({ toolName, toolDescription, open, onClose }: Props) {

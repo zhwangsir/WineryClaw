@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
-import { Button, Switch, Tag, Table, message } from "antd";
-import { AppstoreOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Button, Switch, Tag, Table, message, Modal } from "antd";
+import { AppstoreOutlined, ReloadOutlined, DeleteOutlined, ExclamationCircleOutlined } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { pluginsApi, type Plugin } from "../api/plugins";
+import { usePluginStore } from "../stores/pluginStore";
 import { EmptyState } from "../components/common/EmptyState";
 
 export default function PluginsPage() {
+  const { deletePlugin } = usePluginStore();
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -96,13 +98,32 @@ export default function PluginsPage() {
       key: "actions",
       width: 120,
       render: (_: unknown, p: Plugin) => (
-        <Button
-          
-          danger
-          onClick={() => handleUnload(p)}
-        >
-          Unload
-        </Button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Button danger onClick={() => handleUnload(p)}>
+            Unload
+          </Button>
+          <Button
+            type="text"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => {
+              Modal.confirm({
+                title: "确认删除",
+                icon: <ExclamationCircleOutlined />,
+                content: `确定要彻底删除插件 "${p.name}" 吗？`,
+                okText: "删除",
+                okType: "danger",
+                cancelText: "取消",
+                onOk: async () => {
+                  await deletePlugin(p.id);
+                  fetchPlugins();
+                },
+              });
+            }}
+          >
+            删除
+          </Button>
+        </div>
       ),
     },
   ];

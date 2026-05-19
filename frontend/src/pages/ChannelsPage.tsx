@@ -1,6 +1,14 @@
 import { useState, useEffect } from "react";
-import { Card, List, Button, Empty, Drawer, Tooltip } from "antd";
-import { GlobalOutlined, LinkOutlined, DisconnectOutlined, MessageOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Card, List, Button, Empty, Drawer, Tooltip, Form, Input, Select, message, Modal } from "antd";
+import {
+  GlobalOutlined,
+  LinkOutlined,
+  DisconnectOutlined,
+  MessageOutlined,
+  ReloadOutlined,
+  PlusOutlined,
+  ExclamationCircleOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useChannelStore } from "../stores/channelStore";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -26,12 +34,37 @@ function formatMessageContent(m: any): string {
   }
 }
 
+const channelTypes = [
+  { value: "telegram", label: "Telegram" },
+  { value: "discord", label: "Discord" },
+  { value: "web", label: "Web" },
+  { value: "slack", label: "Slack" },
+  { value: "matrix", label: "Matrix" },
+  { value: "signal", label: "Signal" },
+  { value: "imessage", label: "iMessage" },
+  { value: "email", label: "Email" },
+  { value: "sms", label: "SMS" },
+  { value: "push", label: "Push" },
+];
+
 export default function ChannelsPage() {
-  const { channels, loading, fetchChannels, disconnectChannel, toggleChannel, fetchMessages, messages } =
-    useChannelStore();
+  const {
+    channels,
+    loading,
+    fetchChannels,
+    disconnectChannel,
+    toggleChannel,
+    connectChannel,
+    fetchMessages,
+    messages,
+    deleteChannel,
+  } = useChannelStore();
 
   const [msgDrawerOpen, setMsgDrawerOpen] = useState(false);
   const [msgChannelId, setMsgChannelId] = useState<string>("");
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [connectForm] = Form.useForm();
+  const [connectLoading, setConnectLoading] = useState(false);
 
   useEffect(() => {
     fetchChannels();
@@ -43,14 +76,32 @@ export default function ChannelsPage() {
     setMsgDrawerOpen(true);
   };
 
+  const handleConnect = async (values: { name: string; type: string; token: string }) => {
+    setConnectLoading(true);
+    try {
+      await connectChannel(values.name, { type: values.type, token: values.token });
+      message.success("通道连接成功");
+      setConnectOpen(false);
+      connectForm.resetFields();
+      await fetchChannels();
+    } catch (err: any) {
+      message.error(err?.message || "连接失败");
+    } finally {
+      setConnectLoading(false);
+    }
+  };
+
   return (
     <PageShell title="通道" subtitle="多平台消息通道管理" icon={<GlobalOutlined />}>
-      <div style={{ marginBottom: 32 }}>
+      <div style={{ marginBottom: 32, display: "flex", gap: 12 }}>
         <Tooltip title="刷新通道列表">
           <Button icon={<ReloadOutlined />} onClick={fetchChannels} style={{ height: 40 }}>
             刷新
           </Button>
         </Tooltip>
+        <Button type="primary" icon={<PlusOutlined />} style={{ height: 40 }} onClick={() => setConnectOpen(true)}>
+          连接新通道
+        </Button>
       </div>
 
       {loading && channels.length === 0 ? (
@@ -124,6 +175,24 @@ export default function ChannelsPage() {
                   >
                     消息
                   </Button>,
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    onClick={() => {
+                      Modal.confirm({
+                        title: "确认删除",
+                        icon: <ExclamationCircleOutlined />,
+                        content: `确定要删除通道 "${ch.name}" 吗？此操作不可撤销。`,
+                        okText: "删除",
+                        okType: "danger",
+                        cancelText: "取消",
+                        onOk: () => deleteChannel(ch.id),
+                      });
+                    }}
+                  >
+                    删除
+                  </Button>,
                 ]}
               >
                 <div style={{ fontSize: 13, color: "var(--c-text-2)", fontWeight: 300, marginBottom: 8 }}>
@@ -189,6 +258,35 @@ export default function ChannelsPage() {
             ))}
           </div>
         )}
+      </Drawer>
+
+      <Drawer
+        title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>连接新通道</span>}
+        open={connectOpen}
+        onClose={() => setConnectOpen(false)}
+        width={420}
+      >
+        <Form form={connectForm} layout="vertical" onFinish={handleConnect}>
+          <Form.Item name="name" label="通道名称" rules={[{ required: true, message: "请输入通道名称" }]}>
+            <Input placeholder="例如: 我的 Telegram 机器人" />
+          </Form.Item>
+          <Form.Item name="type" label="通道类型" rules={[{ required: true, message: "请选择通道类型" }]}>
+            <Select placeholder="选择通道类型" options={channelTypes} />
+          </Form.Item>
+          <Form.Item
+            name="token"
+            label="认证令牌"
+            rules={[{ required: true, message: "请输入认证令牌" }]}
+            extra="不同通道需要的认证信息不同，通常为 API Token"
+          >
+            <Input.Password placeholder="输入 API Token 或认证密钥" />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" loading={connectLoading} block>
+              连接
+            </Button>
+          </Form.Item>
+        </Form>
       </Drawer>
     </PageShell>
   );

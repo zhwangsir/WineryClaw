@@ -6,7 +6,7 @@ import {
 import {
   PlusOutlined, TeamOutlined, EditOutlined, DeleteOutlined,
   RobotOutlined, SettingOutlined, ToolOutlined, FileTextOutlined,
-  ThunderboltOutlined, CodeOutlined, GlobalOutlined,
+  ThunderboltOutlined, CodeOutlined, GlobalOutlined, PlayCircleOutlined,
 } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useAgentStore } from "../stores/agentStore";
@@ -42,7 +42,7 @@ const CAPABILITY_OPTIONS = [
 ];
 
 export default function AgentsPage() {
-  const { agents, fetchAgents, createAgent, updateAgent, deleteAgent, updateSystemPrompt, getSystemPrompt } = useAgentStore();
+  const { agents, fetchAgents, createAgent, updateAgent, deleteAgent, updateSystemPrompt, getSystemPrompt, runAgent } = useAgentStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [activeTab, setActiveTab] = useState("basic");
@@ -50,6 +50,11 @@ export default function AgentsPage() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<AgentToolConfig[]>(ALL_TOOLS);
   const [saving, setSaving] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
+  const [runAgentId, setRunAgentId] = useState("");
+  const [runResult, setRunResult] = useState("");
+  const [runLoading, setRunLoading] = useState(false);
+  const [runForm] = Form.useForm();
 
   useEffect(() => {
     fetchAgents();
@@ -145,6 +150,23 @@ export default function AgentsPage() {
 
   const handleDelete = async (id: string) => {
     await deleteAgent(id);
+  };
+
+  const openRun = (agent: Agent) => {
+    setRunAgentId(agent.id);
+    setRunResult("");
+    runForm.resetFields();
+    setRunOpen(true);
+  };
+
+  const handleRun = async (values: { input: string }) => {
+    setRunLoading(true);
+    try {
+      const result = await runAgent(runAgentId, values.input);
+      setRunResult(String(result || ""));
+    } finally {
+      setRunLoading(false);
+    }
   };
 
   const getRoleLabel = (role?: string) => {
@@ -296,6 +318,15 @@ export default function AgentsPage() {
                   )}
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
+                  <Tooltip title="运行">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<PlayCircleOutlined />}
+                      style={{ color: "var(--c-accent)" }}
+                      onClick={(e) => { e.stopPropagation(); openRun(agent); }}
+                    />
+                  </Tooltip>
                   <Tooltip title="编辑">
                     <Button
                       size="small"
@@ -490,6 +521,49 @@ export default function AgentsPage() {
             </Form>
           </TabPane>
         </Tabs>
+      </Drawer>
+
+      {/* Run Agent Drawer */}
+      <Drawer
+        title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>运行智能体</span>}
+        open={runOpen}
+        onClose={() => setRunOpen(false)}
+        width={560}
+      >
+        <Form form={runForm} layout="vertical" onFinish={handleRun}>
+          <Form.Item
+            name="input"
+            label="输入"
+            rules={[{ required: true, message: "请输入任务描述" }]}
+          >
+            <TextArea rows={4} placeholder="描述你想让智能体执行的任务..." />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" loading={runLoading} block icon={<PlayCircleOutlined />}>
+              运行
+            </Button>
+          </Form.Item>
+        </Form>
+        {runResult && (
+          <div style={{ marginTop: 24 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: "var(--c-text)" }}>执行结果</div>
+            <div
+              style={{
+                padding: 16,
+                borderRadius: 8,
+                background: "var(--c-card)",
+                border: "1px solid var(--c-border)",
+                color: "var(--c-text)",
+                fontSize: 13,
+                lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {runResult}
+            </div>
+          </div>
+        )}
       </Drawer>
     </PageShell>
   );

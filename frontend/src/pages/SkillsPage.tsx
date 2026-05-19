@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { Button, Tag, Table, Drawer, Form, Input, Select, message, Statistic } from "antd";
-import { ThunderboltOutlined, ReloadOutlined, PlusOutlined } from "@ant-design/icons";
+import { Button, Tag, Table, Drawer, Form, Input, Select, message, Statistic, Popconfirm, Space } from "antd";
+import { ThunderboltOutlined, ReloadOutlined, PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { skillsApi, type Skill, type SkillStats } from "../api/skills";
 import { EmptyState } from "../components/common/EmptyState";
@@ -12,6 +12,12 @@ export default function SkillsPage() {
   const [stats, setStats] = useState<SkillStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
+  const [invokeModalOpen, setInvokeModalOpen] = useState(false);
+  const [invokeSkillId, setInvokeSkillId] = useState<string>("");
+  const [invokeParams, setInvokeParams] = useState("{}");
+  const [invokeLoading, setInvokeLoading] = useState(false);
+  const [invokeResult, setInvokeResult] = useState<string>("");
   const [form] = Form.useForm();
 
   const fetchData = async () => {
@@ -31,22 +37,79 @@ export default function SkillsPage() {
     fetchData();
   }, []);
 
-  const handleCreate = async (values: any) => {
+  const openCreate = () => {
+    setEditingSkill(null);
+    form.resetFields();
+    setDrawerOpen(true);
+  };
+
+  const openEdit = (skill: Skill) => {
+    setEditingSkill(skill);
+    form.setFieldsValue({
+      name: skill.name,
+      description: skill.description,
+      language: skill.language,
+      code: skill.code,
+      triggerPatterns: skill.triggerPatterns.join(", "),
+      tags: skill.tags.join(", "),
+    });
+    setDrawerOpen(true);
+  };
+
+  const handleSubmit = async (values: any) => {
+    const payload = {
+      name: values.name,
+      description: values.description,
+      code: values.code,
+      language: values.language,
+      triggerPatterns: values.triggerPatterns?.split(",").map((s: string) => s.trim()).filter(Boolean),
+      tags: values.tags?.split(",").map((s: string) => s.trim()).filter(Boolean),
+    };
     try {
-      await skillsApi.create({
-        name: values.name,
-        description: values.description,
-        code: values.code,
-        language: values.language,
-        triggerPatterns: values.triggerPatterns?.split(",").map((s: string) => s.trim()).filter(Boolean),
-        tags: values.tags?.split(",").map((s: string) => s.trim()).filter(Boolean),
-      });
-      message.success("Skill created");
+      if (editingSkill) {
+        await skillsApi.update(editingSkill.id, payload);
+        message.success("Skill updated");
+      } else {
+        await skillsApi.create(payload as any);
+        message.success("Skill created");
+      }
       setDrawerOpen(false);
       form.resetFields();
+      setEditingSkill(null);
       fetchData();
     } catch (e: any) {
       message.error(e.message);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await skillsApi.delete(id);
+      message.success("Skill deleted");
+      fetchData();
+    } catch (e: any) {
+      message.error(e.message);
+    }
+  };
+
+  const openInvoke = (skill: Skill) => {
+    setInvokeSkillId(skill.id);
+    setInvokeParams("{}");
+    setInvokeResult("");
+    setInvokeModalOpen(true);
+  };
+
+  const handleInvoke = async () => {
+    setInvokeLoading(true);
+    try {
+      let params = {};
+      try { params = JSON.parse(invokeParams); } catch { /* ignore */ }
+      const result = await skillsApi.invoke(invokeSkillId, params);
+      setInvokeResult(JSON.stringify(result, null, 2));
+    } catch (e: any) {
+      setInvokeResult("Error: " + e.message);
+    } finally {
+      setInvokeLoading(false);
     }
   };
 
@@ -67,7 +130,7 @@ export default function SkillsPage() {
       dataIndex: "language",
       key: "language",
       width: 100,
-      render: (v: string) => <Tag >{v}</Tag>,
+      render: (v: string) => <Tag>{v}</Tag>,
     },
     {
       title: "Usage",
@@ -86,9 +149,29 @@ export default function SkillsPage() {
       render: (_: unknown, s: Skill) => (
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
           {s.triggerPatterns.map((t) => (
-            <Tag key={t} >{t}</Tag>
+            <Tag key={t}>{t}</Tag>
           ))}
         </div>
+      ),
+    },
+    {
+      title: "Actions",
+      key: "actions",
+      width: 160,
+      render: (_: unknown, s: Skill) => (
+        <Space>
+          <Button size="small" icon={<PlayCircleOutlined />} onClick={() => openInvoke(s)}>
+            Run
+          </Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(s)}>
+            Edit
+          </Button>
+          <Popconfirm title="Delete this skill?" onConfirm={() => handleDelete(s.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />}>
+              Del
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -113,7 +196,7 @@ export default function SkillsPage() {
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
             Refresh
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New Skill
           </Button>
         </div>
@@ -122,23 +205,18 @@ export default function SkillsPage() {
       {skills.length === 0 && !loading ? (
         <EmptyState description="No skills registered" />
       ) : (
-        <Table
-          dataSource={skills}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          
-        />
+        <Table dataSource={skills} columns={columns} rowKey="id" loading={loading} pagination={false} />
       )}
 
+      {/* Create / Edit Drawer */}
       <Drawer
-        title="Create Skill"
+        title={editingSkill ? "Edit Skill" : "Create Skill"}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => { setDrawerOpen(false); setEditingSkill(null); }}
         width={520}
+        destroyOnClose
       >
-        <Form form={form} layout="vertical" onFinish={handleCreate}>
+        <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input placeholder="e.g., summarize_text" />
           </Form.Item>
@@ -163,9 +241,37 @@ export default function SkillsPage() {
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit">
-              Create
+              {editingSkill ? "Update" : "Create"}
             </Button>
           </Form.Item>
+        </Form>
+      </Drawer>
+
+      {/* Invoke Drawer */}
+      <Drawer
+        title="Invoke Skill"
+        open={invokeModalOpen}
+        onClose={() => setInvokeModalOpen(false)}
+        width={480}
+        destroyOnClose
+      >
+        <Form layout="vertical">
+          <Form.Item label="Parameters (JSON)">
+            <TextArea
+              rows={4}
+              value={invokeParams}
+              onChange={(e) => setInvokeParams(e.target.value)}
+              placeholder='{"text": "hello world"}'
+            />
+          </Form.Item>
+          <Button type="primary" onClick={handleInvoke} loading={invokeLoading}>
+            Run
+          </Button>
+          {invokeResult && (
+            <pre style={{ marginTop: 16, padding: 12, background: "var(--c-hover)", borderRadius: 8, fontSize: 12 }}>
+              {invokeResult}
+            </pre>
+          )}
         </Form>
       </Drawer>
     </PageShell>

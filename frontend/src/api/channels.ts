@@ -2,12 +2,13 @@ import { api } from "./client";
 import type { ChannelInfo } from "./types";
 
 export const channelsApi = {
-  list: () => api.get<{ channels: ChannelInfo[] }>("/channels/list").then((r) => r.channels),
-  connect: (channel: string, config: unknown) => api.post("/channels/connect", { channel, config }),
-  disconnect: (channel_id: string) => api.post("/channels/disconnect", { channel_id }),
-  toggle: (id: string) => api.post(`/channels/${id}/toggle`),
-  health: (id: string) => api.get<{ ok: boolean; healthy: boolean }>(`/channels/${id}/health`),
-  messages: (id: string) => api.get<{ messages: any[] }>(`/channels/${id}/messages`),
-  startReceiving: (id: string) => api.post(`/channels/${id}/receive/start`),
-  stopReceiving: (id: string) => api.post(`/channels/${id}/receive/stop`),
+  list: () => api.get<{ channels: ChannelInfo[] }>("/api/channels").then((r) => r.channels),
+  connect: (channel: string, config: unknown) => api.post("/api/channels/connect", { channel, config }),
+  disconnect: (channel_id: string) => api.post("/api/channels/disconnect", { channel_id }),
+  toggle: (id: string) => api.post(`/api/channels/${id}/toggle`),
+  health: (id: string) => api.get<{ ok: boolean; healthy: boolean }>(`/api/channels/${id}/health`),
+  messages: (id: string) => api.get<{ messages: any[] }>(`/api/channels/${id}/messages`),
+  startReceiving: (id: string) => api.post(`/api/channels/${id}/receive/start`),
+  stopReceiving: (id: string) => api.post(`/api/channels/${id}/receive/stop`),
+  delete: (id: string) => api.delete(`/api/channels/${id}`).then((r: any) => r.ok),
 };

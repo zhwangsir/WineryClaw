@@ -1,63 +1,82 @@
 import { create } from "zustand";
 import { message } from "antd";
 import { toolsApi } from "../api/tools";
+
 import type { Tool } from "../api/types";
 
 interface ToolState {
   tools: Tool[];
   loading: boolean;
+  error: Error | null;
   globalEnabled: boolean;
+
   fetchTools: () => Promise<void>;
-  toggleTool: (id: string, enabled: boolean) => Promise<void>;
-  toggleGlobal: (enabled: boolean) => Promise<void>;
-  executeTool: (id: string, params: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+  toggleTool: (name: string, nextEnabled?: boolean) => Promise<void>;
+  setGlobalEnabled: (enabled: boolean) => Promise<void>;
+  executeTool: (name: string, params: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
 }
 
-export const useToolStore = create<ToolState>((set) => ({
+export const useToolStore = create<ToolState>((set, get) => ({
   tools: [],
   loading: false,
+  error: null,
   globalEnabled: true,
 
   fetchTools: async () => {
-    set({ loading: true });
+    if (get().loading) return;
+
+    set((s) => ({ ...s, loading: true, error: null }));
     try {
-      const tools = await toolsApi.list();
-      set({ tools: Array.isArray(tools) ? tools : [], loading: false });
+      const list = await toolsApi.list();
+      const tools = Array.isArray(list) ? list : [];
+      set({ tools, loading: false, error: null });
     } catch (e: any) {
       message.error(e.message || "获取工具列表失败");
-      set({ loading: false });
+      set({ loading: false, error: e });
     }
   },
 
-  toggleTool: async (id, enabled) => {
+  toggleTool: async (name, nextEnabled?) => {
+    const prevTools = get().tools;
+    const tool = prevTools.find((t) => t.name === name);
+    if (!tool) return;
+
+    const targetEnabled = nextEnabled !== undefined ? nextEnabled : !tool.enabled;
+    // Optimistic update
+    set((s) => ({
+      tools: s.tools.map((t) => (t.name === name ? { ...t, enabled: targetEnabled } : t)),
+    }));
+
     try {
-      if (enabled) {
-        await toolsApi.enable(id);
+      if (targetEnabled) {
+        await toolsApi.enable(name);
       } else {
-        await toolsApi.disable(id);
+        await toolsApi.disable(name);
       }
-      set((s) => ({ tools: s.tools.map((t) => (t.id === id ? { ...t, enabled } : t)) }));
     } catch (e: any) {
       message.error(e.message || "切换工具状态失败");
+      // Rollback
+      set({ tools: prevTools });
     }
   },
 
-  toggleGlobal: async (enabled) => {
+  setGlobalEnabled: async (enabled) => {
+    const prev = get().globalEnabled;
+    set({ globalEnabled: enabled });
     try {
       await toolsApi.globalToggle(enabled);
-      set({ globalEnabled: enabled });
     } catch (e: any) {
-      message.error(e.message || "切换全局工具状态失败");
+      message.error(e.message || "全局工具切换失败");
+      set({ globalEnabled: prev });
     }
   },
 
-  executeTool: async (id, params) => {
+  executeTool: async (name, params) => {
     try {
-      const res = await toolsApi.execute(id, params);
-      return res;
+      return await toolsApi.execute(name, params);
     } catch (e: any) {
-      message.error(e.message || "执行工具失败");
-      return { ok: false, error: e.message || "执行失败" };
+      message.error(e.message || "工具执行失败");
+      return { ok: false, error: e.message };
     }
   },
 }));

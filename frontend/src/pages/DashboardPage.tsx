@@ -16,10 +16,11 @@ export default function DashboardPage() {
   const { channels, fetchChannels } = useChannelStore();
 
   useEffect(() => {
+    fetchHealth();
     fetchAgents();
     fetchTools();
     fetchChannels();
-  }, [fetchAgents, fetchTools, fetchChannels]);
+  }, [fetchHealth, fetchAgents, fetchTools, fetchChannels]);
 
   if (!health) return <Loading />;
 

@@ -2,19 +2,6 @@
  * WeBrain API Shared Types
  */
 
-export interface ApiResponse<T> {
-  data: T;
-  status: number;
-  message?: string;
-}
-
-export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
 export interface SystemHealth {
   status: "ok" | "degraded" | "down";
   component: string;
@@ -108,15 +95,6 @@ export interface ChannelInfo {
   config?: Record<string, unknown>;
 }
 
-export interface Channel {
-  id: string;
-  name: string;
-  type: string;
-  status: "connected" | "disconnected" | "error";
-  config: Record<string, unknown>;
-  messageCount: number;
-}
-
 export interface Tool {
   id: string;
   name: string;
@@ -190,6 +168,60 @@ export interface GlobalConfig {
   defaultWorkspace: string;
 }
 
+export interface Plugin {
+  id: string;
+  name: string;
+  version: string;
+  enabled: boolean;
+  entry?: string;
+  manifest?: {
+    id: string;
+    name: string;
+    version: string;
+    description?: string;
+    permissions?: string[];
+    entry?: string;
+  };
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  language: string;
+  code: string;
+  usageCount: number;
+  successRate: number;
+  triggers: string[];
+  createdAt: string;
+}
+
+export interface SkillStats {
+  totalSkills: number;
+  totalInvocations: number;
+  averageSuccessRate: number;
+}
+
+export interface ModelHealth {
+  status: string;
+  error?: string;
+  endpoints: Array<{
+    name: string;
+    baseUrl: string;
+    modelId: string;
+    healthy: boolean;
+    latency?: number;
+  }>;
+}
+
+export interface CronRun {
+  id: string;
+  jobId: string;
+  status: "success" | "failure" | "running";
+  output?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
 export interface Notification {
   id: string;
   type: "info" | "success" | "warning" | "error";
@@ -197,4 +229,47 @@ export interface Notification {
   message: string;
   read: boolean;
   createdAt: string;
+}
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  tags: string[];
+  role: string;
+  capabilities: string[];
+  systemPrompt?: string;
+  tools?: string[];
+  variables?: Record<string, string>;
+  createdAt: string;
+}
+
+export interface WorkflowDef {
+  id: string;
+  name: string;
+  description: string;
+  workspaceId?: string;
+  nodes: Array<{
+    id: string;
+    type: string;
+    label?: string;
+    config?: Record<string, unknown>;
+    toolName?: string;
+    toolParams?: Record<string, unknown>;
+    agentId?: string;
+  }>;
+  edges: Array<{ from: string; to: string; condition?: string }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowRun {
+  runId: string;
+  workflowId: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  inputs?: Record<string, unknown>;
+  outputs?: Record<string, unknown>;
+  startedAt: string;
+  finishedAt?: string;
 }

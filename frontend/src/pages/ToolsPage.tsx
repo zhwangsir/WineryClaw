@@ -151,7 +151,7 @@ export default function ToolsPage() {
                   </span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16 }}>
-                  {list.map((t) => (
+                  {list.map((t: typeof tools[0]) => (
                     <div
                       key={t.id}
                       style={{

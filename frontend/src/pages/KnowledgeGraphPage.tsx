@@ -1,8 +1,18 @@
 import { useState, useEffect, useMemo } from "react";
-import { Input, Button, List, Tag, Empty, Spin, Card, Statistic, Row, Col } from "antd";
-import { ShareAltOutlined, DatabaseOutlined, NodeIndexOutlined, ApartmentOutlined } from "@ant-design/icons";
+import { Input, Button, List, Tag, Empty, Spin, Card, Statistic, Row, Col, Drawer, Form, Select, Slider, message, Modal } from "antd";
+import {
+  ShareAltOutlined,
+  DatabaseOutlined,
+  NodeIndexOutlined,
+  ApartmentOutlined,
+  PlusOutlined,
+  LinkOutlined,
+  DeleteOutlined,
+  ExclamationCircleOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useKgStore } from "../stores/kgStore";
+import type { KgEntity } from "../api/types";
 
 const typeColors: Record<string, string> = {
   concept: "var(--c-text)",
@@ -13,30 +23,91 @@ const typeColors: Record<string, string> = {
   unknown: "var(--c-text-3)",
 };
 
+const entityTypes = [
+  { value: "concept", label: "概念" },
+  { value: "person", label: "人物" },
+  { value: "organization", label: "组织" },
+  { value: "location", label: "地点" },
+  { value: "event", label: "事件" },
+  { value: "product", label: "产品" },
+  { value: "technology", label: "技术" },
+];
+
+const relationTypes = [
+  { value: "related_to", label: "相关" },
+  { value: "part_of", label: "属于" },
+  { value: "created_by", label: "创建者" },
+  { value: "located_in", label: "位于" },
+  { value: "works_for", label: "工作于" },
+  { value: "friend_of", label: "朋友" },
+  { value: "uses", label: "使用" },
+];
+
 export default function KnowledgeGraphPage() {
-  const { entities, selectedEntity, entityRelations, stats, loading, fetchEntities, selectEntity, search, fetchStats } =
+  const { entities, selectedEntity, entityRelations, stats, loading, fetchEntities, selectEntity, search, fetchStats, addEntity, addRelation, deleteEntity } =
     useKgStore();
 
   const [query, setQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("");
+
+  const [entityDrawerOpen, setEntityDrawerOpen] = useState(false);
+  const [relationDrawerOpen, setRelationDrawerOpen] = useState(false);
+  const [entityForm] = Form.useForm();
+  const [relationForm] = Form.useForm();
+  const [submitLoading, setSubmitLoading] = useState(false);
 
   useEffect(() => {
     fetchEntities();
     fetchStats();
   }, [fetchEntities, fetchStats]);
 
-  const filtered = useMemo(() => {
-    return selectedType ? entities.filter((e) => e.type === selectedType) : entities;
+  const filtered = useMemo<KgEntity[]>(() => {
+    return selectedType ? entities.filter((e: KgEntity) => e.type === selectedType) : entities;
   }, [entities, selectedType]);
 
-  const types = useMemo(() => {
-    const set = new Set(entities.map((e) => e.type));
+  const types = useMemo<string[]>(() => {
+    const set = new Set(entities.map((e: KgEntity) => e.type));
     return Array.from(set);
   }, [entities]);
 
   const handleSearch = (v: string) => {
     setQuery(v);
     if (v.trim()) search(v);
+  };
+
+  const handleAddEntity = async (values: { name: string; type: string; description: string }) => {
+    setSubmitLoading(true);
+    try {
+      await addEntity({ name: values.name, type: values.type, description: values.description || "", mentionCount: 0 });
+      message.success("实体添加成功");
+      setEntityDrawerOpen(false);
+      entityForm.resetFields();
+      await fetchEntities();
+      await fetchStats();
+    } catch (err: any) {
+      message.error(err?.message || "添加失败");
+    } finally {
+      setSubmitLoading(false);
+    }
+  };
+
+  const handleAddRelation = async (values: { source: string; target: string; type: string; confidence: number }) => {
+    setSubmitLoading(true);
+    try {
+      await addRelation({
+        source: values.source,
+        target: values.target,
+        type: values.type,
+        confidence: values.confidence,
+      });
+      message.success("关系添加成功");
+      setRelationDrawerOpen(false);
+      relationForm.resetFields();
+    } catch (err: any) {
+      message.error(err?.message || "添加失败");
+    } finally {
+      setSubmitLoading(false);
+    }
   };
 
   return (
@@ -82,7 +153,7 @@ export default function KnowledgeGraphPage() {
       </Row>
 
       {/* Toolbar */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 32, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 32, flexWrap: "wrap", alignItems: "center" }}>
         <Input.Search
           placeholder="搜索实体..."
           value={query}
@@ -99,7 +170,7 @@ export default function KnowledgeGraphPage() {
           >
             全部
           </Button>
-          {types.map((t) => (
+          {types.map((t: string) => (
             <Button
               key={t}
               size="small"
@@ -110,6 +181,14 @@ export default function KnowledgeGraphPage() {
               {t}
             </Button>
           ))}
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <Button icon={<PlusOutlined />} onClick={() => setEntityDrawerOpen(true)}>
+            添加实体
+          </Button>
+          <Button icon={<LinkOutlined />} onClick={() => setRelationDrawerOpen(true)}>
+            添加关系
+          </Button>
         </div>
       </div>
 
@@ -157,7 +236,7 @@ export default function KnowledgeGraphPage() {
                 <div style={{ color: "var(--c-text-3)", fontSize: 13, fontWeight: 300 }}>无关系</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {entityRelations.map((r) => (
+                  {entityRelations.map((r: { id?: string; relation?: string; target?: string; type?: string }) => (
                     <div
                       key={r.id}
                       style={{
@@ -202,7 +281,7 @@ export default function KnowledgeGraphPage() {
         <List
           grid={{ gutter: 24, xs: 1, sm: 2, md: 3, lg: 4 }}
           dataSource={filtered}
-          renderItem={(e) => (
+          renderItem={(e: KgEntity) => (
             <List.Item>
               <Card
                 size="small"
@@ -243,11 +322,86 @@ export default function KnowledgeGraphPage() {
                 >
                   {e.description || "—"}
                 </div>
+                <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      Modal.confirm({
+                        title: "确认删除",
+                        icon: <ExclamationCircleOutlined />,
+                        content: `确定要删除实体 "${e.name}" 吗？相关关系也会被删除。`,
+                        okText: "删除",
+                        okType: "danger",
+                        cancelText: "取消",
+                        onOk: () => deleteEntity(e.id),
+                      });
+                    }}
+                  >
+                    删除
+                  </Button>
+                </div>
               </Card>
             </List.Item>
           )}
         />
       )}
+
+      {/* Add Entity Drawer */}
+      <Drawer
+        title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>添加实体</span>}
+        open={entityDrawerOpen}
+        onClose={() => setEntityDrawerOpen(false)}
+        width={420}
+      >
+        <Form form={entityForm} layout="vertical" onFinish={handleAddEntity}>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入实体名称" }]}>
+            <Input placeholder="例如: OpenAI" />
+          </Form.Item>
+          <Form.Item name="type" label="类型" rules={[{ required: true, message: "请选择实体类型" }]}>
+            <Select placeholder="选择类型" options={entityTypes} />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={3} placeholder="实体的描述信息..." />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" loading={submitLoading} block>
+              添加
+            </Button>
+          </Form.Item>
+        </Form>
+      </Drawer>
+
+      {/* Add Relation Drawer */}
+      <Drawer
+        title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>添加关系</span>}
+        open={relationDrawerOpen}
+        onClose={() => setRelationDrawerOpen(false)}
+        width={420}
+      >
+        <Form form={relationForm} layout="vertical" onFinish={handleAddRelation}>
+          <Form.Item name="source" label="源实体" rules={[{ required: true, message: "请输入源实体名称" }]}>
+            <Input placeholder="源实体名称" />
+          </Form.Item>
+          <Form.Item name="target" label="目标实体" rules={[{ required: true, message: "请输入目标实体名称" }]}>
+            <Input placeholder="目标实体名称" />
+          </Form.Item>
+          <Form.Item name="type" label="关系类型" rules={[{ required: true, message: "请选择关系类型" }]}>
+            <Select placeholder="选择关系类型" options={relationTypes} />
+          </Form.Item>
+          <Form.Item name="confidence" label="置信度" initialValue={0.8}>
+            <Slider min={0} max={1} step={0.05} marks={{ 0: "0", 0.5: "0.5", 1: "1" }} />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" loading={submitLoading} block>
+              添加
+            </Button>
+          </Form.Item>
+        </Form>
+      </Drawer>
     </PageShell>
   );
 }
