@@ -43,13 +43,25 @@ logger = logging.getLogger("webrain.memory.conflict")
 LLMCaller = Callable[[List[Dict[str, str]]], Awaitable[str]]
 
 
+import os as _os
+
 # Cosine-similarity floor for considering two L3 facts as candidates for
 # contradiction. Below this they're unrelated enough that the LLM check
 # isn't worth the cost.
-DEFAULT_SIMILARITY_THRESHOLD = 0.7
+#
+# **Default tuned 0.7 → 0.5 after 2026-05-20 user trial.** The multilingual
+# MiniLM model produces lower cosine sim on short CJK strings than on
+# English: two contradicting Chinese name facts ("我叫A" vs "我叫B")
+# scored ~0.5, well below the original 0.7 threshold, so conflicts were
+# never even sent to the LLM judge. 0.5 catches CJK while still excluding
+# clearly-unrelated rows (the LLM judge filters the remaining false
+# positives). Override via WEBRAIN_CONFLICT_SIMILARITY_THRESHOLD env.
+DEFAULT_SIMILARITY_THRESHOLD = float(
+    _os.environ.get("WEBRAIN_CONFLICT_SIMILARITY_THRESHOLD", "0.5")
+)
 # Maximum number of similar candidates we'll ask the LLM about per store.
 # Caps cost at one fixed multiple of L3 writes.
-DEFAULT_MAX_CANDIDATES = 3
+DEFAULT_MAX_CANDIDATES = int(_os.environ.get("WEBRAIN_CONFLICT_MAX_CANDIDATES", "3"))
 
 
 class ConflictDetector:

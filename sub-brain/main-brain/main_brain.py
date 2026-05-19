@@ -138,6 +138,51 @@ async def lifespan(app: FastAPI) -> None:
 
     _state["memory"] = MemoryManager(db_path=str(data_dir / "memory.db"), llm_config=llm_config)
 
+    # M-Memory-1: wire the L3 conflict detector. Without this, every L3
+    # store quietly skips contradiction checks — the entire conflict UI is
+    # dead code. Discovered during 2026-05-20 user trial when two
+    # contradicting facts produced zero conflicts.
+    # Disable via WEBRAIN_CONFLICT_DETECTOR_DISABLED=1 in token-tight deploys.
+    if os.environ.get("WEBRAIN_CONFLICT_DETECTOR_DISABLED") != "1":
+        from memory.conflict_detector import ConflictDetector
+
+        # Build a thin LLM caller that shares the configured llm_config. Falls
+        # back to a chat-completion against the highest-priority endpoint.
+        async def _conflict_llm_caller(messages):
+            endpoints = llm_config.get("endpoints") or []
+            if not endpoints:
+                # Single-endpoint legacy config
+                endpoints = [{
+                    "base_url": llm_config.get("base_url", ""),
+                    "model_id": llm_config.get("model_id", ""),
+                    "api_key": llm_config.get("api_key"),
+                }]
+            # Use highest-priority endpoint (sorted desc in chat router)
+            ep = sorted(endpoints, key=lambda e: -(e.get("priority", 0)))[0]
+            base_url = (ep.get("base_url") or ep.get("baseUrl") or "").rstrip("/")
+            model_id = ep.get("model_id") or ep.get("modelId") or ""
+            api_key = ep.get("api_key") or ep.get("apiKey")
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    json={
+                        "model": model_id,
+                        "messages": messages,
+                        "temperature": 0.0,
+                        "max_tokens": 256,
+                    },
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"]
+
+        _state["conflict_detector"] = ConflictDetector(_conflict_llm_caller)
+        _state["memory"].set_conflict_detector(_state["conflict_detector"])
+        logger.info("L3 conflict detector wired (M-Memory-1)")
+
     # RAG retriever — lazy embedder load so cold start isn't blocked.
     # Loads SentenceTransformer on first index/query call only.
     _state["rag"] = _build_rag_retriever(data_dir)

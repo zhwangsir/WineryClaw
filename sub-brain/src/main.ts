@@ -106,11 +106,19 @@ app.setErrorHandler((error, request, reply) => {
 });
 
 // ===== Not Found Handler =====
-app.setNotFoundHandler((request, reply) => {
-  const traceId = (request as any).traceId || "-";
-  app.log.warn({ traceId, url: request.url, method: request.method }, "route not found");
-  reply.status(404).send({ ok: false, error: "Not found", traceId });
-});
+// Only register this fallback if registerStatic didn't already set its own
+// (it does, with SPA-style index.html serving, when frontend dist is present).
+// Without this guard, Fastify throws "Not found handler already set for
+// Fastify instance with prefix: '/'" at startup — a hard crash that left the
+// sub-brain process alive but not listening on any port. Discovered during
+// real-user trial 2026-05-20; see PROJECT_STATE §user-trial.
+if (!frontendDist) {
+  app.setNotFoundHandler((request, reply) => {
+    const traceId = (request as any).traceId || "-";
+    app.log.warn({ traceId, url: request.url, method: request.method }, "route not found");
+    reply.status(404).send({ ok: false, error: "Not found", traceId });
+  });
+}
 
 const wsHub = new WebSocketHub();
 
