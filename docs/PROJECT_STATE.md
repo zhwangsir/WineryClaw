@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round C2 完成 — dreaming smoke + 修复 2 个真 bug:`/config/reload` 漏掉 4 个 engine、`_vector_search` 不过滤 levels)
+> **最后更新**：2026-05-20（Round C3 + 测试隔离 — 冲突解决 smoke + 修复第 3 个真 bug:`_conflict_llm_caller` 闭包抓 stale llm_config;WEBRAIN_DATA_DIR env override 让 smoke 数据 tmpdir 隔离）
 
 ---
 
@@ -867,7 +867,7 @@ main-brain 后台任务 _skill_evolution_scheduler（每 1h）
 
 ---
 
-## 7. 当前测试状态（Round C2 结束时验证 / 2026-05-20）
+## 7. 当前测试状态（Round C3 结束时验证 / 2026-05-20）
 
 ```
 sub-brain  pnpm exec tsc --noEmit       → 0 errors
@@ -875,7 +875,7 @@ sub-brain  pnpm exec vitest run         → 32 files / 353 pass / 2 skip / 0 fai
 frontend   pnpm exec tsc --noEmit       → 0 errors
 frontend   pnpm exec vitest run         → 116 files / 1174 pass / 0 fail
 main-brain python -m pytest tests/      → 397 pass / 0 fail
-main-brain python -m pytest -m smoke    → 16 pass / 0 fail (215s, 8 boot + 4 chat + 4 dreaming)
+main-brain python -m pytest -m smoke    → 20 pass / 0 fail (~5min, 8 boot + 4 chat + 4 dreaming + 4 conflict)
 ```
 
 ### Round B/C 累计 (autonomous iteration 2026-05-20)
@@ -887,6 +887,10 @@ main-brain python -m pytest -m smoke    → 16 pass / 0 fail (215s, 8 boot + 4 c
 - **C2**: 4 个 dreaming-pipeline smoke + **2 个真 bug 修复**
   - `/config/reload` 漏更新 dreaming/active_memory/kg/planner 4 个 engine
   - `_vector_search` 不过滤 `levels` 参数 — L2-only 查询会通过向量路径漏回 L1 行
+- **C3**: 4 个 conflict-resolution smoke tests + **第 3 个真 bug 修复**
+  - `_conflict_llm_caller` 闭包捕获 lifespan llm_config — `/config/reload` 后冲突判断仍打老 endpoint
+  - mock_llm 现在能识别 conflict-judge / dreaming-summary prompt 返回不同响应
+- **C3.5**: 测试隔离 — main-brain 加 WEBRAIN_DATA_DIR env override,smoke 用 tmpdir;之前 smoke 跑一次就在 dev DB 留 50+ 行垃圾
 
 会话累计新增测试(F+G+H+I+J):
 - Sub-brain TS：plugin-hook-wiring(4)、proxy(7)、auth(10)、tool-executor-hooks(6)、skill-manager-selfimprove(14)、skill-hub-client(14)、skillhub-routes(18)
