@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（M4b.1 完成 — MCP bearer token 鉴权 + read/write scope 二分 + 3 个 write 工具 `memory_store` / `wiki_create` / `rag_index_file` 上线）
+> **最后更新**：2026-05-20（Round C2 完成 — dreaming smoke + 修复 2 个真 bug:`/config/reload` 漏掉 4 个 engine、`_vector_search` 不过滤 levels)
 
 ---
 
@@ -867,15 +867,26 @@ main-brain 后台任务 _skill_evolution_scheduler（每 1h）
 
 ---
 
-## 7. 当前测试状态（Round K 结束时验证 / 2026-05-19）
+## 7. 当前测试状态（Round C2 结束时验证 / 2026-05-20）
 
 ```
 sub-brain  pnpm exec tsc --noEmit       → 0 errors
 sub-brain  pnpm exec vitest run         → 32 files / 353 pass / 2 skip / 0 fail
 frontend   pnpm exec tsc --noEmit       → 0 errors
 frontend   pnpm exec vitest run         → 116 files / 1174 pass / 0 fail
-main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起未变）
+main-brain python -m pytest tests/      → 397 pass / 0 fail
+main-brain python -m pytest -m smoke    → 16 pass / 0 fail (215s, 8 boot + 4 chat + 4 dreaming)
 ```
+
+### Round B/C 累计 (autonomous iteration 2026-05-20)
+
+- **B1**: L4 promotion 上线 — 高频 L3 fact 自动升 L4 永久层
+- **B2**: ActiveMemory 接 chat — fire-and-forget pattern-rule 提取(原本是孤儿 endpoint)
+- **B3**: Blender 权重 grid search — 0.7/0.3 → 0.9/0.1 (recall@5 +15.8%, MRR +5.2%)
+- **C1**: 4 个 chat-flow smoke tests + mock LLM server(catches "chat 端点崩了但单测全过"的 bug 类)
+- **C2**: 4 个 dreaming-pipeline smoke + **2 个真 bug 修复**
+  - `/config/reload` 漏更新 dreaming/active_memory/kg/planner 4 个 engine
+  - `_vector_search` 不过滤 `levels` 参数 — L2-only 查询会通过向量路径漏回 L1 行
 
 会话累计新增测试(F+G+H+I+J):
 - Sub-brain TS：plugin-hook-wiring(4)、proxy(7)、auth(10)、tool-executor-hooks(6)、skill-manager-selfimprove(14)、skill-hub-client(14)、skillhub-routes(18)
