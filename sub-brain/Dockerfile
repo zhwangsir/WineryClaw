@@ -8,6 +8,6 @@ RUN npm install -g pnpm && pnpm install
 COPY . .
 RUN pnpm build
 
-EXPOSE 3002
+EXPOSE 3000
 
 CMD ["node", "dist/main.js"]

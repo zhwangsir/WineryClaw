@@ -1,6 +1,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Proxy target for both `vite dev` and `vite preview`.
+// Defaults to localhost:3000 for local dev. In Docker, set VITE_PROXY_TARGET=http://sub-brain:3000.
+const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://localhost:3000';
+
+const proxyConfig = {
+  '/api': { target: proxyTarget, changeOrigin: true },
+  '/brain': { target: proxyTarget, changeOrigin: true },
+  '/uploads': { target: proxyTarget, changeOrigin: true },
+  '/tools': { target: proxyTarget, changeOrigin: true },
+  // NOTE: '/channels' and '/config' removed — they conflict with SPA routes
+  '/health': { target: proxyTarget, changeOrigin: true },
+};
+
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -35,20 +48,16 @@ export default defineConfig({
         },
       },
     },
-    chunkSizeWarningLimit: 800,
+    chunkSizeWarningLimit: 1200,
   },
   server: {
     port: 8587,
     host: true,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
-      },
-      '/brain': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
-      },
-    },
+    proxy: proxyConfig,
+  },
+  preview: {
+    port: 8587,
+    host: true,
+    proxy: proxyConfig,
   },
 });

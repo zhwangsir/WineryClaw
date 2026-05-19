@@ -8,6 +8,6 @@ RUN npm install -g pnpm && pnpm install
 COPY . .
 RUN pnpm build
 
-EXPOSE 3003
+EXPOSE 8587
 
-CMD ["pnpm", "preview", "--port", "3003", "--host"]
+CMD ["pnpm", "preview", "--port", "8587", "--host"]

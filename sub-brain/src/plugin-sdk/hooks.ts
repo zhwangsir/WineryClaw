@@ -1,6 +1,23 @@
 /**
  * Plugin SDK — Lifecycle Hooks
- * Plugin lifecycle hooks: pre/post tool call, pre/post llm call
+ *
+ * Hooks that ACTUALLY FIRE today (verified by call-site grep):
+ *   - on_startup      — main.ts:129 calls hookRegistry.runStartup()
+ *   - pre_tool_call   — tool-executor.ts calls hookRegistry.runPreToolCall()
+ *   - post_tool_call  — tool-executor.ts calls hookRegistry.runPostToolCall()
+ *
+ * Hooks declared but NOT WIRED end-to-end (interface preserved for forward
+ * compatibility; runtime calls remain no-ops):
+ *   - pre_llm_call / post_llm_call  — LLM calls happen in main-brain Python,
+ *     out of reach of this sub-brain TS hookRegistry. To wire, need
+ *     cross-process RPC from main-brain.
+ *   - on_session_start / on_session_end — chat session lifecycle currently
+ *     lives in main-brain Python.
+ *   - on_shutdown — process termination not yet wrapped.
+ *
+ * `HOOK_STATUS` below is the source of truth — `/hooks/registry` HTTP
+ * endpoint surfaces it so plugin authors / UI can show which hooks are
+ * actually safe to use.
  */
 
 export type HookType =
@@ -12,6 +29,21 @@ export type HookType =
   | "on_session_end"
   | "on_startup"
   | "on_shutdown";
+
+/** Runtime status per hook type. "wired" = real call site triggers it. */
+export type HookWiredStatus = "wired" | "unwired";
+
+export const HOOK_STATUS: Record<HookType, HookWiredStatus> = {
+  pre_tool_call: "wired",
+  post_tool_call: "wired",
+  on_startup: "wired",
+  // Below: API surface preserved but no call site invokes them today.
+  pre_llm_call: "unwired",
+  post_llm_call: "unwired",
+  on_session_start: "unwired",
+  on_session_end: "unwired",
+  on_shutdown: "unwired",
+};
 
 export interface ToolCallContext {
   tool: string;
@@ -68,6 +100,13 @@ export class HookRegistry {
   register(type: HookType, handler: any): void {
     const arr = this.hooks[type] as any[];
     if (arr) arr.push(handler);
+  }
+
+  unregister(type: HookType, handler: any): void {
+    const arr = this.hooks[type] as any[];
+    if (!arr) return;
+    const idx = arr.indexOf(handler);
+    if (idx >= 0) arr.splice(idx, 1);
   }
 
   async runPreToolCall(ctx: ToolCallContext): Promise<HookResult> {

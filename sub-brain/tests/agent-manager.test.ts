@@ -7,11 +7,11 @@ describe('AgentManager', () => {
   beforeEach(() => {
     // Clean persisted agents and tasks
     try {
-      const { readdirSync, unlinkSync } = require('fs');
+      const { readdirSync, unlinkSync, rmSync } = require('fs');
       const { join } = require('path');
       const { homedir } = require('os');
       const base = join(homedir(), '.webrain', 'agents');
-      for (const file of ['agents.json', 'tasks.json']) {
+      for (const file of ['agents.json', 'tasks.json', 'agents.json.migrated']) {
         try { unlinkSync(join(base, file)); } catch {}
       }
       for (const subdir of ['messages', 'conversations', 'votes', 'templates', 'workflows', 'workflow-runs', 'sandboxes']) {
@@ -22,6 +22,15 @@ describe('AgentManager', () => {
           }
         } catch {}
       }
+      // Post-migration: AgentManager stores each agent as its own `agent-<id>/` directory.
+      // Sweep them so prior runs don't inflate workspace listAgents() counts.
+      try {
+        for (const entry of readdirSync(base)) {
+          if (entry.startsWith('agent-')) {
+            try { rmSync(join(base, entry), { recursive: true, force: true }); } catch {}
+          }
+        }
+      } catch {}
     } catch {}
     manager = new AgentManager({ mainBrainUrl: 'http://127.0.0.1:18790', subBrainUrl: 'http://127.0.0.1:3000' });
   });

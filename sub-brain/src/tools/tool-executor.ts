@@ -5,6 +5,7 @@
 
 import { registry, RegisteredTool } from "./tool-registry.js";
 import { registerAllTools } from "./built-in-tools.js";
+import { hookRegistry, type ToolCallContext } from "../plugin-sdk/hooks.js";
 
 export interface ToolExecutionResult {
   ok: boolean;
@@ -46,8 +47,18 @@ export class ToolExecutor {
       return { ok: false, error: `Tool disabled: ${name}` };
     }
 
+    // Plugin pre_tool_call hooks: may block (allowed=false) or rewrite params (modified).
+    // hookRegistry.runPreToolCall mutates ctx.params in place when result.modified is set.
+    const ctx: ToolCallContext = { tool: name, params };
+    const pre = await hookRegistry.runPreToolCall(ctx);
+    if (!pre.allowed) {
+      return { ok: false, error: pre.reason || pre.error || `Tool '${name}' blocked by plugin hook` };
+    }
+
     try {
-      const result = await registered.execute(params);
+      const result = await registered.execute(ctx.params);
+      // Plugin post_tool_call hooks: observability only — return value not used to mutate result.
+      await hookRegistry.runPostToolCall(ctx, result);
       return { ok: true, result };
     } catch (err: any) {
       return { ok: false, error: String(err.message || err) };

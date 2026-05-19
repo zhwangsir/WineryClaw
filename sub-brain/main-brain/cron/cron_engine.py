@@ -6,6 +6,7 @@ WeBrain Cron Engine — 通用定时任务调度器
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,6 +182,18 @@ class CronEngine:
     async def start(self) -> None:
         if self._running:
             return
+        pid_path = Path(self.db_path).parent / "cron.pid"
+        if pid_path.exists():
+            try:
+                existing = int(pid_path.read_text().strip())
+                os.kill(existing, 0)
+                logger.warning(f"Cron engine already running (pid {existing}); skipping start")
+                return
+            except (ValueError, ProcessLookupError, OSError):
+                pass  # stale lock from a dead process — take over
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_path.write_text(str(os.getpid()))
+        self._pid_path = pid_path
         self._running = True
         self._task = asyncio.create_task(self._scheduler_loop())
         logger.info("Cron engine started")
@@ -192,6 +205,13 @@ class CronEngine:
             try:
                 await self._task
             except asyncio.CancelledError:
+                pass
+        pid_path = getattr(self, "_pid_path", None)
+        if pid_path and pid_path.exists():
+            try:
+                if int(pid_path.read_text().strip()) == os.getpid():
+                    pid_path.unlink()
+            except (ValueError, OSError):
                 pass
         logger.info("Cron engine stopped")
 

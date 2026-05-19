@@ -7,6 +7,7 @@ import { subBrainDB } from "../db/sub-brain-db.js";
 import { existsSync } from "fs";
 import { resolve } from "path";
 import { pathToFileURL } from "url";
+import { hookRegistry, type HookType } from "../plugin-sdk/hooks.js";
 
 export interface PluginManifest {
   id: string;
@@ -41,6 +42,26 @@ export interface Plugin {
 export class PluginLoader {
   private plugins = new Map<string, Plugin>();
   private db = subBrainDB.getDb();
+  private pluginHookRegistrations = new Map<string, Array<{ type: HookType; handler: any }>>();
+
+  private _registerHooks(pluginId: string, mod: LoadedPluginModule | undefined): void {
+    if (!mod?.hooks) return;
+    const tracked: Array<{ type: HookType; handler: any }> = [];
+    for (const [type, handler] of Object.entries(mod.hooks)) {
+      hookRegistry.register(type as HookType, handler);
+      tracked.push({ type: type as HookType, handler });
+    }
+    if (tracked.length) this.pluginHookRegistrations.set(pluginId, tracked);
+  }
+
+  private _unregisterHooks(pluginId: string): void {
+    const tracked = this.pluginHookRegistrations.get(pluginId);
+    if (!tracked) return;
+    for (const { type, handler } of tracked) {
+      hookRegistry.unregister(type, handler);
+    }
+    this.pluginHookRegistrations.delete(pluginId);
+  }
 
   async initialize(): Promise<void> {
     // Load persisted plugins and attempt to re-import their modules
@@ -76,6 +97,7 @@ export class PluginLoader {
       if (plugin.enabled) {
         try {
           await plugin.initialize();
+          this._registerHooks(row.id, plugin.module);
         } catch (err: any) {
           console.error(`[plugins] Initialize failed for ${row.id}:`, err.message);
           plugin.enabled = false;
@@ -153,6 +175,7 @@ export class PluginLoader {
     }
 
     this.plugins.set(pluginId, plugin);
+    this._registerHooks(pluginId, plugin.module);
 
     // Persist
     const stmt = this.db.prepare(
@@ -228,6 +251,7 @@ export class PluginLoader {
     }
 
     this.plugins.set(id, plugin);
+    this._registerHooks(id, plugin.module);
 
     const stmt = this.db.prepare(
       "INSERT OR REPLACE INTO plugins (id, name, version, enabled, manifest, config, loaded_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
@@ -272,6 +296,7 @@ export class PluginLoader {
     if (!plugin) {
       return { ok: false, error: `Plugin not found: ${pluginId}` };
     }
+    this._unregisterHooks(pluginId);
     try {
       await plugin.destroy();
     } catch (err: any) {
@@ -285,12 +310,26 @@ export class PluginLoader {
     return { ok: true };
   }
 
+  async deletePlugin(pluginId: string): Promise<{ ok: boolean; error?: string }> {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      return { ok: false, error: `Plugin not found: ${pluginId}` };
+    }
+    // Unload first
+    const unloadResult = await this.unload(pluginId);
+    if (!unloadResult.ok) {
+      return { ok: false, error: unloadResult.error };
+    }
+    return { ok: true };
+  }
+
   async enable(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (plugin) {
       plugin.enabled = true;
       try {
         await plugin.initialize();
+        this._registerHooks(pluginId, plugin.module);
       } catch (err: any) {
         console.error(`[plugins] Re-initialize failed for ${pluginId}:`, err.message);
         plugin.enabled = false;
@@ -304,6 +343,7 @@ export class PluginLoader {
     const plugin = this.plugins.get(pluginId);
     if (plugin) {
       plugin.enabled = false;
+      this._unregisterHooks(pluginId);
       try {
         await plugin.destroy();
       } catch (err: any) {
@@ -314,13 +354,14 @@ export class PluginLoader {
     }
   }
 
-  listPlugins(): Array<{ id: string; name: string; version: string; enabled: boolean; entry?: string }> {
+  listPlugins(): Array<{ id: string; name: string; version: string; enabled: boolean; entry?: string; manifest?: any }> {
     return Array.from(this.plugins.values()).map((p) => ({
       id: p.id,
       name: p.name,
       version: p.version,
       enabled: p.enabled,
       entry: p.manifest.entry,
+      manifest: p.manifest,
     }));
   }
 

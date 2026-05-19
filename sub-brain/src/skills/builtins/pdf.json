@@ -3,7 +3,7 @@
   "name": "PDF Tools",
   "description": "Extract text from PDF files",
   "triggerPatterns": ["extract pdf", "read pdf", "pdf text", "pdf content"],
-  "code": "const fs = require('fs');\nconst { execSync } = require('child_process');\nconst path = params.path || '';\nif (!path) throw new Error('Path is required');\n// Try pdftotext first\ntry {\n  const text = execSync(`pdftotext "${path}" -`, { encoding: 'utf-8', timeout: 30000 });\n  return { text: text.slice(0, 10000), method: 'pdftotext', pages: 'unknown' };\n} catch {\n  // Fallback: python PyPDF2\n  const script = `import sys; from PyPDF2 import PdfReader; r=PdfReader(sys.argv[1]); text='\\n'.join([p.extract_text() or '' for p in r.pages]); print(text[:20000])`;\n  const text = execSync(`python3 -c '${script}' "${path}"`, { encoding: 'utf-8', timeout: 30000 });\n  return { text: text.slice(0, 10000), method: 'PyPDF2', pages: 'unknown' };\n}",
+  "code": "const fs = require('fs');\nconst { execSync } = require('child_process');\nconst path = params.path || '';\nif (!path) throw new Error('Path is required');\ntry {\n  const text = execSync(`pdftotext \"${path}\" -`, { encoding: 'utf-8', timeout: 30000 });\n  return { text: text.slice(0, 10000), method: 'pdftotext', pages: 'unknown' };\n} catch {\n  const script = `import sys; from PyPDF2 import PdfReader; r=PdfReader(sys.argv[1]); text='\\n'.join([p.extract_text() or '' for p in r.pages]); print(text[:20000])`;\n  const text = execSync(`python3 -c '${script}' \"${path}\"`, { encoding: 'utf-8', timeout: 30000 });\n  return { text: text.slice(0, 10000), method: 'PyPDF2', pages: 'unknown' };\n}",
   "language": "javascript",
   "tags": ["office", "pdf"],
   "version": 1

@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import { Button, Empty } from "antd";
 import { DownOutlined } from "@ant-design/icons";
 import { useIsDark } from "../../hooks/useTheme";
@@ -24,7 +23,6 @@ export default function MessageList({
   containerRef,
 }: MessageListProps) {
   const isDark = useIsDark();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const C = {
     pageBg: "var(--c-page)",
@@ -58,7 +56,6 @@ export default function MessageList({
             <MessageBubble key={msg.id} msg={msg} isDark={isDark} highlight={highlight} />
           ))
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Scroll-to-bottom button */}

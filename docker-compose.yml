@@ -31,7 +31,8 @@ services:
     build: ./frontend
     ports: ["8587:8587"]
     environment:
-      - WEBRAIN_API_URL=http://localhost:9797
+      - WEBRAIN_API_URL=http://sub-brain:3000
+      - VITE_PROXY_TARGET=http://sub-brain:3000
     networks: [webrain-net]
 
   dokobot:
