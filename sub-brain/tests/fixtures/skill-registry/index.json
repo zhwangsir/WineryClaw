@@ -1,0 +1,23 @@
+{
+  "registry_name": "test-fixtures",
+  "version": "1.0",
+  "description": "Local fixture registry for skill-hub-client tests",
+  "skills": [
+    {
+      "id": "test-skill-echo",
+      "name": "Echo",
+      "description": "Prints back the input params",
+      "version": "1.0.0",
+      "path": "echo/skill.json",
+      "tags": ["test", "echo"]
+    },
+    {
+      "id": "test-skill-greet",
+      "name": "Greet",
+      "description": "Greets a person by name",
+      "version": "1.0.0",
+      "path": "greet/skill.json",
+      "tags": ["test", "greeting"]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "test-skill-greet",
+  "name": "Greet",
+  "description": "Greets a person by name",
+  "triggerPatterns": ["greet ", "hello "],
+  "code": "console.log('hello,', params.name || 'world')",
+  "language": "javascript",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "test-fixtures",
+  "createdAt": "2026-05-13T00:00:00.000Z",
+  "updatedAt": "2026-05-13T00:00:00.000Z",
+  "version": 1,
+  "tags": ["test", "greeting"]
+}

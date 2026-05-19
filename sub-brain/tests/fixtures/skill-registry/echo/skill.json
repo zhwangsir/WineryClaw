@@ -1,0 +1,15 @@
+{
+  "id": "test-skill-echo",
+  "name": "Echo",
+  "description": "Prints back the input params",
+  "triggerPatterns": ["echo "],
+  "code": "console.log(JSON.stringify(params))",
+  "language": "javascript",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "test-fixtures",
+  "createdAt": "2026-05-13T00:00:00.000Z",
+  "updatedAt": "2026-05-13T00:00:00.000Z",
+  "version": 1,
+  "tags": ["test", "echo"]
+}
