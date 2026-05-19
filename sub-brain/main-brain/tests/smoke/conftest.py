@@ -30,7 +30,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Dict, Iterator, Optional
 
 import httpx
 import pytest
@@ -133,7 +133,10 @@ def _wait_for_http(url: str, timeout: float, label: str, log_path: Path) -> None
     )
 
 
-def _spawn_main_brain(port: int, tmp_data_dir: Path, log_path: Path) -> RunningService:
+def _spawn_main_brain(
+    port: int, tmp_data_dir: Path, log_path: Path,
+    sub_brain_port: Optional[int] = None,
+) -> RunningService:
     """Start main-brain bound to a specific port with an isolated data dir.
 
     Critical: we point HOME at a tmpdir so the persisted mcp_token and any
@@ -143,6 +146,13 @@ def _spawn_main_brain(port: int, tmp_data_dir: Path, log_path: Path) -> RunningS
     NOT from an env var. So data isolation works via HOME for ~/.webrain
     but the main DB still goes to the project's data/ dir. We accept this
     for now and clean up any data left behind in teardown.
+
+    sub_brain_port: if known up-front, set WEBRAIN_SUB_BRAIN_URL so main-brain's
+    _fetch_llm_config() can reach the smoke's sub-brain rather than the
+    hard-coded :3000 default (which won't be running in smoke).
+    Without this, /config/reload silently falls back to the default LM
+    Studio URL — the chat-flow smoke test would hit a real dev endpoint
+    instead of our mock LLM.
     """
     log_file = open(log_path, "w", buffering=1)  # line-buffered
     env = os.environ.copy()
@@ -157,6 +167,8 @@ def _spawn_main_brain(port: int, tmp_data_dir: Path, log_path: Path) -> RunningS
     env["HOME"] = str(tmp_data_dir)
     # Speed up boot — skip Tokenizers parallelism warnings
     env["TOKENIZERS_PARALLELISM"] = "false"
+    if sub_brain_port is not None:
+        env["WEBRAIN_SUB_BRAIN_URL"] = f"http://127.0.0.1:{sub_brain_port}"
 
     if not VENV_PYTHON.exists():
         raise FileNotFoundError(
@@ -228,6 +240,136 @@ class SmokeRig:
     tmp_dir: Path
 
 
+def _spawn_mock_llm(port: int, log_path: Path) -> RunningService:
+    """Spawn the tests/smoke/mock_llm_server.py FastAPI app on `port`.
+
+    Used by chat-flow smoke tests that need a working LLM endpoint
+    main-brain can actually reach. The mock returns a deterministic
+    "MOCK-LLM-REPLY" sentinel so tests can grep for it.
+    """
+    log_file = open(log_path, "w", buffering=1)
+    mock_script = Path(__file__).parent / "mock_llm_server.py"
+    if not mock_script.exists():
+        raise FileNotFoundError(f"mock LLM script missing: {mock_script}")
+
+    proc = subprocess.Popen(
+        [str(VENV_PYTHON), str(mock_script), "--port", str(port)],
+        cwd=str(MAIN_BRAIN_DIR),  # uvicorn is installed in main-brain venv
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        start_new_session=True,
+    )
+    base_url = f"http://127.0.0.1:{port}"
+    # Mock LLM has no /health; poll /v1/models instead.
+    _wait_for_http(f"{base_url}/v1/models", timeout=10.0, label="mock-llm", log_path=log_path)
+    return RunningService("mock-llm", proc, port, log_path, base_url)
+
+
+@dataclass
+class ChatSmokeRig:
+    main_brain: RunningService
+    sub_brain: RunningService
+    mock_llm: RunningService
+    tmp_dir: Path
+
+
+@pytest.fixture(scope="module")
+def chat_smoke_rig(smoke_rig) -> Iterator[ChatSmokeRig]:
+    """Extend smoke_rig with a mock LLM + wire main-brain to use it.
+
+    Module-scoped so chat tests share one LLM mock + one config reload.
+    Implementation:
+      1. Spawn mock_llm_server.py on a fresh port
+      2. POST /config/model to sub-brain pointing at the mock URL
+      3. POST /config/reload on main-brain so ChatEngine.router picks up
+         the new endpoint
+      4. Yield the rig
+      5. Restore original sub-brain config + reload main-brain on teardown
+         so other tests aren't affected
+    """
+    mock_log = smoke_rig.tmp_dir / "mock-llm.log"
+    mock_port = _find_free_port()
+    mock_llm: Optional[RunningService] = None
+    original_config: Optional[Dict] = None
+
+    try:
+        mock_llm = _spawn_mock_llm(mock_port, mock_log)
+
+        # Snapshot sub-brain's current model config so we can restore later
+        sub_url = smoke_rig.sub_brain.base_url
+        snapshot = httpx.get(f"{sub_url}/config/model", timeout=5.0)
+        if snapshot.status_code == 200:
+            original_config = snapshot.json().get("config") or snapshot.json()
+
+        # Point main-brain at the mock LLM via sub-brain's config API
+        new_config = {
+            "endpoints": [{
+                "name": "mock-llm",
+                "base_url": f"{mock_llm.base_url}/v1",
+                "model_id": "mock-model",
+                "api_key": "test-key",
+                "priority": 100,
+                "timeout": 10.0,
+                "provider": "openai",
+            }],
+            "temperature": 0.0,
+            "maxTokens": 256,
+        }
+        r = httpx.post(f"{sub_url}/config/model", json=new_config, timeout=10.0)
+        assert r.status_code == 200, f"Failed to set mock LLM config: {r.text}"
+
+        # Tell main-brain to reload. Without this, ChatEngine.router still
+        # points at whatever was loaded at lifespan time.
+        r = httpx.post(f"{smoke_rig.main_brain.base_url}/config/reload", timeout=15.0)
+        assert r.status_code == 200, f"Failed to reload main-brain config: {r.text}"
+
+        # Warm up the chat path with one throwaway call. The first chat
+        # triggers lazy loads (cross-encoder for re-ranking,
+        # paraphrase-multilingual-MiniLM-L12-v2 for ConflictDetector) that
+        # cost ~25s combined and would push the first real test body past
+        # any sane timeout. By front-loading them into fixture setup, each
+        # actual test body sees a sub-second chat latency.
+        try:
+            httpx.post(
+                f"{sub_url}/brain/chat",
+                json={
+                    "message": "warmup ping",
+                    "session_id": "smoke-warmup",
+                    "context": {"tools_enabled": False},
+                },
+                timeout=90.0,  # generous; cold load may be slower on CI
+            )
+        except httpx.HTTPError as exc:
+            # Warm-up failure is non-fatal — tests will discover the
+            # problem with a clearer message than a timeout in setup.
+            print(f"[chat_smoke_rig] warm-up chat failed: {exc}")
+
+        yield ChatSmokeRig(
+            main_brain=smoke_rig.main_brain,
+            sub_brain=smoke_rig.sub_brain,
+            mock_llm=mock_llm,
+            tmp_dir=smoke_rig.tmp_dir,
+        )
+    finally:
+        # Best-effort restoration — if these fail, the worst case is that
+        # other tests inherit the mock LLM URL, which is fine since they
+        # don't exercise the chat path.
+        if original_config is not None:
+            try:
+                httpx.post(
+                    f"{smoke_rig.sub_brain.base_url}/config/model",
+                    json=original_config, timeout=5.0,
+                )
+                httpx.post(
+                    f"{smoke_rig.main_brain.base_url}/config/reload", timeout=10.0,
+                )
+            except (httpx.HTTPError, httpx.ConnectError):
+                pass
+        if mock_llm is not None:
+            mock_llm.kill()
+
+
 @pytest.fixture(scope="module")
 def smoke_rig() -> Iterator[SmokeRig]:
     """Module-scoped fixture: spawn both services once for all smoke tests.
@@ -244,10 +386,15 @@ def smoke_rig() -> Iterator[SmokeRig]:
     sub_brain: Optional[RunningService] = None
 
     try:
+        # Allocate both ports up front so we can tell main-brain which
+        # sub-brain port to query for /config/model. Without this, any
+        # /config/reload falls back to defaults (LM Studio at
+        # 192.168.71.100), which breaks the chat-flow smoke completely.
         main_port = _find_free_port()
-        main_brain = _spawn_main_brain(main_port, tmp_dir, main_log)
-
         sub_port = _find_free_port()
+        main_brain = _spawn_main_brain(main_port, tmp_dir, main_log,
+                                       sub_brain_port=sub_port)
+
         sub_brain = _spawn_sub_brain(sub_port, main_port, sub_log)
 
         yield SmokeRig(main_brain=main_brain, sub_brain=sub_brain, tmp_dir=tmp_dir)
