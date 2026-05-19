@@ -5,6 +5,7 @@ L1-L4 分层记忆 + Hybrid Search (BM25 + Vector) + Re-ranking + Chunking
 
 import json
 import logging
+import os
 import sqlite3
 import uuid
 import math
@@ -52,11 +53,47 @@ RETRIEVAL_BOOST = 0.05
 
 # Query-time blending of textual relevance vs decayed importance.
 # final_score = relevance * RELEVANCE_WEIGHT + effective_importance * IMPORTANCE_WEIGHT
-# At 0.7/0.3 a strong-match-but-old memory can still win against a weak-match
-# fresh one, but only when its importance was already non-trivial. Tune by
-# benchmark (Task #8) rather than intuition.
-RELEVANCE_WEIGHT = 0.7
-IMPORTANCE_WEIGHT = 0.3
+#
+# Default 0.9 / 0.1 is the empirical sweet spot from the Round B3 grid
+# search (tests/test_blender_grid.py, 2026-05-20):
+#   rel=1.0 (pure relevance):    recall@5 0.550, recall@10 0.575, MRR 0.471
+#   rel=0.9 imp=0.1:             recall@5 0.550, recall@10 0.575, MRR 0.442   ← chosen
+#   rel=0.7 imp=0.3 (old default): recall@5 0.475, recall@10 0.575, MRR 0.420
+#   rel=0.0 (pure importance):   recall@5 0.000, recall@10 0.075, MRR 0.018
+#
+# Why not pure relevance? Importance still earns a small share as anchor for
+# the L3/L4 promotion path — a high-importance permanent fact should beat a
+# barely-relevant L1 noise hit when their relevance is close. On a 20-query
+# fixture pure relevance ties recall@10 with 0.9/0.1, but MRR is +0.029
+# higher (0.471 vs 0.442) — within the fixture's noise floor at n=20.
+# Keep a non-zero importance share so the system has somewhere to grow as
+# the L4 layer fills up over weeks of real use.
+#
+# Env-overridable so the grid-search benchmark can sweep weights without
+# monkey-patching, and so deployments can tune without code changes.
+# WEBRAIN_RELEVANCE_WEIGHT alone is enough; importance weight is derived
+# as 1 - relevance unless explicitly set. Both clamped to [0,1] and the
+# pair is renormalized to sum==1.
+def _resolve_blender_weights() -> tuple:
+    try:
+        rel = float(os.environ.get("WEBRAIN_RELEVANCE_WEIGHT", "0.9"))
+    except ValueError:
+        rel = 0.9
+    try:
+        imp_env = os.environ.get("WEBRAIN_IMPORTANCE_WEIGHT")
+        imp = float(imp_env) if imp_env is not None else (1.0 - rel)
+    except ValueError:
+        imp = 1.0 - rel
+    rel = max(0.0, min(1.0, rel))
+    imp = max(0.0, min(1.0, imp))
+    total = rel + imp
+    if total <= 1e-9:
+        # Degenerate input — fall back to default split
+        return 0.9, 0.1
+    return rel / total, imp / total
+
+
+RELEVANCE_WEIGHT, IMPORTANCE_WEIGHT = _resolve_blender_weights()
 
 
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
@@ -926,6 +963,12 @@ class MemoryManager:
                 return 0.5
             return (r - r_min) / spread
 
+        # Re-resolve weights from env on every blend so the grid-search
+        # benchmark (Round B3) can sweep without restarting the process.
+        # Cost: two env lookups per query — negligible vs. the embedding
+        # work that already happened upstream.
+        rel_w, imp_w = _resolve_blender_weights()
+
         blended: List[Dict] = []
         for c, r in zip(candidates, rels):
             row = dict(c)
@@ -935,7 +978,7 @@ class MemoryManager:
                 row.get("last_accessed_at"),
                 now=now,
             )
-            final = _normalize(r) * RELEVANCE_WEIGHT + eff * IMPORTANCE_WEIGHT
+            final = _normalize(r) * rel_w + eff * imp_w
             row["effective_importance"] = eff
             row["final_score"] = final
             blended.append(row)

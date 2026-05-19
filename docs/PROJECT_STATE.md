@@ -1039,9 +1039,34 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 | 2026-05-19 | 启用 L1 embedding | 0.425 | 0.650 | 0.344 | baseline 阶跃 |
 | 2026-05-19 | + consolidation | 0.425 | 0.625 | 0.383 | recall@10 略降 0.025,MRR +0.039 |
 | 2026-05-20 | + embedder 缓存 + FTS5 escape | 0.425 | 0.625 | 0.383 | 不变(修速度 / 崩溃,不动算法) |
+| 2026-05-20 | + blender 0.9/0.1 (Round B3) | 0.550 | 0.575 | 0.442 | grid search 结论:relevance 权重越高越好,recall@5 +0.125,MRR +0.059 |
+
+### Round B3 — Blender weight grid search (2026-05-20)
+
+跑 `pytest -m benchmark -s tests/test_blender_grid.py` 得到的完整网格:
+
+| relevance | importance | recall@5 | recall@10 |  MRR  | 备注 |
+|-----------|------------|----------|-----------|-------|------|
+| 1.0       | 0.0        | 0.550    | 0.575     | 0.471 | 纯 relevance 上限 |
+| 0.9       | 0.1        | 0.550    | 0.575     | 0.442 | **新默认** |
+| 0.8       | 0.2        | 0.500    | 0.575     | 0.427 | |
+| 0.7       | 0.3        | 0.475    | 0.575     | 0.420 | 旧默认 |
+| 0.6       | 0.4        | 0.475    | 0.575     | 0.419 | |
+| 0.5       | 0.5        | 0.475    | 0.550     | 0.411 | |
+| 0.4       | 0.6        | 0.475    | 0.500     | 0.405 | |
+| 0.3       | 0.7        | 0.475    | 0.500     | 0.405 | |
+| 0.0       | 1.0        | 0.000    | 0.075     | 0.018 | 纯 importance(sanity check) |
+
+**结论**:
+1. recall@10 在 rel ≥ 0.5 时全部并列在 0.575 — blender 在 top-10 召回上不敏感
+2. recall@5 和 MRR 单调随 relevance 升高 — 越靠 relevance 越准
+3. 纯 importance 灾难(recall@10=0.075)→ relevance 信号不可去
+4. 选 0.9 而不是 1.0:留 10% 给 importance 当 L3/L4 anchor — 等到 L4 facts 多了再重测,届时 importance 的边际效用可能上来
+
+**Env override**:`WEBRAIN_RELEVANCE_WEIGHT=0.9 WEBRAIN_IMPORTANCE_WEIGHT=0.1`(单设一个即可,另一个自动 1-x)
 
 下一次想动 baseline 的方向:
-- Blender 权重 grid search:relevance 0.7 / importance 0.3 这个分割可能不是最优
 - Re-rank 加回(实验里关掉了避免冷加载)
-- 真实对话 fixture 替换手工 fixture
-- L4 promotion 上线后看 recall 收益
+- 真实对话 fixture 替换手工 fixture(20 query 噪声大)
+- L4 promotion 累积后重跑 grid search — 看 importance 边际是否回升
+- 加入 importance-disambiguating queries(同样 relevance 但有 importance 区分),验证 importance 在该场景的价值
