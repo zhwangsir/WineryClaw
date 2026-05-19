@@ -604,3 +604,274 @@ class TestChatEngineExecutionFlags:
         assert not any(e["type"] in ("plan", "rag_sources") for e in events)
         assert planner.calls == []
         assert rag.calls == []
+
+
+# ---------------------------------------------------------------------------
+# ActiveMemory wiring — Round B2 (2026-05-20)
+#
+# Previously ActiveMemory was an orphan endpoint: instantiated at lifespan,
+# exposed via /active-memory/* HTTP, but never called from the chat flow.
+# These tests pin down the new contract:
+#   - chat() and chat_stream() fire process_conversation() in the background
+#     after each successful reply
+#   - the fire is wrapped so process_conversation crashes don't break chat
+#   - WEBRAIN_ACTIVE_MEMORY_ENABLED=0 turns it off without removing the param
+# ---------------------------------------------------------------------------
+
+
+class _FakeActiveMemory:
+    """Stand-in ActiveMemory that records every process_conversation call."""
+
+    def __init__(self, raise_on_call: bool = False):
+        self.calls: List[tuple] = []
+        self.raise_on_call = raise_on_call
+        self._done = __import__("asyncio").Event()
+
+    async def process_conversation(self, session_id, messages):
+        self.calls.append((session_id, list(messages)))
+        if self.raise_on_call:
+            self._done.set()
+            raise RuntimeError("active memory exploded")
+        self._done.set()
+        return {"session_id": session_id, "extracted_count": 0, "extractions": []}
+
+    async def wait(self, timeout: float = 1.0):
+        import asyncio
+        try:
+            await asyncio.wait_for(self._done.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+
+
+class TestChatEngineActiveMemoryWiring:
+    """Round B2 — ActiveMemory must fire from both chat() and chat_stream()."""
+
+    @pytest.fixture
+    def mock_memory(self):
+        mm = MagicMock()
+        mm.query = AsyncMock(return_value=[])
+        mm.store = AsyncMock(return_value={"id": "m1"})
+        return mm
+
+    @pytest.fixture
+    def mock_subbrain(self):
+        sb = MagicMock()
+        sb.execute_tool = AsyncMock(return_value="tool result")
+        return sb
+
+    def _make_engine(self, mock_memory, mock_subbrain, mock_llm_config, active_memory):
+        return ChatEngine(
+            memory_manager=mock_memory,
+            sub_brain_client=mock_subbrain,
+            llm_config=mock_llm_config,
+            active_memory=active_memory,
+        )
+
+    @pytest.mark.asyncio
+    async def test_chat_fires_active_memory_after_reply(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        """Successful chat() exchange must hand the (user, assistant) pair
+        to ActiveMemory in the background. This is the core wiring test —
+        if this passes, ActiveMemory is no longer orphan code."""
+        am = _FakeActiveMemory()
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, am)
+
+        plain_resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Reply text."},
+                "finish_reason": "stop",
+            }]
+        }
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            await engine.chat("My favorite color is blue.", "sess-am")
+
+        await am.wait(timeout=2.0)
+        assert len(am.calls) == 1
+        session_id, messages = am.calls[0]
+        assert session_id == "sess-am"
+        assert messages == [
+            {"role": "user", "content": "My favorite color is blue."},
+            {"role": "assistant", "content": "Reply text."},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_fires_active_memory_after_done(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        """chat_stream() must also fire — the streaming path is the
+        production path; missing this hook = broken in the real product."""
+        am = _FakeActiveMemory()
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, am)
+
+        async def mock_stream(*args, **kwargs):
+            yield {"type": "content", "data": "Streaming "}
+            yield {"type": "content", "data": "reply."}
+            yield {"type": "done"}
+
+        with patch.object(engine, "_chat_completion_stream", mock_stream):
+            async for _ in engine.chat_stream("Tell me a fact.", "sess-stream"):
+                pass
+
+        await am.wait(timeout=2.0)
+        assert len(am.calls) == 1
+        session_id, messages = am.calls[0]
+        assert session_id == "sess-stream"
+        assert messages[0] == {"role": "user", "content": "Tell me a fact."}
+        # full_content is accumulated across chunks
+        assert messages[1] == {"role": "assistant", "content": "Streaming reply."}
+
+    @pytest.mark.asyncio
+    async def test_chat_does_not_fire_when_active_memory_is_none(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        """Backwards-compat: existing callers that don't pass active_memory
+        must keep working — no AttributeError, no NoneType.process_conversation."""
+        engine = ChatEngine(
+            memory_manager=mock_memory,
+            sub_brain_client=mock_subbrain,
+            llm_config=mock_llm_config,
+            # active_memory deliberately omitted
+        )
+
+        plain_resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Reply."},
+                "finish_reason": "stop",
+            }]
+        }
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            result = await engine.chat("Hi", "sess-1")
+
+        assert result["reply"] == "Reply."  # chat still works
+
+    @pytest.mark.asyncio
+    async def test_chat_does_not_fire_when_env_disabled(
+        self, mock_memory, mock_subbrain, mock_llm_config, monkeypatch
+    ):
+        """WEBRAIN_ACTIVE_MEMORY_ENABLED=0 is the deploy-time off switch.
+        Useful for cost-sensitive deploys where the LLM-per-rule cost is
+        unacceptable."""
+        monkeypatch.setenv("WEBRAIN_ACTIVE_MEMORY_ENABLED", "0")
+        am = _FakeActiveMemory()
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, am)
+
+        plain_resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Reply."},
+                "finish_reason": "stop",
+            }]
+        }
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            await engine.chat("Hi", "sess-1")
+
+        # No background task scheduled
+        assert am.calls == []
+
+    @pytest.mark.asyncio
+    async def test_chat_survives_active_memory_crash(
+        self, mock_memory, mock_subbrain, mock_llm_config, caplog
+    ):
+        """If process_conversation throws, the user still gets their reply.
+        This is the whole point of fire-and-forget — ActiveMemory is a
+        nice-to-have, NOT in the critical path."""
+        am = _FakeActiveMemory(raise_on_call=True)
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, am)
+
+        plain_resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Reply."},
+                "finish_reason": "stop",
+            }]
+        }
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            result = await engine.chat("Hi", "sess-crash")
+
+        # User-visible reply is unaffected
+        assert result["reply"] == "Reply."
+        # The background task did run and crash
+        await am.wait(timeout=2.0)
+        assert len(am.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_chat_does_not_fire_on_empty_reply(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        """If the LLM returns an empty content (rare but happens), there's
+        nothing useful for ActiveMemory to extract — skip the fire to
+        avoid burning LLM rule evaluations on zero signal."""
+        am = _FakeActiveMemory()
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, am)
+
+        empty_resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "stop",
+            }]
+        }
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=empty_resp)
+            await engine.chat("Hi", "sess-empty")
+
+        # Defensive guard fires here — no extraction worth doing
+        assert am.calls == []
+
+    @pytest.mark.asyncio
+    async def test_chat_fire_is_non_blocking(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        """process_conversation can be slow (LLM × rules). chat() must
+        return before it completes — otherwise we re-introduce the
+        per-exchange latency this whole pattern was designed to avoid."""
+        import asyncio as _asyncio
+
+        class _SlowActiveMemory:
+            def __init__(self):
+                self.calls = []
+                self.completed = False
+
+            async def process_conversation(self, session_id, messages):
+                self.calls.append((session_id, messages))
+                await _asyncio.sleep(0.5)
+                self.completed = True
+
+        am = _SlowActiveMemory()
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, am)
+
+        plain_resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Quick reply."},
+                "finish_reason": "stop",
+            }]
+        }
+        import time as _time
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            t0 = _time.monotonic()
+            result = await engine.chat("Hi", "sess-async")
+            elapsed = _time.monotonic() - t0
+
+        # chat() returned before process_conversation finished (0.5s sleep)
+        assert elapsed < 0.4
+        assert result["reply"] == "Quick reply."
+
+        # Yield once so the background task gets a chance to enter
+        # process_conversation and register its call. Without this we'd be
+        # asserting before create_task() has scheduled run.
+        await _asyncio.sleep(0.05)
+        assert len(am.calls) == 1
+        assert am.completed is False
+
+        # Wait for the background task to drain so it doesn't leak across tests
+        await _asyncio.sleep(0.6)
+        assert am.completed is True

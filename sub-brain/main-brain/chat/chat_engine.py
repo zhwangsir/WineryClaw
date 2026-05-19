@@ -260,7 +260,7 @@ MAX_TOOL_ITERATIONS = 10
 class ChatEngine:
     def __init__(self, memory_manager: Any, sub_brain_client: Any, llm_config: Optional[Dict[str, Any]] = None,
                  sub_brain_url: str = "http://127.0.0.1:3000", rag_retriever: Any = None,
-                 planner: Any = None):
+                 planner: Any = None, active_memory: Any = None):
         self.memory = memory_manager
         self.sub_brain = sub_brain_client
         self.sub_brain_url = sub_brain_url
@@ -271,6 +271,12 @@ class ChatEngine:
         # structured task plan and surfaces it in the response so the UI can
         # render "here's what I'm about to do" before content streams.
         self.planner = planner
+        # Optional. When provided, chat() fires ActiveMemory.process_conversation
+        # in the background AFTER each successful exchange — pattern-rule
+        # extraction (preferences, facts, tasks, goals) into L2/L3. Without
+        # this wiring, ActiveMemory was an orphan endpoint that no one called.
+        # Round B2 (2026-05-20) wires it in.
+        self.active_memory = active_memory
         self.router = LLMRouter()
         self.llm_config = llm_config or {}
         self._update_router()
@@ -284,6 +290,9 @@ class ChatEngine:
         # Disable planning entirely via env, even if a planner instance is wired.
         # Useful for cost-sensitive deploys.
         self.planner_enabled: bool = os.environ.get("WEBRAIN_PLANNER_ENABLED", "1") != "0"
+        # Same gating for ActiveMemory — fires per exchange so it's worth
+        # making opt-out cheap. WEBRAIN_ACTIVE_MEMORY_ENABLED=0 disables.
+        self.active_memory_enabled: bool = os.environ.get("WEBRAIN_ACTIVE_MEMORY_ENABLED", "1") != "0"
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -300,6 +309,42 @@ class ChatEngine:
     def update_config(self, llm_config: Dict[str, Any]) -> None:
         self.llm_config = llm_config
         self._update_router()
+
+    # -----------------------------------------------------------------------
+    # ActiveMemory fire-and-forget helper
+    # -----------------------------------------------------------------------
+    # process_conversation() runs LLM-driven pattern-rule extraction over the
+    # last 10 messages. Per-exchange latency is non-trivial (one LLM call per
+    # enabled rule × N rules); blocking the chat reply on it would be a
+    # regression. So we hand it to the event loop and return immediately —
+    # if extraction fails or hangs, the chat reply is unaffected.
+    def _fire_active_memory_async(self, session_id: str, user_input: str, reply: str) -> None:
+        if not self.active_memory_enabled or self.active_memory is None:
+            return
+        if not session_id or not reply:
+            # No reply means nothing useful to learn from; no session means
+            # we can't tie the extraction back to a conversation.
+            return
+        messages = [
+            {"role": "user", "content": user_input},
+            {"role": "assistant", "content": reply},
+        ]
+
+        async def _run() -> None:
+            try:
+                await self.active_memory.process_conversation(session_id, messages)
+            except Exception as exc:  # noqa: BLE001 — background task must never crash chat
+                logger.warning(
+                    "active_memory.process_conversation failed (session=%s): %s",
+                    session_id, exc,
+                )
+
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:
+            # No running loop (rare — only happens if chat() is called from
+            # a sync context). Skip silently; the chat reply still works.
+            logger.debug("no running loop for active_memory fire-and-forget; skipping")
 
     # ---- Tool definitions registry ----
     _TOOL_REGISTRY: Dict[str, Dict] = {
@@ -797,6 +842,11 @@ class ChatEngine:
             if not tool_calls:
                 reply = msg.get("content", "")
                 await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", "session_id": session_id, "source": "assistant"})
+                # Fire ActiveMemory extraction in the background. Must come
+                # AFTER the L1 store so process_conversation sees a coherent
+                # exchange when it queries memory, and BEFORE return so we
+                # don't lose the reference if the caller never awaits again.
+                self._fire_active_memory_async(session_id, user_input, reply)
                 return {
                     "reply": reply,
                     "tool_calls": all_tool_calls,
@@ -922,6 +972,7 @@ class ChatEngine:
                 if not has_tool_calls:
                     # No tool calls needed — done
                     await self.memory.store({"level": "L1", "content": f"Assistant: {full_content}", "session_id": session_id, "source": "assistant"})
+                    self._fire_active_memory_async(session_id, user_input, full_content)
                     yield {"type": "done", "data": full_content}
                     return
 
@@ -937,6 +988,7 @@ class ChatEngine:
             if not tool_calls:
                 reply = msg.get("content", "")
                 await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", "session_id": session_id, "source": "assistant"})
+                self._fire_active_memory_async(session_id, user_input, reply)
                 yield {"type": "content", "data": reply}
                 yield {"type": "done", "data": reply}
                 return

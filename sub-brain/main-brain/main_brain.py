@@ -281,6 +281,12 @@ async def lifespan(app: FastAPI) -> None:
     # Held in _state so the /mcp/jsonrpc handler can gate write-class tools.
     _state["mcp_token"] = resolve_token(data_dir)
 
+    # ActiveMemory must exist before ChatEngine so chat() can fire
+    # process_conversation() in the background after each successful exchange.
+    # Round B2 (2026-05-20) — previously ActiveMemory was orphaned, only
+    # reachable via the /active-memory/* HTTP endpoints which no client called.
+    _state["active_memory"] = ActiveMemory(memory_manager=_state["memory"], llm_config=llm_config)
+
     _state["chat"] = ChatEngine(
         memory_manager=_state["memory"],
         sub_brain_client=_state["sub_brain"],
@@ -288,6 +294,7 @@ async def lifespan(app: FastAPI) -> None:
         sub_brain_url=sub_brain_url,
         rag_retriever=_state["rag"],
         planner=_state["planner"],
+        active_memory=_state["active_memory"],
     )
 
     # LLM health monitor (M4a) — opt out with WEBRAIN_LLM_HEALTH_DISABLED=1.
@@ -319,9 +326,6 @@ async def lifespan(app: FastAPI) -> None:
     # Initialize Knowledge Graph
     _state["kg"] = KnowledgeGraph(llm_config=llm_config)
     logger.info(f"Knowledge Graph initialized: {_state['kg'].get_stats()}")
-
-    # Initialize Active Memory
-    _state["active_memory"] = ActiveMemory(memory_manager=_state["memory"], llm_config=llm_config)
 
     # Initialize Cron Engine
     _state["cron"] = CronEngine()
