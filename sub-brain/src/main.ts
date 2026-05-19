@@ -4,6 +4,43 @@
  * Streaming + Multi-model + Heartbeat
  */
 
+// ─── Startup banner (user-trial #6) ─────────────────────────────────────────
+// Before this banner existed, `pnpm dev` showed only the literal `$ tsx watch
+// src/main.ts` line then 30+ seconds of silence while module-init top-level
+// awaits ran. Users couldn't tell if the system was starting or hung. A
+// single banner line printed immediately after this module's first executable
+// statement makes "starting" unambiguous. Printed with console.log not
+// fastify.log because Fastify itself isn't instantiated yet.
+const __startupStartedAt = Date.now();
+console.log(
+  `[webrain sub-brain] starting (node ${process.version}, pid ${process.pid}) — ` +
+    "initializing modules…",
+);
+
+// ─── Fatal error capture (user-trial #7) ────────────────────────────────────
+// tsx watch swallows top-level rejections silently — the dual-notFoundHandler
+// bug spent 30 seconds appearing "hung" before manual `npx tsx` surfaced it.
+// These handlers ensure ANY top-level crash gets a loud stderr write before
+// process exit, even if tsx's own logger fails. We set up before any other
+// import side-effect runs because the imports themselves can throw.
+process.on("uncaughtException", (err) => {
+  console.error("\n[webrain sub-brain] FATAL uncaughtException at startup:");
+  console.error(err);
+  console.error(
+    "\nIf you saw nothing else from sub-brain before this line, the error " +
+      "happened during module init (top-level await / import side-effect). " +
+      "tsx watch sometimes swallows these — direct `npx tsx src/main.ts` " +
+      "reproduces them cleanly.",
+  );
+  // Re-throw so node still exits with non-zero
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("\n[webrain sub-brain] FATAL unhandledRejection at startup:");
+  console.error(reason);
+  process.exit(1);
+});
+
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import cors from "@fastify/cors";
@@ -13,6 +50,7 @@ import { fileURLToPath } from "url";
 import { dirname, join, resolve as pathResolve, sep as pathSep } from "path";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
+import { pickPythonInterpreter } from "./main-brain-spawn.js";
 import { ToolExecutor } from "./tools/tool-executor.js";
 import { ChannelManager } from "./channels/channel-manager.js";
 import { ChannelAutoReply } from "./channels/channel-auto-reply.js";
@@ -174,6 +212,13 @@ await Promise.all([
 ]);
 
 const dockerAvailable = state.dockerSandbox.isAvailable();
+// User-trial #9: friendly one-liner instead of the raw ChildProcess error
+// dump that used to spam stderr when docker wasn't installed.
+if (dockerAvailable) {
+  app.log.info("[docker] Sandbox available — execute_shell can run in containers");
+} else {
+  app.log.info("[docker] Sandbox disabled (docker not on PATH) — fallback to host shell");
+}
 
 // ===== Start Main Brain (Python) as child process =====
 let mainBrainProc: ChildProcess | null = null;
@@ -191,7 +236,22 @@ function startMainBrain(): Promise<void> {
       return;
     }
 
-    const pythonCmd = process.env.WEBRAIN_PYTHON || "python3";
+    const mainBrainDir = pathResolve(mainBrainScript, "..");
+    const pick = pickPythonInterpreter(mainBrainDir, process.env);
+    const pythonCmd = pick.path;
+    if (pick.diagnostic === "venv") {
+      app.log.info(`[main-brain] Using venv interpreter: ${pythonCmd}`);
+    } else if (pick.diagnostic === "env") {
+      app.log.info(`[main-brain] Using interpreter from WEBRAIN_PYTHON env: ${pythonCmd}`);
+    } else {
+      app.log.warn(
+        "[main-brain] No venv found at sub-brain/main-brain/venv/bin/python3. " +
+        "Falling back to system `python3`. If main-brain crashes with " +
+        "ModuleNotFoundError, follow README to create the venv: " +
+        "`cd sub-brain/main-brain && python3 -m venv venv && " +
+        "./venv/bin/pip install -r requirements.txt`"
+      );
+    }
     // Clean up stale UDS socket
     try { if (USE_UDS) require("fs").unlinkSync(MAIN_BRAIN_UDS); } catch (err) { console.error("[main] Error:", err); console.error("[cleanup] Error:", err); }
     const args = USE_UDS
@@ -363,3 +423,11 @@ app.log.info(`Sub Brain running on http://0.0.0.0:${PORT}`);
 if (frontendDist) {
   app.log.info(`UI available at http://localhost:${PORT}`);
 }
+// Final ready-banner — pairs with the "starting…" line printed at the very
+// top of this module. Lets users immediately tell when boot is complete and
+// how long it took. console.log not app.log so it shows even if the Fastify
+// logger is configured to a higher level for some reason.
+const __startupMs = Date.now() - __startupStartedAt;
+console.log(
+  `[webrain sub-brain] ready on :${PORT} (${(__startupMs / 1000).toFixed(1)}s startup)`,
+);

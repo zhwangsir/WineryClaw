@@ -211,6 +211,89 @@ def _build_fts5_safe_query(query: str) -> str:
     return " ".join(out_tokens)
 
 
+async def backfill_missing_embeddings(
+    manager: "MemoryManager",
+    batch_size: int = 50,
+    max_per_run: int = 500,
+) -> Dict[str, int]:
+    """Backfill embeddings for memories that don't have a vector row yet.
+
+    Necessary for users who upgrade FROM a pre-M-Memory-1 install: their
+    existing L1 (and pre-fix L2/L3) rows have schema columns but no row
+    in the `vectors` table. Without embeddings, semantic search misses
+    the entire historical corpus — silently. User-trial #5.
+
+    Strategy:
+      - Find memory rows with no matching vectors row, for levels where
+        embedding is enabled (L1 if WEBRAIN_MEMORY_EMBED_L1!=0, plus
+        L2/L3/L4 always).
+      - Skip rows with empty / blank content (nothing to embed).
+      - Process in batches of `batch_size`, up to `max_per_run` total per
+        call. The default 500/run keeps backfill bounded — a 10k-row DB
+        completes over ~20 startups (or one explicit /memory/backfill call).
+      - Each row's embedding goes through the cached singleton — first call
+        in this run still pays warmup cost; everything after is fast.
+      - Fire-and-forget from lifespan; failure leaves rows un-embedded so
+        the next startup retries them.
+
+    Returns counts: {"scanned", "embedded", "skipped_empty", "failed"}.
+    """
+    import os as _os
+    embed_l1 = _os.environ.get("WEBRAIN_MEMORY_EMBED_L1", "1") != "0"
+    levels = ["L2", "L3", "L4"] + (["L1"] if embed_l1 else [])
+
+    placeholders = ",".join(["?"] * len(levels))
+    # LEFT JOIN to find rows whose id is not in `vectors`. We compare by
+    # memory_id since vectors.memory_id is the FK. SQL filter only does
+    # a coarse non-NULL check — the whitespace-only check below is in
+    # Python because SQLite's default TRIM only handles spaces, not
+    # tabs / newlines (caught by user-trial backfill tests).
+    with manager._connect() as conn:
+        rows = conn.execute(
+            f"""SELECT m.id, m.content, m.level
+                FROM memories m
+                LEFT JOIN vectors v ON v.memory_id = m.id
+                WHERE v.memory_id IS NULL
+                  AND m.level IN ({placeholders})
+                  AND m.content IS NOT NULL
+                  AND m.archived = 0
+                ORDER BY m.created_at DESC
+                LIMIT ?""",
+            (*levels, max_per_run),
+        ).fetchall()
+
+    embedded = 0
+    failed = 0
+    skipped_empty = 0
+    scanned = 0
+    for i in range(0, len(rows), batch_size):
+        chunk = rows[i:i + batch_size]
+        for r in chunk:
+            content = (r["content"] or "")
+            if not content.strip():
+                # Python-level whitespace check — covers tabs, newlines, etc
+                # that SQLite TRIM misses. Skip silently.
+                skipped_empty += 1
+                continue
+            scanned += 1
+            try:
+                await manager._store_embedding(r["id"], content)
+                embedded += 1
+            except Exception as e:
+                logger.warning(
+                    "[memory] backfill failed for id=%s level=%s: %s",
+                    r["id"][:8], r["level"], e,
+                )
+                failed += 1
+
+    if scanned > 0 or skipped_empty > 0:
+        logger.info(
+            "[memory] backfill embeddings: scanned=%d embedded=%d skipped_empty=%d failed=%d (max_per_run=%d)",
+            scanned, embedded, skipped_empty, failed, max_per_run,
+        )
+    return {"scanned": scanned, "embedded": embedded, "skipped_empty": skipped_empty, "failed": failed}
+
+
 async def warm_local_embedder() -> bool:
     """Warm the local embedder out-of-band so the first user request doesn't
     pay the model-load cost.

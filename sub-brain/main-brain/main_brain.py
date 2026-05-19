@@ -14,6 +14,7 @@ WeBrain Main Brain - Core Service
 """
 
 import argparse
+import sys
 import asyncio
 import json
 import os
@@ -146,7 +147,7 @@ async def lifespan(app: FastAPI) -> None:
     # in environments where SentenceTransformer isn't installed and we
     # don't want the failure noise in logs.
     if os.environ.get("WEBRAIN_EMBEDDER_WARMUP_DISABLED") != "1":
-        from memory.memory_manager import warm_local_embedder
+        from memory.memory_manager import backfill_missing_embeddings, warm_local_embedder
 
         async def _warm_embedder_task():
             try:
@@ -155,6 +156,27 @@ async def lifespan(app: FastAPI) -> None:
                     logger.info("Local embedder warmed (first request no longer cold)")
                 else:
                     logger.warning("Local embedder warm-up failed; first request will pay model load cost")
+                    return  # don't backfill if embedder isn't available
+                # User-trial #5: after warmup, backfill embeddings for legacy
+                # rows. Bounded per-run so giant DBs don't lock the worker;
+                # completes over multiple startups. Opt out via
+                # WEBRAIN_BACKFILL_EMBEDDINGS_DISABLED=1.
+                if os.environ.get("WEBRAIN_BACKFILL_EMBEDDINGS_DISABLED") != "1":
+                    try:
+                        max_per_run = int(os.environ.get("WEBRAIN_BACKFILL_MAX_PER_RUN", "500"))
+                    except ValueError:
+                        max_per_run = 500
+                    try:
+                        result = await backfill_missing_embeddings(
+                            _state["memory"], max_per_run=max_per_run,
+                        )
+                        if result["embedded"] > 0 or result["failed"] > 0:
+                            logger.info(
+                                "Embedding backfill: %d embedded, %d failed (of %d scanned)",
+                                result["embedded"], result["failed"], result["scanned"],
+                            )
+                    except Exception as e:
+                        logger.warning("Embedding backfill failed (non-fatal): %s", e)
             except Exception as e:
                 logger.warning("Local embedder warm-up exception (non-fatal): %s", e)
 
@@ -813,6 +835,27 @@ async def memory_archive_run():
     """Manually trigger archiving of expired memories."""
     result = await _state["memory"].archive_expired()
     return result
+
+
+@app.post("/memory/embeddings/backfill")
+async def memory_embeddings_backfill(payload: Optional[Dict[str, Any]] = None):
+    """Manually trigger embedding backfill for memories without vectors.
+
+    User-trial #5: legacy rows from pre-M-Memory-1 installs have no
+    embedding. Lifespan auto-runs this with max_per_run=500 per boot;
+    this endpoint lets admins run it on demand against a larger batch.
+
+    Body: {"max_per_run": 1000} (optional; default 500).
+    Returns: {"scanned", "embedded", "skipped_empty", "failed"}.
+    """
+    from memory.memory_manager import backfill_missing_embeddings
+    max_per_run = 500
+    if payload and isinstance(payload, dict):
+        try:
+            max_per_run = max(1, int(payload.get("max_per_run", 500)))
+        except (TypeError, ValueError):
+            pass
+    return await backfill_missing_embeddings(_state["memory"], max_per_run=max_per_run)
 
 
 @app.get("/memory/archived")
@@ -1880,6 +1923,61 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close()
 
 
+def _probe_bind_or_exit(host: str, port: int) -> None:
+    """Pre-flight bind check: fail FAST if the target socket is in use.
+
+    User-trial #4 (2026-05-20): previously uvicorn called lifespan startup
+    BEFORE binding the socket, so a port conflict produced ~3 seconds of
+    Wiki / KG / Cron / Skill init followed by a confusing crash. Probing
+    the bind right after argparse cuts that wasted work to zero and gives
+    the user a one-line diagnostic instead of a stack trace.
+
+    Small TOCTOU window between probe and uvicorn's actual bind — if a
+    competing process grabs the port in that gap, the uvicorn error path
+    still fires. That's acceptable; the common case (stale main-brain
+    already on the port) is caught here.
+    """
+    import socket as _socket
+    try:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        s.bind((host, port))
+        s.close()
+    except OSError as e:
+        sys.stderr.write(
+            f"\n[main-brain] Cannot bind {host}:{port} — {e}\n"
+            f"Likely a stale main-brain process. Try:\n"
+            f"  lsof -ti :{port} | xargs kill\n"
+            f"…then re-run.\n"
+        )
+        sys.exit(1)
+
+
+def _probe_uds_or_exit(path: str) -> None:
+    """Same idea for the Unix domain socket transport."""
+    import os as _os
+    if _os.path.exists(path):
+        # Try connecting — if a server is alive, refuse. If it's a stale
+        # socket file (no listener), remove it and continue.
+        import socket as _socket
+        try:
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            s.connect(path)
+            s.close()
+            sys.stderr.write(
+                f"\n[main-brain] UDS {path} is owned by a live process.\n"
+                f"Try: lsof {path}  →  kill the owner  →  re-run.\n"
+            )
+            sys.exit(1)
+        except (OSError, _socket.error):
+            # Stale socket file — uvicorn will recreate it
+            try:
+                _os.unlink(path)
+            except OSError:
+                pass
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
@@ -1888,6 +1986,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.uds:
+        _probe_uds_or_exit(args.uds)
         uvicorn.run(app, uds=args.uds, log_level="info")
     else:
+        _probe_bind_or_exit(args.host, args.port)
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")

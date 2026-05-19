@@ -35,13 +35,30 @@ export class DockerSandbox {
   }
 
   isAvailable(): boolean {
+    // Cache the probe result — the previous implementation re-ran
+    // `docker version` and re-logged the failure for every call site
+    // (startup + every execute()). User-trial #9 saw the failure
+    // emit a raw ChildProcess error object (`output: [null, <Buffer >, …]`)
+    // on stderr at startup, which looked alarming for a benign "docker
+    // not installed" state.
+    if (DockerSandbox._cachedAvailability !== null) {
+      return DockerSandbox._cachedAvailability;
+    }
     try {
       execSync("docker version", { stdio: "pipe", timeout: 5000 });
-      return true;
-    } catch (err) { console.error("[docker-sandbox] Error:", err);
-      return false;
+      DockerSandbox._cachedAvailability = true;
+    } catch {
+      // Intentionally silent. The caller logs a friendly one-liner.
+      // We do NOT dump the err object — it contains the entire stderr
+      // Buffer + spawn args + status code which look terrifying for
+      // an expected "docker not on PATH" state.
+      DockerSandbox._cachedAvailability = false;
     }
+    return DockerSandbox._cachedAvailability;
   }
+
+  // Per-process cache — initial null means "not yet probed".
+  private static _cachedAvailability: boolean | null = null;
 
   async execute(command: string, inputFiles?: Record<string, string>): Promise<{ ok: boolean; output: string; exitCode: number; error?: string }> {
     if (!this.isAvailable()) {
