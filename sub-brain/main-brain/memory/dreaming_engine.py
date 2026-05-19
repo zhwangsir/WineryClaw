@@ -612,8 +612,14 @@ Generate skills in JSON format:
         return {"skills_created": skills_created}
 
     # ========== Full Cycle ==========
-    async def run_cycle(self) -> Dict[str, Any]:
+    async def run_cycle(self, quiet_minutes: Optional[int] = None) -> Dict[str, Any]:
         """Run full dreaming consolidation cycle.
+
+        Args:
+            quiet_minutes: optional override of the L1→L2 quiet-window
+                threshold. None → use DreamingEngine.QUIET_MINUTES default.
+                0 → consolidate ALL L1 sessions immediately (useful for
+                smoke tests and forced manual runs).
 
         Phases:
           - light_sleep: L1 sessions → L2 summaries (consolidate_l1_to_l2)
@@ -627,7 +633,7 @@ Generate skills in JSON format:
         """
         logger.info("[Dreaming] Starting consolidation cycle...")
 
-        phase1 = await self.consolidate_l1_to_l2()
+        phase1 = await self.consolidate_l1_to_l2(quiet_minutes=quiet_minutes)
         phase2 = await self.consolidate_l2_to_l3()
         phase3 = await self.promote_l3_to_l4()
 

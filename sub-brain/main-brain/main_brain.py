@@ -699,13 +699,20 @@ async def reload_config():
     llm_config = await _fetch_llm_config(sub_brain_url)
     logger.info(f"Config reloaded: {len(llm_config.get('endpoints', []))} endpoint(s)")
 
+    # Propagate the new config to EVERY engine that holds its own copy.
+    # Previously this only updated chat + reasoning, which meant dreaming,
+    # active memory, knowledge graph, and planner kept using the stale
+    # llm_config from lifespan boot. Symptom: switch the model endpoint
+    # via UI, chat works but background dreaming still hits the old URL
+    # (silent — empty LLM responses cause it to skip consolidation).
     chat_engine = _state.get("chat")
     if chat_engine and hasattr(chat_engine, "update_config"):
         chat_engine.update_config(llm_config)
 
-    reasoning = _state.get("reasoning")
-    if reasoning and hasattr(reasoning, "llm_config"):
-        reasoning.llm_config = llm_config
+    for key in ("reasoning", "dreaming", "active_memory", "kg", "planner"):
+        engine = _state.get(key)
+        if engine is not None and hasattr(engine, "llm_config"):
+            engine.llm_config = llm_config
 
     return {"ok": True, "config": llm_config}
 
@@ -1436,12 +1443,40 @@ async def wiki_stats():
 
 # ========== Dreaming API ==========
 @app.post("/dreaming/run")
-async def dreaming_run():
-    """Manually trigger a dreaming consolidation cycle."""
+async def dreaming_run(request: Optional[Dict[str, Any]] = None):
+    """Manually trigger a dreaming consolidation cycle.
+
+    Optional body: {"quiet_minutes": int} — overrides the default 5-minute
+    quiet-window requirement for L1→L2. Set to 0 to consolidate ALL L1
+    sessions regardless of recency (useful for smoke tests and for admins
+    who want to force consolidation on demand). When omitted, uses the
+    DreamingEngine.QUIET_MINUTES default.
+    """
     dreaming = _state.get("dreaming")
     if not dreaming:
         return JSONResponse({"ok": False, "error": "Dreaming engine not initialized"}, status_code=500)
-    result = await dreaming.run_cycle()
+
+    quiet_minutes = None
+    if isinstance(request, dict):
+        raw = request.get("quiet_minutes")
+        # Reject negative; treat 0 as "no quiet wait". Floats are accepted
+        # but coerced to int — the engine's cutoff math uses integer minutes.
+        if raw is not None:
+            try:
+                qm = int(raw)
+                if qm < 0:
+                    return JSONResponse(
+                        {"ok": False, "error": "quiet_minutes must be >= 0"},
+                        status_code=400,
+                    )
+                quiet_minutes = qm
+            except (TypeError, ValueError):
+                return JSONResponse(
+                    {"ok": False, "error": f"quiet_minutes must be an integer, got {raw!r}"},
+                    status_code=400,
+                )
+
+    result = await dreaming.run_cycle(quiet_minutes=quiet_minutes)
     return {"ok": True, "result": result}
 
 

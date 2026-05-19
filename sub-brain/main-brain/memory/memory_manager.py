@@ -721,7 +721,11 @@ class MemoryManager:
         fts_results = await self._fts_search(q, levels, top_k)
         vec_results = []
         if use_vector:
-            vec_results = await self._vector_search(q, top_k, exclude_ids=[r["id"] for r in fts_results])
+            vec_results = await self._vector_search(
+                q, top_k,
+                exclude_ids=[r["id"] for r in fts_results],
+                levels=levels,  # honor caller's level scope in BOTH sources
+            )
 
         # Phase 2: Hybrid fusion (RRF) — annotates each row with rrf_score
         fused = self._rrf_fuse([fts_results, vec_results], k=60)
@@ -790,17 +794,44 @@ class MemoryManager:
             return []
 
     # ========== Vector Search ==========
-    async def _vector_search(self, query: str, limit: int, exclude_ids: List[str] = None) -> List[Dict]:
-        """Vector search using in-memory ANN index (BallTree/brute) with numpy."""
+    async def _vector_search(
+        self,
+        query: str,
+        limit: int,
+        exclude_ids: Optional[List[str]] = None,
+        levels: Optional[List[str]] = None,
+    ) -> List[Dict]:
+        """Vector search using in-memory ANN index (BallTree/brute) with numpy.
+
+        levels: when provided, results are filtered to rows whose `level`
+        is in the set. Previously _vector_search ignored the level filter
+        entirely — only _fts_search honored it — so a query for L2-only
+        could return L1 rows via the vector path, leaking lower-level
+        noise into the result. Discovered by the dreaming smoke test
+        2026-05-20: an L2 query returned an L1 row with empty
+        provenance_refs (because L1 doesn't have provenance), breaking
+        lineage assertions.
+        """
         try:
             query_vec = await self._get_embedding(query)
             exclude_ids = set(exclude_ids or [])
+            level_filter = set(levels) if levels else None
             qvec = np.array(query_vec, dtype=np.float32)
+
+            def _apply_level_filter(rows: List[Dict]) -> List[Dict]:
+                if level_filter is None:
+                    return rows
+                return [r for r in rows if r.get("level") in level_filter]
 
             # Fast path: ANN index search
             if self._ann_index is not None and not self._ann_dirty and len(self._vector_ids) >= 10:
                 try:
-                    n_candidates = min(max(limit * 4, 20), len(self._vector_ids))
+                    # Pull MORE candidates than `limit` when level_filter is
+                    # active, since post-filtering may drop matches. 4x is
+                    # arbitrary but covers the case where the index has many
+                    # L1 rows competing with few L2/L3 rows.
+                    pool_mult = 8 if level_filter else 4
+                    n_candidates = min(max(limit * pool_mult, 20), len(self._vector_ids))
                     distances, indices = self._ann_index.kneighbors(qvec.reshape(1, -1), n_neighbors=n_candidates)
                     matched_ids = []
                     matched_scores = []
@@ -824,7 +855,7 @@ class MemoryManager:
                             item = id_to_row[mid]
                             item["vector_score"] = score
                             results.append(item)
-                    return results[:limit]
+                    return _apply_level_filter(results)[:limit]
                 except Exception as e:
                     logger.debug(f"ANN search failed, falling back to brute force: {e}")
 
@@ -840,13 +871,15 @@ class MemoryManager:
                 top_idx = np.argsort(sims)[::-1]
                 matched_ids = []
                 matched_scores = []
+                # Pull extras for the same reason as ANN path
+                target = limit * (8 if level_filter else 1)
                 for idx in top_idx:
                     mid = self._vector_ids[idx]
                     if mid in exclude_ids:
                         continue
                     matched_ids.append(mid)
                     matched_scores.append(float(sims[idx]))
-                    if len(matched_ids) >= limit:
+                    if len(matched_ids) >= target:
                         break
                 if matched_ids:
                     with self._connect() as conn:
@@ -862,7 +895,7 @@ class MemoryManager:
                             item = id_to_row[mid]
                             item["vector_score"] = score
                             results.append(item)
-                    return results
+                    return _apply_level_filter(results)[:limit]
 
             # Ultimate fallback: old DB scan (for backward compat or empty index)
             with self._connect() as conn:
@@ -882,7 +915,8 @@ class MemoryManager:
                 item["vector_score"] = sim
                 scored.append((sim, item))
             scored.sort(key=lambda x: x[0], reverse=True)
-            return [item[1] for item in scored[:limit]]
+            filtered = _apply_level_filter([item[1] for item in scored])
+            return filtered[:limit]
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
             return []

@@ -295,3 +295,92 @@ class TestEmbedderCacheSingleton:
             pytest.skip("sentence-transformers not installed; warm-up signal not testable")
         ok = await warm_local_embedder()
         assert ok is True
+
+
+class TestQueryLevelFilterAppliesToVectorSearch:
+    """Regression — discovered by the dreaming smoke test (2026-05-20).
+
+    _vector_search ignored the `levels` filter entirely; only _fts_search
+    honored it. So a query with levels=["L2"] could return L1 rows via
+    the vector path, leaking lower-level noise. Surfaced as: an L2 query
+    returning an L1 row whose provenance_refs was empty (since L1 rows
+    don't have provenance), breaking lineage assertions downstream.
+
+    These tests pin the contract: query(levels=[X]) returns rows where
+    every row.level is in [X]. Period.
+    """
+
+    @pytest.mark.asyncio
+    async def test_query_l2_does_not_return_l1_via_vector_match(self, fresh_mm):
+        # Plant an L1 row with content that vector-matches the query
+        # closely. If the level filter is bypassed in vector search, this
+        # L1 will leak into an L2-only query.
+        l1 = await fresh_mm.store({
+            "level": "L1", "content": "Apple is a popular fruit grown worldwide",
+            "source": "test",
+        })
+        # No L2 rows in the DB at all
+        results = await fresh_mm.query({
+            "query": "apple fruit popular",
+            "levels": ["L2"],
+            "limit": 10,
+            "use_rerank": False,  # rerank model is heavy
+        })
+        # The level filter must hold: zero L2 in DB → zero results
+        levels_returned = [r.get("level") for r in results]
+        assert all(lv == "L2" for lv in levels_returned), (
+            f"L2-only query returned non-L2 rows: {levels_returned}. "
+            f"Vector search is bypassing the level filter."
+        )
+
+    @pytest.mark.asyncio
+    async def test_query_l2_returns_l2_even_when_l1_has_higher_score(self, fresh_mm):
+        # Plant an L1 that's a near-perfect vector match for the query
+        # AND an L2 that's a weaker match. The L1 should be excluded.
+        await fresh_mm.store({
+            "level": "L1", "content": "Apple banana cherry date elderberry",
+            "source": "test",
+        })
+        l2 = await fresh_mm.store({
+            "level": "L2", "content": "Some fruits in alphabetical order",
+            "source": "test",
+        })
+        results = await fresh_mm.query({
+            "query": "apple banana cherry",
+            "levels": ["L2"],
+            "limit": 5,
+            "use_rerank": False,
+        })
+        # Every returned row must be L2 — the strong-matching L1 must not appear
+        for r in results:
+            assert r.get("level") == "L2", (
+                f"Got non-L2 row in L2-only query: {r.get('level')} (id={r.get('id')})"
+            )
+        # And our planted L2 should be among the results
+        assert any(r.get("id") == l2["id"] for r in results), (
+            f"Planted L2 {l2['id']} missing from L2-only query results: "
+            f"{[r.get('id') for r in results]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_query_multi_level_includes_each_planted_row(self, fresh_mm):
+        # Sanity: when filter includes multiple levels, all should be returned.
+        # Without this we couldn't tell if the fix over-corrected (e.g.,
+        # accidentally requiring exact level==target instead of level IN set).
+        l1 = await fresh_mm.store({
+            "level": "L1", "content": "zephyr quark plankton unique-tokens",
+            "source": "test",
+        })
+        l2 = await fresh_mm.store({
+            "level": "L2", "content": "zephyr quark plankton unique-tokens",
+            "source": "test",
+        })
+        results = await fresh_mm.query({
+            "query": "zephyr quark plankton",
+            "levels": ["L1", "L2"],
+            "limit": 10,
+            "use_rerank": False,
+        })
+        ids = {r.get("id") for r in results}
+        assert l1["id"] in ids, f"L1 {l1['id']} missing from multi-level query: {ids}"
+        assert l2["id"] in ids, f"L2 {l2['id']} missing from multi-level query: {ids}"
