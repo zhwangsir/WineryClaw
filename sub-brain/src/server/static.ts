@@ -31,11 +31,18 @@ export function registerStatic(app: FastifyInstance, dirname: string): string | 
       const url = `http://127.0.0.1:${port}${path}`;
 
       try {
+        const forwardHeaders: Record<string, string> = {};
+        for (const [key, value] of Object.entries(request.headers)) {
+          const lk = key.toLowerCase();
+          if (lk === "content-length" || lk === "content-encoding" || lk === "host" || lk === "connection" || lk === "transfer-encoding") continue;
+          if (typeof value === "string") forwardHeaders[key] = value;
+          else if (Array.isArray(value)) forwardHeaders[key] = value.join(", ");
+        }
         const response = await axios({
           method: request.method as any,
           url,
           data: request.body,
-          headers: request.headers as Record<string, string>,
+          headers: forwardHeaders,
           validateStatus: () => true,
           responseType: "arraybuffer",
         });
