@@ -84,6 +84,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: res.reply,
         toolCalls: res.toolCalls,
         ragSources: res.ragSources,
+        plan: res.plan,
         timestamp: new Date().toISOString(),
       };
       set((s) => ({ messages: [...s.messages, assistantMsg], loading: false }));
@@ -152,6 +153,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const last = msgs[msgs.length - 1];
             if (last?.role === "assistant") {
               msgs[msgs.length - 1] = { ...last, ragSources: chunk.data };
+            }
+            return { messages: msgs };
+          });
+        } else if (chunk.type === "plan") {
+          // Backend emits the M2 plan before the first content chunk so the
+          // task-list UI renders while tokens stream. See chat_engine.chat_stream.
+          set((s) => {
+            const msgs = [...s.messages];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === "assistant") {
+              msgs[msgs.length - 1] = { ...last, plan: chunk.data };
             }
             return { messages: msgs };
           });

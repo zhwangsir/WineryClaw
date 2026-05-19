@@ -131,13 +131,18 @@ MAX_TOOL_ITERATIONS = 10
 
 class ChatEngine:
     def __init__(self, memory_manager: Any, sub_brain_client: Any, llm_config: Optional[Dict[str, Any]] = None,
-                 sub_brain_url: str = "http://127.0.0.1:3000", rag_retriever: Any = None):
+                 sub_brain_url: str = "http://127.0.0.1:3000", rag_retriever: Any = None,
+                 planner: Any = None):
         self.memory = memory_manager
         self.sub_brain = sub_brain_client
         self.sub_brain_url = sub_brain_url
         # Optional. When provided, chat() retrieves top-k chunks for the user's
         # message and injects them into the system prompt's {{rag_context}} slot.
         self.rag = rag_retriever
+        # Optional. When provided, chat() decomposes complex requests into a
+        # structured task plan and surfaces it in the response so the UI can
+        # render "here's what I'm about to do" before content streams.
+        self.planner = planner
         self.router = LLMRouter()
         self.llm_config = llm_config or {}
         self._update_router()
@@ -148,6 +153,9 @@ class ChatEngine:
         # Tunables (env-overridable so users can adjust at deploy time)
         self.rag_top_k: int = int(os.environ.get("WEBRAIN_RAG_TOP_K", "3"))
         self.rag_min_score: float = float(os.environ.get("WEBRAIN_RAG_MIN_SCORE", "0.0"))
+        # Disable planning entirely via env, even if a planner instance is wired.
+        # Useful for cost-sensitive deploys.
+        self.planner_enabled: bool = os.environ.get("WEBRAIN_PLANNER_ENABLED", "1") != "0"
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -266,7 +274,51 @@ class ChatEngine:
         rendered = "\n\n".join(rendered_parts)
         return rendered, sources
 
-    async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "") -> str:
+    async def _make_plan(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Run the planner against `user_input` if one is wired in.
+
+        Returns a JSON-serialisable dict (Plan.to_dict()) or None. Never
+        raises into the chat flow — the planner is an enrichment layer,
+        not a gate.
+        """
+        if not self.planner_enabled or self.planner is None:
+            return None
+        try:
+            plan = await self.planner.plan(user_input)
+        except Exception as e:  # pragma: no cover — defensive
+            logger.warning("planner.plan() raised, skipping plan: %s", e)
+            return None
+        if plan is None:
+            return None
+        try:
+            return plan.to_dict()
+        except AttributeError:
+            # Forward-compat: if planner returns a dict directly someday
+            return plan if isinstance(plan, dict) else None
+
+    @staticmethod
+    def _format_plan_for_prompt(plan: Optional[Dict[str, Any]]) -> str:
+        """Render a plan as a markdown block to splice into the system prompt.
+
+        Returns empty string when there's no plan or no tasks — caller can
+        unconditionally concat it.
+        """
+        if not plan:
+            return ""
+        tasks = plan.get("tasks") or []
+        if not tasks:
+            return ""
+        lines = ["## Plan (subtasks the assistant intends to address)"]
+        for t in tasks:
+            tid = t.get("id", "?")
+            desc = t.get("description", "")
+            tool_hint = t.get("tool_hint", "")
+            tool_part = f" — tool: {tool_hint}" if t.get("requires_tool") and tool_hint else ""
+            lines.append(f"- [{tid}] {desc}{tool_part}")
+        return "\n".join(lines)
+
+    async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "",
+                                    plan_block: str = "") -> str:
         """Build system prompt from agent's system.md with template substitution."""
         agent = await self._fetch_agent_config(agent_id)
 
@@ -305,6 +357,10 @@ class ChatEngine:
         if rag_text and "{{rag_context}}" not in prompt:
             prompt = prompt + "\n\n## Document Context\n{{rag_context}}"
 
+        # Same shape for the plan block — append if missing slot but we have one.
+        if plan_block and "{{plan}}" not in prompt:
+            prompt = prompt + "\n\n{{plan}}"
+
         rag_block = rag_text or "(no relevant documents)"
 
         prompt = prompt.replace("{{memory}}", memory_text)
@@ -312,6 +368,9 @@ class ChatEngine:
         prompt = prompt.replace("{{agent_name}}", agent_name)
         prompt = prompt.replace("{{agent_role}}", agent_role)
         prompt = prompt.replace("{{rag_context}}", rag_block)
+        # Empty string replacement when no plan — keeps the slot from leaking
+        # into the rendered prompt as literal `{{plan}}`.
+        prompt = prompt.replace("{{plan}}", plan_block)
 
         return prompt
 
@@ -531,9 +590,13 @@ class ChatEngine:
         # Retrieve RAG document chunks (top-k cosine similar)
         rag_text, rag_sources = self._retrieve_rag_context(user_input)
 
+        # Decompose complex requests into a structured plan (M2)
+        plan_dict = await self._make_plan(user_input)
+        plan_block = self._format_plan_for_prompt(plan_dict)
+
         # Fetch agent config and build prompt
         agent_config = await self._fetch_agent_config(agent_id)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
@@ -563,6 +626,7 @@ class ChatEngine:
                     "session_id": session_id,
                     "iterations": iteration,
                     "rag_sources": rag_sources,
+                    "plan": plan_dict,
                 }
 
             # Execute tools
@@ -598,6 +662,8 @@ class ChatEngine:
             "tool_results": all_tool_results,
             "session_id": session_id,
             "iterations": iteration,
+            "rag_sources": rag_sources,
+            "plan": plan_dict,
         }
 
     # -----------------------------------------------------------------------
@@ -621,9 +687,17 @@ class ChatEngine:
             # before the model starts streaming a reply.
             yield {"type": "rag_sources", "data": rag_sources}
 
+        # Decompose complex requests into a structured plan (M2). Emit the
+        # plan event BEFORE the first content chunk so the UI can render the
+        # subtask list while tokens are still streaming.
+        plan_dict = await self._make_plan(user_input)
+        if plan_dict:
+            yield {"type": "plan", "data": plan_dict}
+        plan_block = self._format_plan_for_prompt(plan_dict)
+
         # Fetch agent config and build prompt
         agent_config = await self._fetch_agent_config(agent_id)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},

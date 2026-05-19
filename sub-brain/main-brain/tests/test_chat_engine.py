@@ -36,6 +36,23 @@ class _ExplodingRAG:
         raise RuntimeError("embedder offline")
 
 
+class _FakePlanner:
+    """Stand-in Planner that returns a canned plan or None."""
+
+    def __init__(self, plan=None):
+        self._plan = plan
+        self.calls = []
+
+    async def plan(self, user_input, context=None):  # noqa: ARG002
+        self.calls.append(user_input)
+        return self._plan
+
+
+class _ExplodingPlanner:
+    async def plan(self, user_input, context=None):  # noqa: ARG002
+        raise RuntimeError("planner crashed")
+
+
 class TestChatEngine:
     """Unit tests for ChatEngine."""
 
@@ -328,3 +345,160 @@ class TestChatEngineRAG:
                 events.append(ev)
 
         assert not any(e["type"] == "rag_sources" for e in events)
+
+
+class TestChatEnginePlanner:
+    """Planner wiring tests (M2 — task decomposition surfaced through chat)."""
+
+    @pytest.fixture
+    def mock_memory(self):
+        mm = MagicMock()
+        mm.query = AsyncMock(return_value=[])
+        mm.store = AsyncMock(return_value={"id": "m1"})
+        return mm
+
+    @pytest.fixture
+    def mock_subbrain(self):
+        sb = MagicMock()
+        sb.execute_tool = AsyncMock(return_value="tool result")
+        return sb
+
+    @pytest.fixture
+    def canned_plan(self):
+        return {
+            "plan_id": "plan-abc",
+            "user_input": "复杂多步请求",
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "description": "读取文件",
+                    "requires_tool": True,
+                    "tool_hint": "read_file",
+                    "expected_output": "内容",
+                },
+                {
+                    "id": "task-2",
+                    "description": "总结要点",
+                    "requires_tool": False,
+                    "tool_hint": "",
+                    "expected_output": "3 点",
+                },
+            ],
+            "confidence": 0.8,
+            "reasoning": "两步",
+        }
+
+    def _make_engine(self, mock_memory, mock_subbrain, mock_llm_config, planner):
+        return ChatEngine(
+            memory_manager=mock_memory,
+            sub_brain_client=mock_subbrain,
+            llm_config=mock_llm_config,
+            planner=planner,
+        )
+
+    @pytest.mark.asyncio
+    async def test_make_plan_returns_none_when_disabled_via_env(
+        self, mock_memory, mock_subbrain, mock_llm_config, canned_plan, monkeypatch
+    ):
+        monkeypatch.setenv("WEBRAIN_PLANNER_ENABLED", "0")
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, _FakePlanner(canned_plan))
+        result = await engine._make_plan("anything")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_make_plan_returns_none_when_no_planner_wired(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, planner=None)
+        assert await engine._make_plan("anything") is None
+
+    @pytest.mark.asyncio
+    async def test_make_plan_fails_open_when_planner_raises(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, _ExplodingPlanner())
+        assert await engine._make_plan("anything") is None
+
+    @pytest.mark.asyncio
+    async def test_make_plan_returns_dict_when_planner_yields_plan(
+        self, mock_memory, mock_subbrain, mock_llm_config, canned_plan
+    ):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, _FakePlanner(canned_plan))
+        result = await engine._make_plan("complex multistep request")
+        assert result == canned_plan
+
+    def test_format_plan_renders_markdown_block(
+        self, mock_memory, mock_subbrain, mock_llm_config, canned_plan
+    ):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, None)
+        block = engine._format_plan_for_prompt(canned_plan)
+        assert "## Plan" in block
+        assert "[task-1] 读取文件 — tool: read_file" in block
+        assert "[task-2] 总结要点" in block
+        # task-2 has requires_tool False → no tool annotation
+        assert "task-2] 总结要点 — tool" not in block
+
+    def test_format_plan_empty_when_no_plan(self, mock_memory, mock_subbrain, mock_llm_config):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, None)
+        assert engine._format_plan_for_prompt(None) == ""
+        assert engine._format_plan_for_prompt({"tasks": []}) == ""
+
+    @pytest.mark.asyncio
+    async def test_chat_threads_plan_into_response(
+        self, mock_memory, mock_subbrain, mock_llm_config, canned_plan
+    ):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, _FakePlanner(canned_plan))
+        plain_resp = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Done."},
+                "finish_reason": "stop",
+            }]
+        }
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            result = await engine.chat("先 A 然后 B 整个流程都规划清楚再开始干活", "sess-plan")
+
+        assert result["plan"] == canned_plan
+        assert result["reply"] == "Done."
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_emits_plan_event_before_content(
+        self, mock_memory, mock_subbrain, mock_llm_config, canned_plan
+    ):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, _FakePlanner(canned_plan))
+
+        async def mock_stream(*args, **kwargs):
+            yield {"type": "content", "data": "step "}
+            yield {"type": "content", "data": "done"}
+            yield {"type": "done"}
+
+        events = []
+        with patch.object(engine, "_chat_completion_stream", mock_stream):
+            async for ev in engine.chat_stream("先 A 然后 B 整个流程都规划清楚再开始干活", "sess"):
+                events.append(ev)
+
+        plan_events = [e for e in events if e["type"] == "plan"]
+        assert len(plan_events) == 1
+        assert plan_events[0]["data"] == canned_plan
+        # plan event MUST precede first content chunk
+        plan_idx = events.index(plan_events[0])
+        first_content_idx = next(i for i, e in enumerate(events) if e["type"] == "content")
+        assert plan_idx < first_content_idx
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_skips_plan_event_when_planner_returns_none(
+        self, mock_memory, mock_subbrain, mock_llm_config
+    ):
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, _FakePlanner(None))
+
+        async def mock_stream(*args, **kwargs):
+            yield {"type": "content", "data": "Hi"}
+            yield {"type": "done"}
+
+        events = []
+        with patch.object(engine, "_chat_completion_stream", mock_stream):
+            async for ev in engine.chat_stream("hello", "sess"):
+                events.append(ev)
+
+        assert not any(e["type"] == "plan" for e in events)

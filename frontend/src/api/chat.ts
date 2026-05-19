@@ -1,16 +1,26 @@
 import { api } from "./client";
-import type { ChatMessage, RagSource, ToolCall } from "./types";
+import type { ChatMessage, ChatPlan, RagSource, ToolCall } from "./types";
 
 export const chatApi = {
   send: (text: string, sessionId: string, agentId: string, toolsEnabled = true) =>
     api
-      .post<{ reply: string; tool_calls?: ToolCall[]; rag_sources?: RagSource[] }>("/brain/chat", {
+      .post<{
+        reply: string;
+        tool_calls?: ToolCall[];
+        rag_sources?: RagSource[];
+        plan?: ChatPlan | null;
+      }>("/brain/chat", {
         message: text,
         session_id: sessionId,
         agent_id: agentId,
         tools_enabled: toolsEnabled,
       })
-      .then((r) => ({ reply: r.reply, toolCalls: r.tool_calls, ragSources: r.rag_sources })),
+      .then((r) => ({
+        reply: r.reply,
+        toolCalls: r.tool_calls,
+        ragSources: r.rag_sources,
+        plan: r.plan ?? undefined,
+      })),
   stream: (text: string, sessionId: string, agentId: string, toolsEnabled = true) =>
     api.stream("/brain/chat/stream", { message: text, session_id: sessionId, agent_id: agentId, tools_enabled: toolsEnabled }),
   getHistory: (sessionId: string) =>

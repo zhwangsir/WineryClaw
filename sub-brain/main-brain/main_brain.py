@@ -37,6 +37,7 @@ from evolution.llm_client import make_llm_call_from_config
 from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
+from planner import Planner
 from wiki.wiki_engine import WikiEngine
 from memory.dreaming_engine import DreamingEngine
 from media.media_engine import MediaEngine
@@ -160,12 +161,16 @@ async def lifespan(app: FastAPI) -> None:
         memory_manager=_state["memory"],
         reasoning_engine=_state["reasoning"],
     )
+    # Planner (M2) — task decomposition layer. Stateless, share single instance.
+    _state["planner"] = Planner(llm_config=llm_config)
+
     _state["chat"] = ChatEngine(
         memory_manager=_state["memory"],
         sub_brain_client=_state["sub_brain"],
         llm_config=llm_config,
         sub_brain_url=sub_brain_url,
         rag_retriever=_state["rag"],
+        planner=_state["planner"],
     )
 
     # Initialize Wiki

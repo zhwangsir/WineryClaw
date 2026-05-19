@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Tooltip, message } from "antd";
-import { UserOutlined, RobotOutlined, ToolOutlined, CopyOutlined, CheckOutlined, ThunderboltOutlined, DownOutlined, FileSearchOutlined } from "@ant-design/icons";
+import { UserOutlined, RobotOutlined, ToolOutlined, CopyOutlined, CheckOutlined, ThunderboltOutlined, DownOutlined, FileSearchOutlined, OrderedListOutlined } from "@ant-design/icons";
 import type { ChatMessage } from "../../api/types";
 import MarkdownRenderer from "../common/MarkdownRenderer";
 import StreamingText from "./StreamingText";
@@ -17,6 +17,7 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
   const isSystem = msg.role === "system";
   const [copied, setCopied] = useState(false);
   const [showReasoning, setShowReasoning] = useState(true);
+  const [showPlan, setShowPlan] = useState(true);
 
   const handleCopy = async () => {
     try {
@@ -114,6 +115,85 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
             position: "relative",
           }}
         >
+          {/* Plan (M2 — task decomposition) — shown above reasoning so users
+              see "what the assistant intends to do" before "how it's thinking". */}
+          {msg.plan && msg.plan.tasks && msg.plan.tasks.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <button
+                onClick={() => setShowPlan(!showPlan)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "2px 0",
+                  fontSize: 12,
+                  color: isDark ? "#86efac" : "#15803d",
+                  fontWeight: 500,
+                }}
+              >
+                <OrderedListOutlined style={{ fontSize: 10 }} />
+                <span>规划 {msg.plan.tasks.length} 步任务</span>
+                {msg.plan.confidence > 0 && (
+                  <span style={{ opacity: 0.7, fontWeight: 400 }}>
+                    · 置信度 {(msg.plan.confidence * 100).toFixed(0)}%
+                  </span>
+                )}
+                <DownOutlined
+                  style={{
+                    fontSize: 10,
+                    transition: "transform 200ms",
+                    transform: showPlan ? "rotate(180deg)" : "rotate(0deg)",
+                  }}
+                />
+              </button>
+              {showPlan && (
+                <div
+                  style={{
+                    marginTop: 4,
+                    padding: "8px 12px",
+                    background: isDark ? "rgba(34,197,94,0.06)" : "rgba(34,197,94,0.04)",
+                    borderRadius: 8,
+                    borderLeft: `2px solid ${isDark ? "#22c55e" : "#16a34a"}`,
+                    fontSize: 13,
+                    color: isDark ? "#d4d4d8" : "#3f3f46",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <ol style={{ margin: 0, paddingLeft: 18 }}>
+                    {msg.plan.tasks.map((t) => (
+                      <li key={t.id} style={{ marginBottom: 4 }}>
+                        <span>{t.description}</span>
+                        {t.requires_tool && t.tool_hint && (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: 11,
+                              padding: "1px 5px",
+                              borderRadius: 3,
+                              background: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)",
+                              fontFamily: "monospace",
+                              color: isDark ? "#a1a1aa" : "#525252",
+                            }}
+                          >
+                            {t.tool_hint}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                  {msg.plan.reasoning && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: isDark ? "#71717a" : "#737373", fontStyle: "italic" }}>
+                      {msg.plan.reasoning}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Reasoning / thinking process */}
           {msg.reasoning && (
             <div style={{ marginBottom: 8 }}>

@@ -150,4 +150,89 @@ describe("MessageBubble", () => {
     );
     expect(screen.queryByText(/参考 \d+ 篇文档/)).not.toBeInTheDocument();
   });
+
+  it("renders plan task list when plan is present", () => {
+    render(
+      <MessageBubble
+        msg={{
+          id: "1",
+          role: "assistant",
+          content: "Working on it.",
+          plan: {
+            plan_id: "plan-1",
+            user_input: "complex multi-step",
+            confidence: 0.8,
+            reasoning: "two atomic steps",
+            tasks: [
+              { id: "task-1", description: "读取 notes.md", requires_tool: true, tool_hint: "read_file" },
+              { id: "task-2", description: "总结要点", requires_tool: false },
+            ],
+          },
+          timestamp: Date.now(),
+        }}
+        isDark={false}
+      />
+    );
+    expect(screen.getByText("读取 notes.md")).toBeInTheDocument();
+    expect(screen.getByText("总结要点")).toBeInTheDocument();
+    expect(screen.getByText(/规划 2 步任务/)).toBeInTheDocument();
+    expect(screen.getByText("read_file")).toBeInTheDocument();
+    expect(screen.getByText("two atomic steps")).toBeInTheDocument();
+  });
+
+  it("omits plan block when plan is absent or empty", () => {
+    const { rerender } = render(
+      <MessageBubble
+        msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }}
+        isDark={false}
+      />
+    );
+    expect(screen.queryByText(/规划 \d+ 步任务/)).not.toBeInTheDocument();
+
+    // Empty tasks → still no rendering
+    rerender(
+      <MessageBubble
+        msg={{
+          id: "1",
+          role: "assistant",
+          content: "Hi",
+          plan: {
+            plan_id: "plan-empty",
+            user_input: "x",
+            confidence: 0,
+            reasoning: "",
+            tasks: [],
+          },
+          timestamp: Date.now(),
+        }}
+        isDark={false}
+      />
+    );
+    expect(screen.queryByText(/规划 \d+ 步任务/)).not.toBeInTheDocument();
+  });
+
+  it("collapses plan content when toggle is clicked", () => {
+    render(
+      <MessageBubble
+        msg={{
+          id: "1",
+          role: "assistant",
+          content: "Hi",
+          plan: {
+            plan_id: "plan-1",
+            user_input: "x",
+            confidence: 0.5,
+            reasoning: "",
+            tasks: [{ id: "task-1", description: "step one" }],
+          },
+          timestamp: Date.now(),
+        }}
+        isDark={false}
+      />
+    );
+    expect(screen.getByText("step one")).toBeInTheDocument();
+    const toggle = screen.getByText(/规划 1 步任务/);
+    fireEvent.click(toggle);
+    expect(screen.queryByText("step one")).not.toBeInTheDocument();
+  });
 });

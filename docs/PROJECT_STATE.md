@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（M1 完成 — RAG 接入 chat，回复携带 `rag_sources`，前端展示「参考 N 篇文档」徽章）
+> **最后更新**：2026-05-19（M2 完成 — Planner 任务原子拆解,chat 复杂请求时自动出「N 步任务清单」+ 前端折叠面板）
 
 ---
 
@@ -223,7 +223,62 @@ frontend    pnpm exec vitest MessageBubble                   → 10 pass (8 原 
 - 没做"prompt 里给文档块编号→让 LLM 写引用脚注"——这需要改提示模板和后处理,留给下一个迭代
 - 没改 system_prompt 默认模板让所有 agent 都包含 `{{rag_context}}`——已经有「不显含 slot 就追加」的兜底逻辑,显式改 agent 模板会牵动 agent fixture / 已存在的 agent 配置
 
-### 6.6 自学习闭环的物理路径（已全线打通）
+### 6.6 M2 — Planner 任务原子拆解（本轮）
+
+把用户复杂请求拆成结构化的 N 步原子任务,在调用 LLM 之前就告诉用户「我准备这样分步做」。这是 hermes-style 任务规划的第一阶段(只 plan,不执行,执行/校验/重试是 M3+)。
+
+**新增模块 `sub-brain/main-brain/planner/`**:
+
+- `planner.py`(311 行):
+  - `PlanTask`/`Plan` dataclass(`@dataclass(frozen=True)`)
+  - `Planner` 类:
+    - `is_complex(text) -> bool` 廉价启发式:`MIN_COMPLEX_LEN=30` + `LONG_REQUEST_LEN=120`,zh/en 多步标记词正则(`然后/接着/先...再/step by step/first.../then...`),两个以上问号也算
+    - `plan(text) -> Optional[Plan]` LLM 调用,**失败开放**——LLM 异常 / 非 JSON / tasks 全为空 都返回 None,chat 流水不受影响
+    - `_resolve_endpoint()` 兼容 `endpoints[]` 多端点配置(按 priority 选)和单端点扁平配置
+    - `MAX_TASKS_PER_PLAN=8` 截断,空 description 过滤,confidence clamp 到 [0,1]
+- `__init__.py` 对外只暴露 `Planner` / `Plan` / `PlanTask`
+
+**ChatEngine 接入(`chat_engine.py`)**:
+
+- `__init__` 新增 `planner` 参数 + `WEBRAIN_PLANNER_ENABLED` 环境开关(默认开)
+- 新方法 `_make_plan(user_input)` —— 包一层异常隔离,返回 dict 或 None
+- 静态方法 `_format_plan_for_prompt(plan_dict)` —— 渲染成「`## Plan` markdown 块」塞进系统提示
+- `_build_system_prompt` 新增 `plan_block` 参数,模板没有 `{{plan}}` 槽位时自动追加
+- `chat()` 返回值新增 `plan` 字段(同时 max-iterations 兜底路径也带上)
+- `chat_stream()` 在 RAG 事件之后、第一个 content chunk 之前 yield `{"type": "plan", "data": plan_dict}`
+
+**main_brain.py lifespan**:实例化 `Planner(llm_config=llm_config)`,作为 `_state["planner"]` 传进 ChatEngine 完成「定义/启动/使用」闭环。
+
+**前端改动**:
+
+- `api/types.ts` 新增 `PlanTask` + `ChatPlan` 接口;`ChatMessage.plan?: ChatPlan`
+- `api/chat.ts` send 返回值多带 `plan: r.plan ?? undefined`
+- `stores/chatStore.ts` 两条路径都接:非流式直接回填 `assistantMsg.plan`;流式收到 `type: "plan"` 事件实时 patch 到最后一条 assistant message
+- `components/chat/MessageBubble.tsx` 在 reasoning 块上方加绿色折叠面板「📋 规划 N 步任务 · 置信度 X%」,展开后是有序列表 + 工具提示词 + reasoning 一句话(用 `<ol>` 渲染,task 上挂工具 hint 单色 monospace tag)
+
+**测试**:
+
+- `tests/test_planner.py`(20 用例,新增): 8 个 is_complex 启发式(空/短/长/各类标记/多问号/marker-but-too-short)+ 6 个 happy path(JSON 解析/fenced block/cap-at-8/skip-empty-desc/confidence-clamp)+ 4 个 fail-open(LLM 异常/非 JSON/缺 tasks/全部 invalid)+ 2 个 endpoint resolution
+- `tests/test_chat_engine.py` 新增 `TestChatEnginePlanner`(9 用例):env 关 / planner=None / planner 异常 fail-open / 返回 dict / format markdown 块 / 空 plan 不渲染 / `chat()` 串到响应 / `chat_stream` 在 content 之前发 plan 事件 / 无 plan 时不发事件
+- `frontend/src/components/chat/MessageBubble.test.tsx` 新增 3 用例:plan 完整渲染(任务/置信度/工具 hint/reasoning)/ 缺省 plan 不渲染 / 点击切换折叠
+
+**运行验收**:
+
+```
+main-brain  pytest test_planner.py + test_chat_engine.py  → 42 pass(20 planner + 22 chat)
+main-brain  pytest tests/ (除 watchdog dep 缺失的 watcher) → 135 pass
+frontend    tsc --noEmit                                  → 0 errors
+frontend    vitest run                                    → 116 files / 1179 pass / 0 fail
+```
+
+**故意未做(M2 范围控制,留给 M3+)**:
+
+- ❌ 执行 plan 里的每一步并把进度回写给前端(M3 — verify & retry 循环)
+- ❌ 失败 task 自动换策略重试(M3)
+- ❌ 把 plan 当 cron / workflow 的输入做 multi-agent 编排(M4+)
+- ❌ plan 历史持久化 / 用户编辑 plan / 拖拽重排(超 M-roadmap 范围)
+
+### 6.7 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -272,11 +327,11 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 
 | 优先 | 任务 | 说明 |
 |---|---|---|
-| 🔥 | **M2 Planner 任务拆解** | 主脑接到复杂请求时输出 N 个子任务,逐个串入 chat。本周下一站。 |
+| 🔥 | **M3 Planner Verify+Retry** | 把 M2 的 plan 真正跑起来:逐 task 执行 → 验证产出 → 失败最多重试 5 次,第 3 次后换策略(LLM 调用变长 prompt / 换工具)。 |
 | 🔥 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
+| ✅ | ~~M2 Planner 任务拆解~~ | 完成于 2026-05-19(§6.6)。 |
 | ✅ | ~~M1 RAG 接入 chat~~ | 完成于 2026-05-19(§6.5)。 |
 | ✅ | ~~Phase 1 RAG 基座~~ | retriever + watcher + 8 endpoints + 前端 4 区页面已上线(L1–L4)。 |
-| 📦 | M3 Planner Verify+Retry | 失败 5 次自动换策略。 |
 | 📦 | Phase 6 自动 skill 创建 | 依赖 Phase 2 Planner 提供「新任务」触发信号。 |
 | 📦 | Phase 7 Honcho 用户建模 | 后台进程聚合对话历史 → `user/profile.md`。 |
 | 🟢 | main.ts 进一步切 bootstrap/lifecycle 模块 | 可选,327 行的入口文件已经合理。若要继续按"清洁结构"打,可拆 `bootstrap.ts`(state 实例化) + `lifecycle.ts`(main-brain 起停),但 ROI 一般。 |

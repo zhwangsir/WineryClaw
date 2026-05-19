@@ -33,6 +33,22 @@ export interface RagSource {
   score: number;
 }
 
+export interface PlanTask {
+  id: string;
+  description: string;
+  requires_tool?: boolean;
+  tool_hint?: string;
+  expected_output?: string;
+}
+
+export interface ChatPlan {
+  plan_id: string;
+  user_input: string;
+  tasks: PlanTask[];
+  confidence: number;
+  reasoning: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -41,6 +57,7 @@ export interface ChatMessage {
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   ragSources?: RagSource[];
+  plan?: ChatPlan;
   isStreaming?: boolean;
   timestamp: string;
 }
