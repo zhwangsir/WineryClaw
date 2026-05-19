@@ -5,7 +5,8 @@ Chat Engine — Streaming + Multi-turn Tool Calling + Multi-model Endpoint Suppo
 import asyncio
 import json
 import logging
-from typing import Any, AsyncGenerator, Dict, List, Optional
+import os
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -130,10 +131,13 @@ MAX_TOOL_ITERATIONS = 10
 
 class ChatEngine:
     def __init__(self, memory_manager: Any, sub_brain_client: Any, llm_config: Optional[Dict[str, Any]] = None,
-                 sub_brain_url: str = "http://127.0.0.1:3000"):
+                 sub_brain_url: str = "http://127.0.0.1:3000", rag_retriever: Any = None):
         self.memory = memory_manager
         self.sub_brain = sub_brain_client
         self.sub_brain_url = sub_brain_url
+        # Optional. When provided, chat() retrieves top-k chunks for the user's
+        # message and injects them into the system prompt's {{rag_context}} slot.
+        self.rag = rag_retriever
         self.router = LLMRouter()
         self.llm_config = llm_config or {}
         self._update_router()
@@ -141,6 +145,9 @@ class ChatEngine:
         self._agent_config_cache: Dict[str, Any] = {}
         self._agent_config_ttl = 30  # seconds
         self._agent_config_fetched_at: Dict[str, float] = {}
+        # Tunables (env-overridable so users can adjust at deploy time)
+        self.rag_top_k: int = int(os.environ.get("WEBRAIN_RAG_TOP_K", "3"))
+        self.rag_min_score: float = float(os.environ.get("WEBRAIN_RAG_MIN_SCORE", "0.0"))
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -215,7 +222,51 @@ class ChatEngine:
             logger.warning(f"Failed to fetch agent config for {agent_id}: {e}")
         return None
 
-    async def _build_system_prompt(self, agent_id: str, memory_text: str) -> str:
+    def _retrieve_rag_context(self, user_input: str) -> Tuple[str, List[Dict[str, Any]]]:
+        """Retrieve top-k document chunks relevant to user_input and format as text.
+
+        Returns (rendered_text, sources) where sources is a list of
+        {doc_path, chunk_idx, score} dicts for response metadata so the
+        frontend can show "consulted N documents" with click-throughs.
+
+        Failure modes (all return empty, never raise into chat flow):
+          - RAG not configured (self.rag is None)
+          - RAG embedder not available (e.g. sentence-transformers missing)
+          - Empty index (no documents indexed yet)
+        """
+        if self.rag is None:
+            return "", []
+        if not user_input or not user_input.strip():
+            return "", []
+        try:
+            chunks = self.rag.retrieve(user_input, k=self.rag_top_k)
+        except Exception as e:  # pragma: no cover — fail open, log only
+            logger.warning("rag.retrieve failed for chat: %s", e)
+            return "", []
+
+        # Filter by min score (cosine similarity floor)
+        chunks = [c for c in chunks if c.score >= self.rag_min_score]
+        if not chunks:
+            return "", []
+
+        # Render context block
+        from pathlib import Path
+        rendered_parts: List[str] = []
+        sources: List[Dict[str, Any]] = []
+        for c in chunks:
+            name = Path(c.doc_path).name
+            rendered_parts.append(
+                f"### {name} (chunk #{c.chunk_idx}, similarity {c.score:.2f})\n{c.text.strip()}"
+            )
+            sources.append({
+                "doc_path": c.doc_path,
+                "chunk_idx": c.chunk_idx,
+                "score": c.score,
+            })
+        rendered = "\n\n".join(rendered_parts)
+        return rendered, sources
+
+    async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "") -> str:
         """Build system prompt from agent's system.md with template substitution."""
         agent = await self._fetch_agent_config(agent_id)
 
@@ -235,8 +286,13 @@ class ChatEngine:
                 prompt = ""
 
         if not prompt:
-            # Ultimate fallback: generic assistant
-            prompt = "You are a helpful AI assistant.\n\n## Available Tools\n{{tools}}\n\n## Relevant Memories\n{{memory}}"
+            # Ultimate fallback: generic assistant + RAG context if available
+            prompt = (
+                "You are a helpful AI assistant.\n\n"
+                "## Available Tools\n{{tools}}\n\n"
+                "## Relevant Memories\n{{memory}}\n\n"
+                "## Document Context\n{{rag_context}}"
+            )
 
         # Substitute template variables
         agent_name = agent.get("name", "AI Assistant") if agent else "AI Assistant"
@@ -244,10 +300,18 @@ class ChatEngine:
         tools = agent.get("tools", []) if agent else []
         tools_text = "\n".join([f"- {t}" for t in tools]) if tools else "- execute_shell\n- read_file\n- write_file\n- http_request\n- browse_web"
 
+        # If user's system_prompt template doesn't contain {{rag_context}} but
+        # we have rag_text, append it as a final section so docs aren't lost.
+        if rag_text and "{{rag_context}}" not in prompt:
+            prompt = prompt + "\n\n## Document Context\n{{rag_context}}"
+
+        rag_block = rag_text or "(no relevant documents)"
+
         prompt = prompt.replace("{{memory}}", memory_text)
         prompt = prompt.replace("{{tools}}", tools_text)
         prompt = prompt.replace("{{agent_name}}", agent_name)
         prompt = prompt.replace("{{agent_role}}", agent_role)
+        prompt = prompt.replace("{{rag_context}}", rag_block)
 
         return prompt
 
@@ -464,9 +528,12 @@ class ChatEngine:
         relevant = await self.memory.query({"query": user_input, "levels": ["L2", "L3"], "limit": 5})
         memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
 
+        # Retrieve RAG document chunks (top-k cosine similar)
+        rag_text, rag_sources = self._retrieve_rag_context(user_input)
+
         # Fetch agent config and build prompt
         agent_config = await self._fetch_agent_config(agent_id)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
@@ -495,6 +562,7 @@ class ChatEngine:
                     "tool_results": all_tool_results,
                     "session_id": session_id,
                     "iterations": iteration,
+                    "rag_sources": rag_sources,
                 }
 
             # Execute tools
@@ -546,9 +614,16 @@ class ChatEngine:
         relevant = await self.memory.query({"query": user_input, "levels": ["L2", "L3"], "limit": 5})
         memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
 
+        # Retrieve RAG document chunks (top-k cosine similar)
+        rag_text, rag_sources = self._retrieve_rag_context(user_input)
+        if rag_sources:
+            # Notify frontend up-front so the UI can render a "consulted N docs" badge
+            # before the model starts streaming a reply.
+            yield {"type": "rag_sources", "data": rag_sources}
+
         # Fetch agent config and build prompt
         agent_config = await self._fetch_agent_config(agent_id)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},

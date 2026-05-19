@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（Round K 完成 — 前端 SkillhubPage 4-tab UI 上线）
+> **最后更新**：2026-05-19（M1 完成 — RAG 接入 chat，回复携带 `rag_sources`，前端展示「参考 N 篇文档」徽章）
 
 ---
 
@@ -182,7 +182,48 @@ register<Name>Routes(app, { <dep>: state.<dep> });
 
 **Tab 切换触发对应 fetch**——按需懒加载,首次打开 Marketplace 时只调 `fetchSkills + fetchRegistries`,切到其他 tab 才调对应 endpoint。
 
-### 6.5 自学习闭环的物理路径（已全线打通）
+### 6.5 M1 — RAG 接入 chat（本轮）
+
+把 §6 之前几轮上的 RAG 检索器和 chat 引擎拼起来，让 `/chat` 接口在调 LLM 之前自动召回相关文档块、塞进系统提示、并把命中清单回写到响应里给前端展示。
+
+**后端改动：**
+
+- `sub-brain/main-brain/chat/chat_engine.py`
+  - `ChatEngine.__init__` 新增 `rag_retriever: Any = None` 参数 + 环境变量 `WEBRAIN_RAG_TOP_K`(默认 3) / `WEBRAIN_RAG_MIN_SCORE`(默认 0.0)
+  - 新方法 `_retrieve_rag_context(user_input) -> (text, sources)` —— 失败开放(retriever 异常/未配置/空 query/空索引/全部低于阈值均返回 `"", []`),不抛
+  - `_build_system_prompt` 接受 `rag_text` 参数；自动检测模板里没有 `{{rag_context}}` 占位时追加 `## Document Context` 段；fallback 模板里也已加上槽位
+  - `chat()` 返回字典新增 `rag_sources: List[{doc_path, chunk_idx, score}]`
+  - `chat_stream()` 在首个 `content` chunk 之前 yield `{"type": "rag_sources", "data": [...]}` 事件,前端可立即渲染徽章
+- `sub-brain/main-brain/main_brain.py` lifespan：实例化 ChatEngine 时把 `rag_retriever=_state["rag"]` 传进去,完成「定义/启动/使用」的闭环
+
+**前端改动：**
+
+- `frontend/src/api/types.ts` 新增 `RagSource` 接口；`ChatMessage` 加 `ragSources?: RagSource[]`
+- `frontend/src/api/chat.ts` `send()` 返回值多带 `ragSources`
+- `frontend/src/stores/chatStore.ts` 两条路径都接：非流式直接回填 `assistantMsg.ragSources`；流式收到 `rag_sources` 事件实时 patch 到最后一条 assistant message
+- `frontend/src/components/chat/MessageBubble.tsx` 在 tool-call 区上方加一个蓝色 `参考 N 篇文档` 徽章,Tooltip 列出每条 `<filename> #chunk · score`
+
+**测试改动：**
+
+- `sub-brain/main-brain/tests/test_chat_engine.py` 新增 `TestChatEngineRAG`(9 用例)：
+  - retriever=None 返回空 / 空 query 返回空且不打 retriever / `min_score` 过滤生效 / 块格式包含 filename+chunk+score / retriever 异常时 fail-open / `WEBRAIN_RAG_TOP_K` env 透传 / `chat()` 把 sources 串进返回值 / `chat_stream()` 在 content 之前发 `rag_sources` 事件 / 没有命中时不发 event
+- `frontend/src/components/chat/MessageBubble.test.tsx` 新增 2 用例：`ragSources` 存在时渲染徽章 / 缺省时不渲染
+
+**运行验收：**
+
+```
+main-brain  python3 -m pytest tests/test_chat_engine.py -x   → 13 pass (4 原 + 9 新)
+frontend    pnpm exec tsc --noEmit                           → 0 errors
+frontend    pnpm exec vitest MessageBubble                   → 10 pass (8 原 + 2 新)
+```
+
+**故意未做的事(范围控制):**
+
+- 没改 `chat()` 非流式 reply 里的 inline 引用渲染——徽章 + Tooltip 已经能告诉用户"这次回答参考了哪些文档",再做内联 `[1][2]` 引用是 M1 之外的体验加料
+- 没做"prompt 里给文档块编号→让 LLM 写引用脚注"——这需要改提示模板和后处理,留给下一个迭代
+- 没改 system_prompt 默认模板让所有 agent 都包含 `{{rag_context}}`——已经有「不显含 slot 就追加」的兜底逻辑,显式改 agent 模板会牵动 agent fixture / 已存在的 agent 配置
+
+### 6.6 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -231,9 +272,11 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 
 | 优先 | 任务 | 说明 |
 |---|---|---|
+| 🔥 | **M2 Planner 任务拆解** | 主脑接到复杂请求时输出 N 个子任务,逐个串入 chat。本周下一站。 |
 | 🔥 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
-| 🔥 | **Phase 1 RAG 基座** | Qdrant + retriever + 文件监听。用户最初的核心诉求。前端 SkillhubPage 之后,这是下一个用户最直接受益的方向。 |
-| 📦 | Phase 2 Planner | 主脑任务原子拆解,是「自主执行」的地基。 |
+| ✅ | ~~M1 RAG 接入 chat~~ | 完成于 2026-05-19(§6.5)。 |
+| ✅ | ~~Phase 1 RAG 基座~~ | retriever + watcher + 8 endpoints + 前端 4 区页面已上线(L1–L4)。 |
+| 📦 | M3 Planner Verify+Retry | 失败 5 次自动换策略。 |
 | 📦 | Phase 6 自动 skill 创建 | 依赖 Phase 2 Planner 提供「新任务」触发信号。 |
 | 📦 | Phase 7 Honcho 用户建模 | 后台进程聚合对话历史 → `user/profile.md`。 |
 | 🟢 | main.ts 进一步切 bootstrap/lifecycle 模块 | 可选,327 行的入口文件已经合理。若要继续按"清洁结构"打,可拆 `bootstrap.ts`(state 实例化) + `lifecycle.ts`(main-brain 起停),但 ROI 一般。 |

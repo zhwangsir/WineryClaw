@@ -27,6 +27,12 @@ export interface ModelConfig {
   endpoints: ModelEndpoint[];
 }
 
+export interface RagSource {
+  doc_path: string;
+  chunk_idx: number;
+  score: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -34,6 +40,7 @@ export interface ChatMessage {
   reasoning?: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
+  ragSources?: RagSource[];
   isStreaming?: boolean;
   timestamp: string;
 }

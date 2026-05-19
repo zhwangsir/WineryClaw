@@ -121,4 +121,33 @@ describe("MessageBubble", () => {
     );
     expect(screen.getByText(/1月15日/i)).toBeInTheDocument();
   });
+
+  it("renders RAG sources badge when ragSources is present", () => {
+    render(
+      <MessageBubble
+        msg={{
+          id: "1",
+          role: "assistant",
+          content: "Per notes, the answer is X.",
+          ragSources: [
+            { doc_path: "/notes/topic-a.md", chunk_idx: 0, score: 0.91 },
+            { doc_path: "/notes/topic-b.md", chunk_idx: 2, score: 0.74 },
+          ],
+          timestamp: Date.now(),
+        }}
+        isDark={false}
+      />
+    );
+    expect(screen.getByText("参考 2 篇文档")).toBeInTheDocument();
+  });
+
+  it("omits RAG badge when no ragSources present", () => {
+    render(
+      <MessageBubble
+        msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }}
+        isDark={false}
+      />
+    );
+    expect(screen.queryByText(/参考 \d+ 篇文档/)).not.toBeInTheDocument();
+  });
 });

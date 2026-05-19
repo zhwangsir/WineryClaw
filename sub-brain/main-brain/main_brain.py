@@ -165,6 +165,7 @@ async def lifespan(app: FastAPI) -> None:
         sub_brain_client=_state["sub_brain"],
         llm_config=llm_config,
         sub_brain_url=sub_brain_url,
+        rag_retriever=_state["rag"],
     )
 
     # Initialize Wiki

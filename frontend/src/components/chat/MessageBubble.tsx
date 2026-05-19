@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Tooltip, message } from "antd";
-import { UserOutlined, RobotOutlined, ToolOutlined, CopyOutlined, CheckOutlined, ThunderboltOutlined, DownOutlined } from "@ant-design/icons";
+import { UserOutlined, RobotOutlined, ToolOutlined, CopyOutlined, CheckOutlined, ThunderboltOutlined, DownOutlined, FileSearchOutlined } from "@ant-design/icons";
 import type { ChatMessage } from "../../api/types";
 import MarkdownRenderer from "../common/MarkdownRenderer";
 import StreamingText from "./StreamingText";
@@ -188,6 +188,49 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                 animation: "chatPulse 1s infinite",
               }}
             />
+          )}
+
+          {/* RAG document sources — shown when the reply consulted indexed docs */}
+          {msg.ragSources && msg.ragSources.length > 0 && (
+            <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <Tooltip
+                title={
+                  <div style={{ maxWidth: 360 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>引用文档</div>
+                    {msg.ragSources.map((s, i) => {
+                      const name = s.doc_path.split("/").pop() || s.doc_path;
+                      return (
+                        <div key={i} style={{ fontSize: 12, marginBottom: 2 }}>
+                          <span style={{ fontFamily: "monospace" }}>{name}</span>
+                          <span style={{ opacity: 0.7 }}>
+                            {" "}
+                            #{s.chunk_idx} · {s.score.toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                }
+              >
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: isDark ? "#93c5fd" : "#1d4ed8",
+                    background: isDark ? "rgba(59,130,246,0.10)" : "rgba(59,130,246,0.08)",
+                    border: isDark ? "1px solid rgba(59,130,246,0.30)" : "1px solid rgba(59,130,246,0.25)",
+                    borderRadius: 4,
+                    padding: "2px 8px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    cursor: "help",
+                  }}
+                >
+                  <FileSearchOutlined style={{ fontSize: 10 }} />
+                  参考 {msg.ragSources.length} 篇文档
+                </span>
+              </Tooltip>
+            </div>
           )}
 
           {/* Tool calls */}

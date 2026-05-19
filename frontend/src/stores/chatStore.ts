@@ -83,6 +83,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role: "assistant",
         content: res.reply,
         toolCalls: res.toolCalls,
+        ragSources: res.ragSources,
         timestamp: new Date().toISOString(),
       };
       set((s) => ({ messages: [...s.messages, assistantMsg], loading: false }));
@@ -139,6 +140,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const last = msgs[msgs.length - 1];
             if (last?.role === "assistant") {
               msgs[msgs.length - 1] = { ...last, reasoning: (last.reasoning || "") + chunk.data };
+            }
+            return { messages: msgs };
+          });
+        } else if (chunk.type === "rag_sources") {
+          // Stream-side equivalent of res.ragSources for non-stream path —
+          // backend yields this BEFORE first content chunk so the badge renders
+          // immediately even while tokens are still streaming.
+          set((s) => {
+            const msgs = [...s.messages];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === "assistant") {
+              msgs[msgs.length - 1] = { ...last, ragSources: chunk.data };
             }
             return { messages: msgs };
           });
