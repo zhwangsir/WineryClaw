@@ -72,10 +72,10 @@ export class AgentSandbox {
         for (const line of lines.slice(-1000)) {
           try {
             this.auditLogs.push(JSON.parse(line));
-          } catch {}
+          } catch (err) { console.error("[sandbox] Error:", err); }
         }
       }
-    } catch {}
+    } catch (err) { console.error("[sandbox] Error:", err); }
   }
 
   private appendAudit(log: SandboxAuditLog): void {
@@ -85,7 +85,7 @@ export class AgentSandbox {
     }
     try {
       writeFileSync(AUDIT_LOG_PATH, JSON.stringify(log) + "\n", { flag: "a" });
-    } catch {}
+    } catch (err) { console.error("[sandbox] Error:", err); }
   }
 
   // ---- Policy Management ----

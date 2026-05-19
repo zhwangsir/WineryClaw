@@ -116,7 +116,7 @@ export class ModelConfigManager {
         }
         return merged;
       }
-    } catch (err) {
+    } catch (err) { console.error("[model-config] Error:", err);
       console.error("[model-config] Failed to load config:", err);
     }
     return { ...DEFAULT_CONFIG };
@@ -146,7 +146,7 @@ export class ModelConfigManager {
         mkdirSync(CONFIG_DIR, { recursive: true });
       }
       writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2), "utf-8");
-    } catch (err) {
+    } catch (err) { console.error("[model-config] Error:", err);
       console.error("[model-config] Failed to save config:", err);
       throw err;
     }

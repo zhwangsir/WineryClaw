@@ -324,7 +324,7 @@ Respond with a JSON array of steps.`;
         if (Array.isArray(obj.plan)) return obj.plan as Array<Partial<PlanStep>>;
       }
       return [];
-    } catch {
+    } catch (err) { console.error("[agent-harness] Error:", err);
       return [];
     }
   }

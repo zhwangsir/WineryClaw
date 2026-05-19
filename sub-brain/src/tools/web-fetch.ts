@@ -130,7 +130,7 @@ function extractAllLinks(html: string, baseUrl: string): Array<{ text: string; u
     let fullUrl: string;
     try {
       fullUrl = new URL(href, baseUrl).toString();
-    } catch {
+    } catch (err) { console.error("[web-fetch] Error:", err);
       continue;
     }
 

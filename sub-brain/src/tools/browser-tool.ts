@@ -44,7 +44,7 @@ async function closeSession(sessionId: string): Promise<void> {
   if (!session) return;
   try {
     await session.browser.close();
-  } catch {}
+  } catch (err) { console.error("[tool] Error:", err); }
   sessions.delete(sessionId);
 }
 

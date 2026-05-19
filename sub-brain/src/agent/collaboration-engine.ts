@@ -422,7 +422,7 @@ export class AgentCollaborationEngine {
       for (const h of handlers) {
         try {
           await h(msg);
-        } catch (err) {
+        } catch (err) { console.error("[collaboration-engine] Error:", err);
           console.error(`[a2a] Handler error for ${msg.type}:`, err);
         }
       }
@@ -477,7 +477,7 @@ export class AgentCollaborationEngine {
       const dir = join(homedir(), ".webrain", "agents", "messages");
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, `${msg.id}.json`), JSON.stringify(msg, null, 2));
-    } catch {
+    } catch (err) { console.error("[collaboration-engine] Error:", err);
       // ignore
     }
   }
@@ -487,7 +487,7 @@ export class AgentCollaborationEngine {
       const dir = join(homedir(), ".webrain", "agents", "conversations");
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, `${conv.id}.json`), JSON.stringify(conv, null, 2));
-    } catch {
+    } catch (err) { console.error("[collaboration-engine] Error:", err);
       // ignore
     }
   }
@@ -497,7 +497,7 @@ export class AgentCollaborationEngine {
       const dir = join(homedir(), ".webrain", "agents", "votes");
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, `${proposal.id}.json`), JSON.stringify(proposal, null, 2));
-    } catch {
+    } catch (err) { console.error("[collaboration-engine] Error:", err);
       // ignore
     }
   }
@@ -514,7 +514,7 @@ export class AgentCollaborationEngine {
             try {
               const msg: A2AMessage = JSON.parse(readFileSync(join(msgDir, f), "utf-8"));
               this.messages.push(msg);
-            } catch {}
+            } catch (err) { console.error("[collaboration-engine] Error:", err); console.error("[collab] Error:", err); }
           }
         }
       }
@@ -527,7 +527,7 @@ export class AgentCollaborationEngine {
             try {
               const conv: AgentConversation = JSON.parse(readFileSync(join(convDir, f), "utf-8"));
               this.conversations.set(conv.id, conv);
-            } catch {}
+            } catch (err) { console.error("[collaboration-engine] Error:", err); console.error("[collab] Error:", err); }
           }
         }
       }
@@ -540,13 +540,13 @@ export class AgentCollaborationEngine {
             try {
               const prop: ConsensusProposal = JSON.parse(readFileSync(join(voteDir, f), "utf-8"));
               this.proposals.set(prop.id, prop);
-            } catch {}
+            } catch (err) { console.error("[collaboration-engine] Error:", err); console.error("[collab] Error:", err); }
           }
         }
       }
 
       this.trimMessages();
-    } catch (err) {
+    } catch (err) { console.error("[collaboration-engine] Error:", err);
       console.error("[a2a] Load persisted failed:", err);
     }
   }

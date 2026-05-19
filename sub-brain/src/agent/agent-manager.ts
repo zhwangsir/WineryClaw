@@ -227,7 +227,7 @@ export class AgentManager {
           this.sandbox.createDefaultPolicy(card.id);
         }
       }
-    } catch (err) {
+    } catch (err) { console.error("[agent-manager] Error:", err);
       console.error("[agent] Load from file system failed:", err);
     }
 
@@ -237,7 +237,7 @@ export class AgentManager {
         const list: AgentTask[] = JSON.parse(readFileSync(TASKS_PATH, "utf-8"));
         for (const t of list) this.tasks.set(t.taskId, t);
       }
-    } catch (err) {
+    } catch (err) { console.error("[agent-manager] Error:", err);
       console.error("[agent] Task load failed:", err);
     }
   }

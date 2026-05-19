@@ -248,10 +248,10 @@ export class AgentTemplateEngine {
           try {
             const tpl: AgentTemplate = JSON.parse(readFileSync(join(TEMPLATE_DIR, f), "utf-8"));
             this.templates.set(tpl.id, tpl);
-          } catch {}
+          } catch (err) { console.error("[template-engine] Error:", err); console.error("[template] Error:", err); }
         }
       }
-    } catch (err) {
+    } catch (err) { console.error("[template-engine] Error:", err);
       console.error("[template] Load custom failed:", err);
     }
   }
@@ -261,7 +261,7 @@ export class AgentTemplateEngine {
     try {
       if (!existsSync(TEMPLATE_DIR)) mkdirSync(TEMPLATE_DIR, { recursive: true });
       writeFileSync(join(TEMPLATE_DIR, `${tpl.id}.json`), JSON.stringify(tpl, null, 2));
-    } catch (err) {
+    } catch (err) { console.error("[template-engine] Error:", err);
       console.error("[template] Save custom failed:", err);
     }
   }
@@ -270,7 +270,7 @@ export class AgentTemplateEngine {
     try {
       const path = join(TEMPLATE_DIR, `${id}.json`);
       if (existsSync(path)) unlinkSync(path);
-    } catch {}
+    } catch (err) { console.error("[template-engine] Error:", err); console.error("[template] Error:", err); }
   }
 
   // ---- CRUD ----

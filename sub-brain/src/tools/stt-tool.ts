@@ -32,7 +32,7 @@ async function sttExecute(params: Record<string, unknown>) {
   // Check if whisper CLI is available
   try {
     execSync("which whisper", { encoding: "utf-8", timeout: 5000 });
-  } catch {
+  } catch (err) { console.error("[stt-tool] Error:", err);
     return {
       error: "Whisper CLI not found. Install with: pip install openai-whisper",
       hint: "Or use: brew install openai-whisper (macOS)",

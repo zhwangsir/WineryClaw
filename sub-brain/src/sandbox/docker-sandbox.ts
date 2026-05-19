@@ -38,7 +38,7 @@ export class DockerSandbox {
     try {
       execSync("docker version", { stdio: "pipe", timeout: 5000 });
       return true;
-    } catch {
+    } catch (err) { console.error("[docker-sandbox] Error:", err);
       return false;
     }
   }
@@ -111,7 +111,7 @@ export class DockerSandbox {
     for (const name of this.containers) {
       try {
         execSync(`docker rm -f ${name}`, { stdio: "pipe", timeout: 10000 });
-      } catch {}
+      } catch (err) { console.error("[docker-sandbox] Error:", err); console.error("[docker] Error:", err); }
     }
     this.containers.clear();
   }

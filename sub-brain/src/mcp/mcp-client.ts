@@ -261,7 +261,7 @@ export class MCPClient {
           pending.resolve(msg.result);
         }
       }
-    } catch {
+    } catch (err) { console.error("[mcp-client] Error:", err);
       // Not a JSON-RPC message, ignore
     }
   }

@@ -31,11 +31,11 @@ export class PlaywrightBrowser {
 
   async close(): Promise<void> {
     for (const page of this.pages.values()) {
-      try { await page.close(); } catch {}
+      try { await page.close(); } catch (err) { console.error("[playwright-browser] Error:", err); console.error("[cleanup] Error:", err); }
     }
     this.pages.clear();
-    if (this.context) { try { await this.context.close(); } catch {} }
-    if (this.browser) { try { await this.browser.close(); } catch {} }
+    if (this.context) { try { await this.context.close(); } catch (err) { console.error("[playwright-browser] Error:", err); console.error("[cleanup] Error:", err); } }
+    if (this.browser) { try { await this.browser.close(); } catch (err) { console.error("[playwright-browser] Error:", err); console.error("[cleanup] Error:", err); } }
     console.log("[browser] Playwright closed");
   }
 
@@ -43,7 +43,7 @@ export class PlaywrightBrowser {
     if (!this.context) {
       try {
         await this.launch(true);
-      } catch {
+      } catch (err) { console.error("[playwright-browser] Error:", err);
         throw new Error("Browser not available. Playwright may not be installed.");
       }
     }
@@ -139,7 +139,7 @@ export class PlaywrightBrowser {
     for (const [id, page] of this.pages) {
       try {
         sessions.push({ id, url: page.url(), title: await page.title() });
-      } catch {
+      } catch (err) { console.error("[playwright-browser] Error:", err);
         sessions.push({ id, url: page.url(), title: "(unavailable)" });
       }
     }

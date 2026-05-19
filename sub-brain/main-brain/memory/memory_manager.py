@@ -868,6 +868,16 @@ class MemoryManager:
 
         return {"ok": True, "restored_id": memory_id}
 
+    async def delete(self, memory_id: str) -> Dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT id FROM memories WHERE id = ?", (memory_id,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "Memory not found"}
+            conn.execute("DELETE FROM vectors WHERE memory_id = ?", (memory_id,))
+            conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            conn.commit()
+        return {"ok": True, "deleted_id": memory_id}
+
     async def get_session_memories(self, session_id: str, limit: int = 50) -> List[Dict]:
         with self._connect() as conn:
             rows = conn.execute(

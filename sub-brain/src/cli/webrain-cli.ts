@@ -30,7 +30,7 @@ export class WeBrainCLI {
       const data = await resp.json();
       lines.push(`Sub Brain: ${data.status} @ ${this.subBrainUrl}`);
       lines.push(`  Modules: ${Object.keys(data.modules).join(", ")}`);
-    } catch {
+    } catch (err) { console.error("[webrain-cli] Error:", err);
       lines.push(`Sub Brain: ❌ unreachable @ ${this.subBrainUrl}`);
     }
 
@@ -39,7 +39,7 @@ export class WeBrainCLI {
       const resp = await fetch(`${this.mainBrainUrl}/health`);
       const data = await resp.json();
       lines.push(`Main Brain: ${data.status} @ ${this.mainBrainUrl}`);
-    } catch {
+    } catch (err) { console.error("[webrain-cli] Error:", err);
       lines.push(`Main Brain: ❌ unreachable @ ${this.mainBrainUrl}`);
     }
 
@@ -52,7 +52,7 @@ export class WeBrainCLI {
         lines.push(`  ${t.enabled ? "✓" : "✗"} ${t.name} (${t.category})`);
       }
       if (data.tools.length > 10) lines.push(`  ... and ${data.tools.length - 10} more`);
-    } catch {
+    } catch (err) { console.error("[webrain-cli] Error:", err);
       lines.push("Tools: ❌ unavailable");
     }
 
@@ -62,7 +62,7 @@ export class WeBrainCLI {
       const data = await resp.json();
       lines.push(`Agents: ${data.agents.total} (idle: ${data.agents.byStatus.idle}, running: ${data.agents.byStatus.running})`);
       lines.push(`Workflows: ${data.workflows.totalWorkflows} | Templates: ${data.templates.total} | Proposals: ${data.collaboration.activeProposals}`);
-    } catch {
+    } catch (err) { console.error("[webrain-cli] Error:", err);
       lines.push("Agents: ❌ unavailable");
     }
 

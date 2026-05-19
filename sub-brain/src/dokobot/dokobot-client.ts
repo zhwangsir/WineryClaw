@@ -88,7 +88,7 @@ export class DokobotClient {
       const { execSync } = await import("child_process");
       const output = execSync(`dokobot search "${query}"`, { encoding: "utf-8", timeout: 60000 });
       return { ok: true, query, results: output };
-    } catch {
+    } catch (err) { console.error("[dokobot-client] Error:", err);
       return { ok: false, query, error: "Dokobot search CLI not available." };
     }
   }

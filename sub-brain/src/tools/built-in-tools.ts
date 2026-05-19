@@ -113,7 +113,7 @@ async function fileSearchExecute(params: Record<string, unknown>) {
     const output = execSync(`grep -rn --include="${glob}" "${pattern.replace(/"/g, '\\"')}" "${path}" 2>/dev/null || true`, { encoding: "utf-8" });
     const lines = output.trim().split("\n").filter(Boolean);
     return { pattern, matches: lines.slice(0, 100), count: lines.length };
-  } catch {
+  } catch (err) { console.error("[built-in-tools] Error:", err);
     return { pattern, matches: [], count: 0 };
   }
 }

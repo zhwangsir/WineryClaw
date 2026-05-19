@@ -166,7 +166,7 @@ function detectCycles(nodes: WorkflowNode[], edges: WorkflowEdge[]): boolean {
   try {
     topologicalSort(nodes, edges);
     return false;
-  } catch {
+  } catch (err) { console.error("[workflow-engine] Error:", err);
     return true;
   }
 }
@@ -196,10 +196,10 @@ export class WorkflowEngine {
           try {
             const wf: WorkflowDefinition = JSON.parse(readFileSync(join(WORKFLOW_DIR, f), "utf-8"));
             this.workflows.set(wf.id, wf);
-          } catch {}
+          } catch (err) { console.error("[workflow-engine] Error:", err); console.error("[workflow] Error:", err); }
         }
       }
-    } catch (err) {
+    } catch (err) { console.error("[workflow-engine] Error:", err);
       console.error("[workflow] Load failed:", err);
     }
   }
@@ -208,7 +208,7 @@ export class WorkflowEngine {
     try {
       if (!existsSync(WORKFLOW_DIR)) mkdirSync(WORKFLOW_DIR, { recursive: true });
       writeFileSync(join(WORKFLOW_DIR, `${wf.id}.json`), JSON.stringify(wf, null, 2));
-    } catch (err) {
+    } catch (err) { console.error("[workflow-engine] Error:", err);
       console.error("[workflow] Save failed:", err);
     }
   }
@@ -217,7 +217,7 @@ export class WorkflowEngine {
     try {
       const path = join(WORKFLOW_DIR, `${id}.json`);
       if (existsSync(path)) unlinkSync(path);
-    } catch {}
+    } catch (err) { console.error("[workflow-engine] Error:", err); console.error("[workflow] Error:", err); }
   }
 
   private loadRuns(): void {
@@ -228,10 +228,10 @@ export class WorkflowEngine {
           try {
             const run: WorkflowRun = JSON.parse(readFileSync(join(RUN_DIR, f), "utf-8"));
             this.runs.set(run.runId, run);
-          } catch {}
+          } catch (err) { console.error("[workflow-engine] Error:", err); console.error("[workflow] Error:", err); }
         }
       }
-    } catch (err) {
+    } catch (err) { console.error("[workflow-engine] Error:", err);
       console.error("[workflow] Load runs failed:", err);
     }
   }
@@ -240,7 +240,7 @@ export class WorkflowEngine {
     try {
       if (!existsSync(RUN_DIR)) mkdirSync(RUN_DIR, { recursive: true });
       writeFileSync(join(RUN_DIR, `${run.runId}.json`), JSON.stringify(run, null, 2));
-    } catch (err) {
+    } catch (err) { console.error("[workflow-engine] Error:", err);
       console.error("[workflow] Save run failed:", err);
     }
   }
@@ -300,7 +300,7 @@ export class WorkflowEngine {
       try {
         const result = new Function(`return (${evaluated})`)();
         return { condition: expr, result: !!result };
-      } catch {
+      } catch (err) { console.error("[workflow-engine] Error:", err);
         return { condition: expr, result: false, error: "Evaluation failed" };
       }
     });
@@ -403,7 +403,7 @@ export class WorkflowEngine {
       for (const n of wf.nodes) {
         if (!reachable.has(n.id)) errors.push(`Node ${n.id} is unreachable`);
       }
-    } catch {
+    } catch (err) { console.error("[workflow-engine] Error:", err);
       // Already reported
     }
 
@@ -609,7 +609,7 @@ export class WorkflowEngine {
         const result = await executor(node, ctx);
         clearTimeout(timer);
         resolve(result);
-      } catch (err) {
+      } catch (err) { console.error("[workflow-engine] Error:", err);
         clearTimeout(timer);
         reject(err);
       }
@@ -629,7 +629,7 @@ export class WorkflowEngine {
         }
       }
       return !!new Function(`return (${evaluated})`)();
-    } catch {
+    } catch (err) { console.error("[workflow-engine] Error:", err);
       return false;
     }
   }

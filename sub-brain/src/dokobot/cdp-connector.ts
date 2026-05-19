@@ -18,7 +18,7 @@ export async function connectCDP(wsUrl: string): Promise<CDPSession | null> {
       on: (event, cb) => client.on(event, cb),
       close: () => client.close(),
     };
-  } catch {
+  } catch (err) { console.error("[cdp-connector] Error:", err);
     // Fallback: try puppeteer
     try {
       const puppeteer = await import("puppeteer");
@@ -43,7 +43,7 @@ export async function connectCDP(wsUrl: string): Promise<CDPSession | null> {
         on: () => {},
         close: async () => { await browser.close(); },
       };
-    } catch {
+    } catch (err) { console.error("[cdp-connector] Error:", err);
       return null;
     }
   }

@@ -79,7 +79,7 @@ export class LayeredConfigManager {
         const raw = readFileSync(GLOBAL_PATH, "utf-8");
         return { ...DEFAULT_GLOBAL, ...JSON.parse(raw) };
       }
-    } catch (err) {
+    } catch (err) { console.error("[layered-config] Error:", err);
       console.error("[config] Failed to load global config:", err);
     }
     this.saveGlobal(DEFAULT_GLOBAL);
@@ -106,7 +106,7 @@ export class LayeredConfigManager {
         }
       });
       this.watchers.set("global", watcher);
-    } catch (err) {
+    } catch (err) { console.error("[layered-config] Error:", err);
       console.error("[config] Failed to setup watcher:", err);
     }
   }
@@ -162,6 +162,14 @@ export class LayeredConfigManager {
     }
     this.saveGlobal(this.globalConfig);
     return this.getAgent(agent.agentId, workspaceId);
+  }
+
+  deleteWorkspace(workspaceId: string): boolean {
+    const idx = this.globalConfig.workspaces.findIndex((w) => w.workspaceId === workspaceId);
+    if (idx < 0) return false;
+    this.globalConfig.workspaces.splice(idx, 1);
+    this.saveGlobal(this.globalConfig);
+    return true;
   }
 
   onReload(callback: (path: string) => void): void {

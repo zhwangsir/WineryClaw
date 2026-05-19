@@ -98,7 +98,7 @@ export class AgentFileSystem {
         : undefined;
 
       return { card, systemPrompt, tools, sandbox };
-    } catch (err) {
+    } catch (err) { console.error("[agent-filesystem] Error:", err);
       console.error(`[agent-fs] Failed to load agent ${id}:`, err);
       return undefined;
     }
@@ -131,7 +131,7 @@ export class AgentFileSystem {
     try {
       rmSync(dir, { recursive: true, force: true });
       return true;
-    } catch (err) {
+    } catch (err) { console.error("[agent-filesystem] Error:", err);
       console.error(`[agent-fs] Failed to delete agent ${id}:`, err);
       return false;
     }

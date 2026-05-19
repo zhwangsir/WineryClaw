@@ -63,7 +63,7 @@ const TelegramProtocol: ChannelProtocol = {
       // Just check if we can reach Telegram API
       await axios.get("https://api.telegram.org", { timeout: 5000 });
       return true;
-    } catch { return false; }
+    } catch (err) { console.error("[channel-manager] Error:", err); return false; }
   },
 };
 
@@ -93,7 +93,7 @@ const DiscordProtocol: ChannelProtocol = {
       const axios = (await import("axios")).default;
       await axios.get("https://discord.com/api/v10/gateway", { timeout: 5000 });
       return true;
-    } catch { return false; }
+    } catch (err) { console.error("[channel-manager] Error:", err); return false; }
   },
 };
 
@@ -123,7 +123,7 @@ const SlackProtocol: ChannelProtocol = {
       const axios = (await import("axios")).default;
       await axios.get("https://slack.com/api/api.test", { timeout: 5000 });
       return true;
-    } catch { return false; }
+    } catch (err) { console.error("[channel-manager] Error:", err); return false; }
   },
 };
 
@@ -156,7 +156,7 @@ const WhatsAppProtocol: ChannelProtocol = {
       const axios = (await import("axios")).default;
       await axios.get("https://web.whatsapp.com", { timeout: 5000 });
       return true;
-    } catch { return false; }
+    } catch (err) { console.error("[channel-manager] Error:", err); return false; }
   },
 };
 
@@ -186,7 +186,7 @@ const TeamsProtocol: ChannelProtocol = {
       const axios = (await import("axios")).default;
       await axios.get("https://teams.microsoft.com", { timeout: 5000 });
       return true;
-    } catch { return false; }
+    } catch (err) { console.error("[channel-manager] Error:", err); return false; }
   },
 };
 
@@ -213,7 +213,7 @@ const FeishuProtocol: ChannelProtocol = {
       const axios = (await import("axios")).default;
       await axios.get("https://open.feishu.cn", { timeout: 5000 });
       return true;
-    } catch { return false; }
+    } catch (err) { console.error("[channel-manager] Error:", err); return false; }
   },
 };
 
@@ -243,7 +243,7 @@ const LineProtocol: ChannelProtocol = {
       const axios = (await import("axios")).default;
       await axios.get("https://api.line.me", { timeout: 5000 });
       return true;
-    } catch { return false; }
+    } catch (err) { console.error("[channel-manager] Error:", err); return false; }
   },
 };
 
@@ -357,7 +357,7 @@ export class ChannelManager {
 
     // Stop receiving if active
     if (this.receivers.has(channelId)) {
-      try { await this.stopReceiving(channelId); } catch { /* ignore */ }
+      try { await this.stopReceiving(channelId); } catch (err) { console.error("[channel-manager] Error:", err); /* ignore */ }
     }
 
     await channel.protocol.disconnect();
@@ -387,6 +387,26 @@ export class ChannelManager {
       stmt.run(new Date().toISOString(), channelId);
       return { ok: true, connected: true };
     }
+  }
+
+  async deleteChannel(channelId: string): Promise<{ ok: boolean; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+
+    // Stop receiving if active
+    if (this.receivers.has(channelId)) {
+      try { await this.stopReceiving(channelId); } catch (err) { console.error("[channel-manager] Error:", err); /* ignore */ }
+    }
+
+    // Disconnect if connected
+    if (channel.connected) {
+      try { await channel.protocol.disconnect(); } catch (err) { console.error("[channel-manager] Error:", err); /* ignore */ }
+    }
+
+    this.channels.delete(channelId);
+    const stmt = this.db.prepare("DELETE FROM channels WHERE id = ?");
+    stmt.run(channelId);
+    return { ok: true };
   }
 
   listChannels(): Array<{ id: string; name: string; type: string; connected: boolean }> {
@@ -484,7 +504,7 @@ export class ChannelManager {
             offset = update.update_id + 1;
           }
         }
-      } catch (err) {
+      } catch (err) { console.error("[channel-manager] Error:", err);
         console.error(`[telegram-poll] error for ${channel.id}:`, err);
       }
     };
@@ -572,7 +592,7 @@ export class ChannelManager {
               ws.close();
               break;
           }
-        } catch (err) {
+        } catch (err) { console.error("[channel-manager] Error:", err);
           console.error(`[discord-gw] message parse error for ${channel.id}:`, err);
         }
       });
@@ -590,7 +610,7 @@ export class ChannelManager {
       this.receivers.set(channel.id, {
         stop: () => {
           if (heartbeatTimer) clearInterval(heartbeatTimer);
-          try { ws.terminate(); } catch { /* ignore */ }
+          try { ws.terminate(); } catch (err) { console.error("[channel-manager] Error:", err); /* ignore */ }
           this.receivers.delete(channel.id);
         },
       });
@@ -664,7 +684,7 @@ export class ChannelManager {
           seenMessages.clear();
           arr.forEach((id) => seenMessages.add(id));
         }
-      } catch (err) {
+      } catch (err) { console.error("[channel-manager] Error:", err);
         console.error(`[slack-poll] error for ${channel.id}:`, err);
       }
     };

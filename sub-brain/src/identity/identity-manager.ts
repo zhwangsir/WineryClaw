@@ -43,7 +43,7 @@ export class IdentityManager {
         const list: User[] = JSON.parse(raw);
         for (const u of list) this.users.set(u.id, u);
       }
-    } catch (err) {
+    } catch (err) { console.error("[identity-manager] Error:", err);
       console.error("[identity] Load failed:", err);
     }
   }
@@ -96,6 +96,13 @@ export class IdentityManager {
 
   listUsers(): User[] {
     return Array.from(this.users.values());
+  }
+
+  deleteUser(id: string): boolean {
+    if (!this.users.has(id)) return false;
+    this.users.delete(id);
+    this.save();
+    return true;
   }
 
   hasWorkspaceAccess(userId: string, workspaceId: string): boolean {
