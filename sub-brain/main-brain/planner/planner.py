@@ -262,6 +262,56 @@ class Planner:
 # ---------------------------------------------------------------------------
 
 
+def plan_from_dict(data: Dict[str, Any]) -> Optional[Plan]:
+    """Rebuild a Plan dataclass from a JSON-shape dict.
+
+    Accepts the wire format produced by `Plan.to_dict()` and emitted to the
+    frontend by `/chat`. Used by `/plan/execute` to re-run a plan a client
+    already received (e.g. user clicked "execute" in the UI).
+
+    Returns None if the dict has no usable tasks — we'd rather fail loud
+    than fabricate a single-task placeholder.
+    """
+    if not isinstance(data, dict):
+        return None
+    tasks_raw = data.get("tasks") or []
+    if not isinstance(tasks_raw, list) or not tasks_raw:
+        return None
+
+    tasks: List[PlanTask] = []
+    for i, t in enumerate(tasks_raw, start=1):
+        if not isinstance(t, dict):
+            continue
+        desc = str(t.get("description", "")).strip()
+        if not desc:
+            continue
+        tasks.append(
+            PlanTask(
+                id=str(t.get("id") or f"task-{i}"),
+                description=desc,
+                requires_tool=bool(t.get("requires_tool", False)),
+                tool_hint=str(t.get("tool_hint", "")).strip(),
+                expected_output=str(t.get("expected_output", "")).strip(),
+            )
+        )
+    if not tasks:
+        return None
+
+    try:
+        confidence = float(data.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    confidence = max(0.0, min(1.0, confidence))
+
+    return Plan(
+        plan_id=str(data.get("plan_id") or "plan-adhoc"),
+        user_input=str(data.get("user_input") or ""),
+        tasks=tasks,
+        confidence=confidence,
+        reasoning=str(data.get("reasoning", "")).strip(),
+    )
+
+
 def _extract_json(text: str) -> Optional[Any]:
     """Best-effort JSON extraction from an LLM response.
 

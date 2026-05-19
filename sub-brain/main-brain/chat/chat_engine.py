@@ -587,11 +587,21 @@ class ChatEngine:
         relevant = await self.memory.query({"query": user_input, "levels": ["L2", "L3"], "limit": 5})
         memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
 
+        # Plan-execution call sites set these flags to prevent recursion
+        # (the executor already has a plan; running it shouldn't re-plan) and
+        # to skip RAG, which was applied at plan time.
+        ctx = context or {}
+        disable_planner = bool(ctx.get("disable_planner", False))
+        disable_rag = bool(ctx.get("disable_rag", False))
+
         # Retrieve RAG document chunks (top-k cosine similar)
-        rag_text, rag_sources = self._retrieve_rag_context(user_input)
+        if disable_rag:
+            rag_text, rag_sources = "", []
+        else:
+            rag_text, rag_sources = self._retrieve_rag_context(user_input)
 
         # Decompose complex requests into a structured plan (M2)
-        plan_dict = await self._make_plan(user_input)
+        plan_dict = None if disable_planner else await self._make_plan(user_input)
         plan_block = self._format_plan_for_prompt(plan_dict)
 
         # Fetch agent config and build prompt
@@ -680,8 +690,17 @@ class ChatEngine:
         relevant = await self.memory.query({"query": user_input, "levels": ["L2", "L3"], "limit": 5})
         memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
 
+        # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
+        # can share a code path without re-planning recursively.
+        ctx = context or {}
+        disable_planner = bool(ctx.get("disable_planner", False))
+        disable_rag = bool(ctx.get("disable_rag", False))
+
         # Retrieve RAG document chunks (top-k cosine similar)
-        rag_text, rag_sources = self._retrieve_rag_context(user_input)
+        if disable_rag:
+            rag_text, rag_sources = "", []
+        else:
+            rag_text, rag_sources = self._retrieve_rag_context(user_input)
         if rag_sources:
             # Notify frontend up-front so the UI can render a "consulted N docs" badge
             # before the model starts streaming a reply.
@@ -690,7 +709,7 @@ class ChatEngine:
         # Decompose complex requests into a structured plan (M2). Emit the
         # plan event BEFORE the first content chunk so the UI can render the
         # subtask list while tokens are still streaming.
-        plan_dict = await self._make_plan(user_input)
+        plan_dict = None if disable_planner else await self._make_plan(user_input)
         if plan_dict:
             yield {"type": "plan", "data": plan_dict}
         plan_block = self._format_plan_for_prompt(plan_dict)

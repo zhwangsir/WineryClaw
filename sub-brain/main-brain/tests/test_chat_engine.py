@@ -502,3 +502,105 @@ class TestChatEnginePlanner:
                 events.append(ev)
 
         assert not any(e["type"] == "plan" for e in events)
+
+
+class TestChatEngineExecutionFlags:
+    """M3 — chat() honors disable_planner / disable_rag context flags so the
+    PlanExecutor can call back into chat() without recursive replanning."""
+
+    @pytest.fixture
+    def mock_memory(self):
+        mm = MagicMock()
+        mm.query = AsyncMock(return_value=[])
+        mm.store = AsyncMock(return_value={"id": "m1"})
+        return mm
+
+    @pytest.fixture
+    def mock_subbrain(self):
+        sb = MagicMock()
+        sb.execute_tool = AsyncMock(return_value="tool result")
+        return sb
+
+    @pytest.fixture
+    def loud_planner_loud_rag(self):
+        # Planner that would return a plan, RAG that would return chunks —
+        # the flags must prevent both from firing.
+        planner = _FakePlanner({
+            "plan_id": "plan-x",
+            "user_input": "x",
+            "tasks": [{"id": "task-1", "description": "would have planned"}],
+            "confidence": 0.9,
+            "reasoning": "",
+        })
+        rag = _FakeRAG([_FakeChunk("/doc.md", 0, "would have retrieved", 0.9)])
+        return planner, rag
+
+    def _make_engine(self, mem, sb, cfg, planner, rag):
+        return ChatEngine(
+            memory_manager=mem,
+            sub_brain_client=sb,
+            llm_config=cfg,
+            planner=planner,
+            rag_retriever=rag,
+        )
+
+    @pytest.mark.asyncio
+    async def test_chat_skips_planner_when_disable_planner_set(
+        self, mock_memory, mock_subbrain, mock_llm_config, loud_planner_loud_rag
+    ):
+        planner, rag = loud_planner_loud_rag
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, planner, rag)
+
+        plain_resp = {"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]}
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            result = await engine.chat(
+                "complex request that would normally trigger planner",
+                "sess",
+                context={"disable_planner": True},
+            )
+
+        assert result["plan"] is None
+        assert planner.calls == []  # planner never invoked
+
+    @pytest.mark.asyncio
+    async def test_chat_skips_rag_when_disable_rag_set(
+        self, mock_memory, mock_subbrain, mock_llm_config, loud_planner_loud_rag
+    ):
+        planner, rag = loud_planner_loud_rag
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, planner, rag)
+
+        plain_resp = {"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]}
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value.raise_for_status = MagicMock()
+            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+            result = await engine.chat("question about docs", "sess", context={"disable_rag": True})
+
+        assert result["rag_sources"] == []
+        assert rag.calls == []  # retriever never queried
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_honors_both_flags(
+        self, mock_memory, mock_subbrain, mock_llm_config, loud_planner_loud_rag
+    ):
+        planner, rag = loud_planner_loud_rag
+        engine = self._make_engine(mock_memory, mock_subbrain, mock_llm_config, planner, rag)
+
+        async def mock_stream(*args, **kwargs):
+            yield {"type": "content", "data": "Hi"}
+            yield {"type": "done"}
+
+        events = []
+        with patch.object(engine, "_chat_completion_stream", mock_stream):
+            async for ev in engine.chat_stream(
+                "complex multi-step request would have planned and retrieved",
+                "sess",
+                context={"disable_planner": True, "disable_rag": True},
+            ):
+                events.append(ev)
+
+        # No plan event, no rag_sources event
+        assert not any(e["type"] in ("plan", "rag_sources") for e in events)
+        assert planner.calls == []
+        assert rag.calls == []

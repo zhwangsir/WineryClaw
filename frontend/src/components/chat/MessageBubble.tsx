@@ -1,7 +1,22 @@
 import { useState } from "react";
 import { Tooltip, message } from "antd";
-import { UserOutlined, RobotOutlined, ToolOutlined, CopyOutlined, CheckOutlined, ThunderboltOutlined, DownOutlined, FileSearchOutlined, OrderedListOutlined } from "@ant-design/icons";
+import {
+  UserOutlined,
+  RobotOutlined,
+  ToolOutlined,
+  CopyOutlined,
+  CheckOutlined,
+  ThunderboltOutlined,
+  DownOutlined,
+  FileSearchOutlined,
+  OrderedListOutlined,
+  PlayCircleOutlined,
+  LoadingOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+} from "@ant-design/icons";
 import type { ChatMessage } from "../../api/types";
+import { planApi, type PlanExecutionResult } from "../../api/plan";
 import MarkdownRenderer from "../common/MarkdownRenderer";
 import StreamingText from "./StreamingText";
 import HighlightedText from "./HighlightedText";
@@ -18,6 +33,32 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
   const [copied, setCopied] = useState(false);
   const [showReasoning, setShowReasoning] = useState(true);
   const [showPlan, setShowPlan] = useState(true);
+  // Plan execution state — purely local; no need for global state since
+  // each message owns its own run.
+  const [executing, setExecuting] = useState(false);
+  const [execResult, setExecResult] = useState<PlanExecutionResult | null>(null);
+
+  const handleExecutePlan = async () => {
+    if (!msg.plan || executing) return;
+    setExecuting(true);
+    setExecResult(null);
+    try {
+      const res = await planApi.execute({ plan: msg.plan, verify: "presence" });
+      setExecResult(res);
+      if (res.ok && res.overall_success) {
+        message.success(`计划执行完成 · ${res.results?.length ?? 0} 个任务全部通过`);
+      } else if (res.ok) {
+        message.warning(`计划执行完成 · ${res.failed_task_ids?.length ?? 0} 个任务失败`);
+      } else {
+        message.error(res.error || "计划执行失败");
+      }
+    } catch (e: unknown) {
+      const msgText = e instanceof Error ? e.message : "计划执行失败";
+      message.error(msgText);
+    } finally {
+      setExecuting(false);
+    }
+  };
 
   const handleCopy = async () => {
     try {
@@ -187,6 +228,89 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                   {msg.plan.reasoning && (
                     <div style={{ marginTop: 6, fontSize: 11, color: isDark ? "#71717a" : "#737373", fontStyle: "italic" }}>
                       {msg.plan.reasoning}
+                    </div>
+                  )}
+                  {/* Execute plan button (M3) */}
+                  <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                    <button
+                      onClick={handleExecutePlan}
+                      disabled={executing}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: "3px 10px",
+                        borderRadius: 4,
+                        border: `1px solid ${isDark ? "#22c55e" : "#16a34a"}`,
+                        background: executing
+                          ? (isDark ? "rgba(34,197,94,0.10)" : "rgba(34,197,94,0.08)")
+                          : (isDark ? "rgba(34,197,94,0.15)" : "rgba(34,197,94,0.12)"),
+                        color: isDark ? "#86efac" : "#15803d",
+                        fontSize: 11,
+                        cursor: executing ? "wait" : "pointer",
+                        transition: "all 150ms",
+                      }}
+                    >
+                      {executing ? <LoadingOutlined /> : <PlayCircleOutlined />}
+                      {executing ? "执行中..." : "执行计划"}
+                    </button>
+                    {execResult && execResult.ok && (
+                      <span style={{ fontSize: 11, color: isDark ? "#a1a1aa" : "#737373" }}>
+                        {execResult.overall_success ? (
+                          <span style={{ color: isDark ? "#86efac" : "#15803d" }}>
+                            <CheckCircleOutlined /> 全部通过 · {execResult.total_attempts ?? 0} 次尝试
+                          </span>
+                        ) : (
+                          <span style={{ color: isDark ? "#fca5a5" : "#b91c1c" }}>
+                            <CloseCircleOutlined /> {execResult.failed_task_ids?.length ?? 0} 个失败
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Per-task result list (after execution) */}
+                  {execResult && execResult.ok && execResult.results && execResult.results.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        paddingTop: 6,
+                        borderTop: `1px solid ${isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+                        fontSize: 12,
+                      }}
+                    >
+                      {execResult.results.map((r) => (
+                        <div key={r.task_id} style={{ marginBottom: 6 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            {r.succeeded ? (
+                              <CheckCircleOutlined style={{ color: isDark ? "#86efac" : "#15803d" }} />
+                            ) : (
+                              <CloseCircleOutlined style={{ color: isDark ? "#fca5a5" : "#b91c1c" }} />
+                            )}
+                            <span style={{ fontWeight: 500 }}>{r.description}</span>
+                            <span style={{ fontSize: 10, opacity: 0.6 }}>
+                              · {r.attempts.length} 次尝试
+                              {r.attempts.length > 0 && r.attempts.some((a) => a.strategy === "augmented") && " · 已换策略"}
+                            </span>
+                          </div>
+                          {r.final_output && (
+                            <div
+                              style={{
+                                marginLeft: 18,
+                                marginTop: 2,
+                                fontSize: 11,
+                                color: isDark ? "#a1a1aa" : "#525252",
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-word",
+                                maxHeight: 80,
+                                overflow: "auto",
+                              }}
+                            >
+                              {r.final_output.length > 240 ? r.final_output.slice(0, 240) + "..." : r.final_output}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

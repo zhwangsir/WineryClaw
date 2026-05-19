@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from planner import Plan, Planner
+from planner import Plan, Planner, plan_from_dict
 
 
 # ---------------------------------------------------------------------------
@@ -221,3 +221,84 @@ class TestEndpointResolution:
         ep = planner._resolve_endpoint()
         assert ep["base_url"] == "http://high/v1"
         assert ep["model_id"] == "hi"
+
+
+class TestPlanFromDict:
+    """plan_from_dict — coerce wire JSON back into a Plan (used by /plan/execute)."""
+
+    def test_returns_none_for_non_dict(self) -> None:
+        assert plan_from_dict(None) is None  # type: ignore[arg-type]
+        assert plan_from_dict([]) is None  # type: ignore[arg-type]
+        assert plan_from_dict("nope") is None  # type: ignore[arg-type]
+
+    def test_returns_none_when_tasks_missing(self) -> None:
+        assert plan_from_dict({"plan_id": "p1"}) is None
+        assert plan_from_dict({"plan_id": "p1", "tasks": []}) is None
+        assert plan_from_dict({"plan_id": "p1", "tasks": "not-a-list"}) is None
+
+    def test_round_trip_preserves_full_shape(self) -> None:
+        original = Plan(
+            plan_id="plan-xyz",
+            user_input="do X then Y",
+            tasks=[],
+            confidence=0.0,
+            reasoning="",
+        )
+        # Cannot test empty-tasks round trip (None returned); build a real one
+        data = {
+            "plan_id": "plan-xyz",
+            "user_input": "do X then Y",
+            "tasks": [
+                {"id": "task-1", "description": "step A", "requires_tool": True,
+                 "tool_hint": "read_file", "expected_output": "content"},
+                {"id": "task-2", "description": "step B", "requires_tool": False},
+            ],
+            "confidence": 0.77,
+            "reasoning": "two-step",
+        }
+        plan = plan_from_dict(data)
+        assert plan is not None
+        assert plan.plan_id == "plan-xyz"
+        assert plan.user_input == "do X then Y"
+        assert plan.confidence == 0.77
+        assert plan.reasoning == "two-step"
+        assert len(plan.tasks) == 2
+        assert plan.tasks[0].id == "task-1"
+        assert plan.tasks[0].requires_tool is True
+        assert plan.tasks[0].tool_hint == "read_file"
+        assert plan.tasks[1].requires_tool is False
+
+    def test_drops_invalid_task_entries(self) -> None:
+        data = {
+            "tasks": [
+                {"description": "valid"},
+                "not-a-dict",
+                {"description": ""},
+                {"description": "   "},
+                {"description": "also valid"},
+            ]
+        }
+        plan = plan_from_dict(data)
+        assert plan is not None
+        assert [t.description for t in plan.tasks] == ["valid", "also valid"]
+
+    def test_clamps_confidence(self) -> None:
+        plan = plan_from_dict({
+            "tasks": [{"description": "x"}],
+            "confidence": 9.9,
+        })
+        assert plan is not None
+        assert plan.confidence == 1.0
+
+    def test_synthesizes_task_id_when_missing(self) -> None:
+        plan = plan_from_dict({
+            "tasks": [{"description": "no id"}, {"description": "also no id"}]
+        })
+        assert plan is not None
+        assert plan.tasks[0].id == "task-1"
+        assert plan.tasks[1].id == "task-2"
+
+    def test_defaults_plan_id_when_missing(self) -> None:
+        plan = plan_from_dict({"tasks": [{"description": "x"}]})
+        assert plan is not None
+        assert plan.plan_id == "plan-adhoc"

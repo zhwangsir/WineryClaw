@@ -23,9 +23,15 @@ vi.mock("antd", async () => {
   const actual = await vi.importActual<typeof import("antd")>("antd");
   return {
     ...actual,
-    message: { error: vi.fn(), success: vi.fn() },
+    message: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
   };
 });
+
+// Plan execution API mocked for the "execute plan" button tests
+vi.mock("../../api/plan", () => ({
+  planApi: { execute: vi.fn() },
+}));
+import { planApi } from "../../api/plan";
 
 describe("MessageBubble", () => {
   it("renders user message", () => {
@@ -209,6 +215,145 @@ describe("MessageBubble", () => {
       />
     );
     expect(screen.queryByText(/规划 \d+ 步任务/)).not.toBeInTheDocument();
+  });
+
+  it("renders the execute-plan button when plan is present", () => {
+    render(
+      <MessageBubble
+        msg={{
+          id: "1",
+          role: "assistant",
+          content: "Working",
+          plan: {
+            plan_id: "p1",
+            user_input: "x",
+            confidence: 0.5,
+            reasoning: "",
+            tasks: [{ id: "task-1", description: "step one" }],
+          },
+          timestamp: Date.now(),
+        }}
+        isDark={false}
+      />
+    );
+    expect(screen.getByText("执行计划")).toBeInTheDocument();
+  });
+
+  it("calls planApi.execute when the execute button is clicked", async () => {
+    vi.mocked(planApi.execute).mockResolvedValue({
+      ok: true,
+      overall_success: true,
+      total_attempts: 1,
+      failed_task_ids: [],
+      results: [
+        {
+          task_id: "task-1",
+          description: "step one",
+          final_output: "done",
+          succeeded: true,
+          attempts: [
+            {
+              attempt_idx: 1,
+              output: "done",
+              verification_passed: true,
+              verification_reason: "ok",
+              strategy: "default",
+              duration_ms: 50,
+            },
+          ],
+        },
+      ],
+    });
+
+    const plan = {
+      plan_id: "p1",
+      user_input: "x",
+      confidence: 0.5,
+      reasoning: "",
+      tasks: [{ id: "task-1", description: "step one" }],
+    };
+
+    render(
+      <MessageBubble
+        msg={{ id: "1", role: "assistant", content: "Hi", plan, timestamp: Date.now() }}
+        isDark={false}
+      />
+    );
+
+    const button = screen.getByText("执行计划");
+    fireEvent.click(button);
+
+    await screen.findByText(/全部通过/);
+    expect(planApi.execute).toHaveBeenCalledWith({ plan, verify: "presence" });
+    expect(screen.getByText("done")).toBeInTheDocument();
+  });
+
+  it("surfaces failed task summary when execution partially fails", async () => {
+    vi.mocked(planApi.execute).mockResolvedValue({
+      ok: true,
+      overall_success: false,
+      total_attempts: 6,
+      failed_task_ids: ["task-2"],
+      results: [
+        {
+          task_id: "task-1",
+          description: "step one",
+          final_output: "ok",
+          succeeded: true,
+          attempts: [
+            {
+              attempt_idx: 1,
+              output: "ok",
+              verification_passed: true,
+              verification_reason: "ok",
+              strategy: "default",
+              duration_ms: 10,
+            },
+          ],
+        },
+        {
+          task_id: "task-2",
+          description: "broken step",
+          final_output: "",
+          succeeded: false,
+          attempts: [
+            {
+              attempt_idx: 1,
+              output: "",
+              verification_passed: false,
+              verification_reason: "empty",
+              strategy: "default",
+              duration_ms: 5,
+            },
+          ],
+        },
+      ],
+    });
+
+    render(
+      <MessageBubble
+        msg={{
+          id: "1",
+          role: "assistant",
+          content: "Hi",
+          plan: {
+            plan_id: "p1",
+            user_input: "x",
+            confidence: 0.5,
+            reasoning: "",
+            tasks: [
+              { id: "task-1", description: "step one" },
+              { id: "task-2", description: "broken step" },
+            ],
+          },
+          timestamp: Date.now(),
+        }}
+        isDark={false}
+      />
+    );
+
+    fireEvent.click(screen.getByText("执行计划"));
+    await screen.findByText(/1 个失败/);
   });
 
   it("collapses plan content when toggle is clicked", () => {

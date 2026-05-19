@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（M2 完成 — Planner 任务原子拆解,chat 复杂请求时自动出「N 步任务清单」+ 前端折叠面板）
+> **最后更新**：2026-05-19（M3 完成 — PlanExecutor 验证+重试,新增 `/brain/plan/execute`,前端「执行计划」按钮 + 逐 task 结果展示）
 
 ---
 
@@ -278,7 +278,74 @@ frontend    vitest run                                    → 116 files / 1179 p
 - ❌ 把 plan 当 cron / workflow 的输入做 multi-agent 编排(M4+)
 - ❌ plan 历史持久化 / 用户编辑 plan / 拖拽重排(超 M-roadmap 范围)
 
-### 6.7 自学习闭环的物理路径（已全线打通）
+### 6.7 M3 — PlanExecutor 验证+重试（本轮）
+
+把 M2 的 plan 从「只是文字提示」升级成「真正可执行 + 验证 + 重试」的回路。新增独立 `PlanExecutor` 模块,通过依赖注入收 `ChatEngine.chat()` 作为 `execute_fn`,加 2 个 `disable_planner`/`disable_rag` context 旗标防止递归。
+
+**新增 `planner/executor.py`(346 行)**:
+
+数据形状:
+- `TaskAttempt` —— 单次尝试(attempt_idx / output / verification_passed / verification_reason / strategy / duration_ms)
+- `TaskResult` —— 一个 task 的全部尝试 + 最终输出 + succeeded
+- `ExecutionResult` —— 全局 plan_id / results / total_attempts / overall_success / failed_task_ids
+
+接口:
+- `presence_verifier(task, output)` —— 默认 verifier:非空 + 长度 ≥ `MIN_OUTPUT_LEN=5`
+- `LLMGradeVerifier(call_llm)` —— LLM 语义判定 verifier(opt-in),解析 `{pass, reason}` JSON,**fail-safe pass-through**:LLM 异常 / 解析失败时返回 pass=True(宁可放过也别误杀,真正的安全门由 caller 串联)
+- `PlanExecutor(execute_fn, verifier=None, max_retries=5, strategy_switch_at=3)`:
+  - `run(plan, session_id, agent_id) -> ExecutionResult` —— 串行跑 tasks,失败任务不阻塞后续任务,prior_outputs 截断 `[-3:]` × `MAX_PRIOR_OUTPUT_CHARS=200` 后塞进下个 task 的 prompt
+  - 内部 `_run_task` 每个 task 最多 5 次,前 3 次默认 prompt,后 2 次 "augmented" 把失败原因塞进 prompt + "请换一种方式重新作答"
+  - `execute_fn` 抛异常 → 记录为失败 attempt 继续重试,不抛到外层
+- `plan_from_dict(dict)` —— 从 wire JSON 反序列化 Plan(`/plan/execute` 接收 client 传来的现有 plan 时用),drop 空 description / 非 dict 项,confidence clamp [0,1]
+
+**ChatEngine 新增 2 个 context 旗标**:
+
+`chat()` 和 `chat_stream()` 都接 `context.disable_planner` / `context.disable_rag`(默认 False)。PlanExecutor 调每个 task 时传 `{disable_planner: True, disable_rag: True, plan_execution: True}`,避免无限递归 plan-Plan-Plan 套娃,也避免 RAG 在每个 task 上无谓重检索(RAG 已经在最初 planner 调用时用过)。
+
+**新增 endpoint `POST /plan/execute`** (main_brain.py):
+
+接收任意一种:
+- `{user_input: "..."}` —— 走 planner → 拿 Plan → run
+- `{plan: {...}}` —— 直接用客户端传的 Plan(从前一次 chat 的 `plan` 字段回传)
+
+可选:`session_id` / `agent_id` / `verify: "presence"|"llm"`(默认 presence)。
+
+返回 `ExecutionResult.to_dict()` + `ok`/`plan`(回显)。Planner 拒绝拆解时返回 `{ok: true, skipped: true, reason}` 而非伪造单 task 计划——诚实优于 fabrication。
+
+**前端**:
+
+- `frontend/src/api/plan.ts` —— 完整 `PlanTaskAttempt` / `PlanTaskResult` / `PlanExecutionResult` 类型 + `planApi.execute(params)`
+- `frontend/src/components/chat/MessageBubble.tsx`:
+  - plan 折叠面板底部加绿色「▶ 执行计划」按钮
+  - 本地 state `executing` / `execResult`,无需碰全局 store——每条 message 独享一次运行
+  - 执行完显示「✓ 全部通过 · N 次尝试」或「✗ M 个失败」chip
+  - 逐 task 结果列表:✓/✗ 图标 + task 描述 + attempts 次数 + 若涉及策略切换则显示「已换策略」+ final_output 最多 240 字符截断
+
+**测试**:
+
+- `tests/test_plan_executor.py` 新增 **25 用例**:5 个 presence_verifier 边界 + 3 个 happy path(单 task / 多 task / 前序输出注入)+ 5 个 retry 行为(重试到成功 / 策略阈值切换 / augmented prompt 内容 / 全失败 / 失败不阻塞后续)+ 5 个 robustness(execute 异常 / 旗标透传 / 空 plan / 自定义 verifier / tool_hint 出现在 prompt)+ 5 个 LLMGradeVerifier(空输出短路 / 清 JSON / fenced JSON / LLM 异常 pass-through / 不可解析 pass-through)+ 2 个序列化
+- `tests/test_planner.py` 新增 7 个 `plan_from_dict` 用例:非 dict / 空 tasks / 完整 round-trip / 过滤无效 task / confidence clamp / 自动生成 task_id / 默认 plan_id
+- `tests/test_chat_engine.py` 新增 3 个 `TestChatEngineExecutionFlags`:disable_planner / disable_rag / 流式同时 honor 两旗标
+- `frontend/src/api/plan.test.ts` 新增 3 用例:user_input 调用 / plan 调用 / 响应直通
+- `frontend/src/components/chat/MessageBubble.test.tsx` 新增 3 用例:按钮渲染 / 点击执行 + 结果展示 / 部分失败时显示失败摘要
+
+**运行验收**:
+
+```
+main-brain  pytest test_planner.py + test_plan_executor.py + test_chat_engine.py  → 77 pass
+main-brain  pytest tests/(除 watchdog 缺失)                                       → 170 pass
+frontend    tsc --noEmit                                                         → 0 errors
+frontend    vitest run                                                           → 117 files / 1185 pass / 0 fail
+```
+
+**故意未做(范围之外)**:
+
+- ❌ 流式执行进度回写前端(SSE per-attempt 事件)——一次性同步返回已足够展示概念,流式是 M3.5 优化项
+- ❌ 客户端可编辑 plan 后重新执行——客户端只能"执行已生成的 plan",编辑是 M4+ UX 工作
+- ❌ Tool-call 在每个 task 内独立执行——目前每个 task 通过 chat() 跑,chat() 自己的 tool-call 循环复用了,但 task 之间不共享 tool state(刻意保持 task 独立性,避免 task 1 的副作用影响 task 2 的判定)
+- ❌ Plan 历史持久化——`/plan/execute` 是无状态的,每次调用独立
+
+### 6.8 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -327,8 +394,10 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 
 | 优先 | 任务 | 说明 |
 |---|---|---|
-| 🔥 | **M3 Planner Verify+Retry** | 把 M2 的 plan 真正跑起来:逐 task 执行 → 验证产出 → 失败最多重试 5 次,第 3 次后换策略(LLM 调用变长 prompt / 换工具)。 |
+| 🔥 | **M4 Multi-LLM 路由 + MCP server** | 当前只有本地 LM Studio 一个端点,加多家云端提供商(OpenAI 兼容协议优先,其他按需);同时把 webrain 自己作为 MCP server 暴露,让外部 MCP 客户端能复用 webrain 的 memory/RAG/skill。 |
+| 🔥 | M3.5 PlanExecutor 流式进度 | 当前 `/plan/execute` 是同步返回。后续做 SSE,每个 attempt 完成实时推送给前端,UI 显示「task 2/5 第 3 次尝试中...」。 |
 | 🔥 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
+| ✅ | ~~M3 Planner Verify+Retry~~ | 完成于 2026-05-19(§6.7)。 |
 | ✅ | ~~M2 Planner 任务拆解~~ | 完成于 2026-05-19(§6.6)。 |
 | ✅ | ~~M1 RAG 接入 chat~~ | 完成于 2026-05-19(§6.5)。 |
 | ✅ | ~~Phase 1 RAG 基座~~ | retriever + watcher + 8 endpoints + 前端 4 区页面已上线(L1–L4)。 |

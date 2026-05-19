@@ -685,6 +685,86 @@ async def reasoning_decompose(request: Dict[str, Any]):
     return result
 
 
+# ========== Planner Execute API (M3) ==========
+
+
+@app.post("/plan/execute")
+async def plan_execute(request: Dict[str, Any]):
+    """Run a plan task-by-task with verify + retry.
+
+    Body accepts EITHER:
+      - {"user_input": "..."} — generate a plan from the input, then run it
+      - {"plan": {...}}       — run an explicit plan (e.g. one returned by
+                                a previous /chat call's `plan` field)
+
+    Optional fields:
+      - "session_id": str (default: "session-plan-exec")
+      - "agent_id":   str (default: "agent-default")
+      - "verify":     "presence" (default) | "llm"
+
+    Returns ExecutionResult.to_dict() — overall_success / failed_task_ids /
+    per-task attempts with verification verdict and timing.
+    """
+    from planner import LLMGradeVerifier, PlanExecutor, plan_from_dict, presence_verifier
+
+    planner = _state.get("planner")
+    chat_engine = _state.get("chat")
+    if planner is None or chat_engine is None:
+        return {"ok": False, "error": "planner/chat not initialized"}
+
+    # 1) Resolve the Plan to execute
+    plan = None
+    if "plan" in request and isinstance(request["plan"], dict):
+        plan = plan_from_dict(request["plan"])
+        if plan is None:
+            return {"ok": False, "error": "supplied plan has no usable tasks"}
+    else:
+        user_input = str(request.get("user_input", "")).strip()
+        if not user_input:
+            return {"ok": False, "error": "user_input or plan required"}
+        plan = await planner.plan(user_input)
+        if plan is None:
+            # Input was trivial or planner declined — surface that honestly,
+            # don't fabricate a single-task plan.
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "input is too trivial to plan, or planner unavailable",
+            }
+
+    # 2) Pick verifier strategy
+    verify_mode = str(request.get("verify", "presence")).lower()
+    if verify_mode == "llm":
+        async def _llm_grade(messages):
+            # Reuse the chat engine's chat-completion path so we share the
+            # same router / endpoint pool / auth handling.
+            ep = chat_engine.router.get_primary()
+            if not ep:
+                raise RuntimeError("no LLM endpoint for grader")
+            result = await chat_engine._chat_completion(messages, max_tokens=512)
+            return result["choices"][0]["message"].get("content", "")
+
+        verifier = LLMGradeVerifier(_llm_grade)
+    else:
+        verifier = presence_verifier
+
+    # 3) Wrap chat_engine.chat() as the executor's execute_fn
+    async def _execute(user_input, session_id, agent_id, context=None):
+        result = await chat_engine.chat(user_input, session_id, agent_id, context)
+        return result.get("reply", "")
+
+    executor = PlanExecutor(_execute, verifier=verifier)
+
+    session_id = str(request.get("session_id") or "session-plan-exec")
+    agent_id = str(request.get("agent_id") or "agent-default")
+    result = await executor.run(plan, session_id, agent_id)
+
+    payload = result.to_dict()
+    payload["ok"] = True
+    payload["plan"] = plan.to_dict()  # echo the plan back for client convenience
+    return payload
+
+
 # ========== Evolution API ==========
 @app.post("/evolution/run")
 async def evolution_run(request: Dict[str, Any]):
