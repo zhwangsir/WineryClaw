@@ -96,3 +96,41 @@ jobs:
         run: pnpm test
         env:
           CI: true
+
+  # ---------------------------------------------------------------------
+  # E2E boot smoke (M-Smoke-1, 2026-05-20).
+  # Spawns real main-brain (FastAPI/uvicorn) + sub-brain (Fastify/tsx) as
+  # subprocesses, talks through the /brain/* proxy, asserts the wiring
+  # invariants that unit tests can't cover (the bug class that the
+  # 2026-05-20 user trial exposed). ~2 min total.
+  #
+  # Runs as a separate job so a smoke regression is visible in CI as
+  # "smoke red, units green" — that's diagnostic by itself.
+  # ---------------------------------------------------------------------
+  e2e-boot-smoke:
+    runs-on: ubuntu-latest
+    needs: [python-check, typescript-check]  # don't smoke if basics fail
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - name: Install main-brain deps (creates venv at expected path)
+        run: |
+          cd sub-brain/main-brain
+          python3 -m venv venv
+          ./venv/bin/pip install --upgrade pip
+          ./venv/bin/pip install -r requirements.txt
+      - name: Install sub-brain deps
+        run: cd sub-brain && pnpm install
+      - name: Run e2e boot smoke
+        run: |
+          cd sub-brain/main-brain
+          ./venv/bin/python -m pytest -m smoke tests/smoke/ -s --no-cov --tb=short
+        timeout-minutes: 5

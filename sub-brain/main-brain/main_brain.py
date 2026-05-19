@@ -146,6 +146,25 @@ async def lifespan(app: FastAPI) -> None:
     if os.environ.get("WEBRAIN_CONFLICT_DETECTOR_DISABLED") != "1":
         from memory.conflict_detector import ConflictDetector
 
+        # LLM timeout for the conflict judge. Default 20s for production
+        # (cold model load + network jitter). Smoke / CI overrides to 2-3s
+        # via WEBRAIN_CONFLICT_LLM_TIMEOUT_S so unreachable endpoints fail
+        # fast rather than blocking every L3 store for 20s.
+        try:
+            _conflict_llm_timeout = float(
+                os.environ.get("WEBRAIN_CONFLICT_LLM_TIMEOUT_S", "20.0")
+            )
+        except ValueError:
+            _conflict_llm_timeout = 20.0
+
+        # httpx is normally imported lazily inside the helpers below; the
+        # detector caller runs outside those scopes so we import it here
+        # explicitly. Without this, the closure raised
+        # `name 'httpx' is not defined` and silently returned empty, which
+        # was caught by conflict_detector's pass-through but added a
+        # log warning per L3 store. Caught in user-trial smoke run.
+        import httpx as _httpx
+
         # Build a thin LLM caller that shares the configured llm_config. Falls
         # back to a chat-completion against the highest-priority endpoint.
         async def _conflict_llm_caller(messages):
@@ -165,7 +184,7 @@ async def lifespan(app: FastAPI) -> None:
             headers = {"Content-Type": "application/json"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with _httpx.AsyncClient(timeout=_conflict_llm_timeout) as client:
                 resp = await client.post(
                     f"{base_url}/chat/completions",
                     json={
@@ -181,7 +200,10 @@ async def lifespan(app: FastAPI) -> None:
 
         _state["conflict_detector"] = ConflictDetector(_conflict_llm_caller)
         _state["memory"].set_conflict_detector(_state["conflict_detector"])
-        logger.info("L3 conflict detector wired (M-Memory-1)")
+        logger.info(
+            "L3 conflict detector wired (M-Memory-1, LLM timeout=%ss)",
+            _conflict_llm_timeout,
+        )
 
     # RAG retriever — lazy embedder load so cold start isn't blocked.
     # Loads SentenceTransformer on first index/query call only.
