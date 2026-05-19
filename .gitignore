@@ -39,8 +39,12 @@ pnpm-debug.log*
 
 # Coverage & test
 .coverage
+.coverage.*
+coverage/
 htmlcov/
 .nyc_output/
+test-results/
+playwright-report/
 
 # Runtime data
 data/**/*.db
