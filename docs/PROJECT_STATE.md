@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（M6a 完成 — Skill 执行从 `execSync(node -e ...)` 切到 worker_threads,消除 shell injection 通道 + 可终止 timeout + 内存上限;M6b 桌面壳推迟独立轮次）
+> **最后更新**：2026-05-20（M4b.1 完成 — MCP bearer token 鉴权 + read/write scope 二分 + 3 个 write 工具 `memory_store` / `wiki_create` / `rag_index_file` 上线）
 
 ---
 
@@ -747,7 +747,111 @@ sub-brain  vitest run                   → 35 files / 387 pass(+20)
 
 诚实估计 2-3 周独立工程,与当前路径不同。Roadmap **M6 收官保持 M6a + M6b 两半,M6b 单独排期**。
 
-### 6.12 自学习闭环的物理路径（已全线打通）
+### 6.12 M4b.1 — MCP 鉴权 + write 工具上线（本轮）
+
+M4b 暴露的 MCP 端点没有鉴权,任何能访问 sub-brain 的客户端都能调用 6 个 read-only 工具。本轮加 bearer token + read/write scope 二分,**并把之前不敢开的 3 个 write 工具上线**。
+
+**Token 解析策略(`mcp/auth.py`,72 行)**:
+
+1. `WEBRAIN_MCP_TOKEN` 环境变量(最高优先级,管理员覆盖)
+2. `~/.webrain/mcp_token` 持久化文件
+3. 都没有 → 用 `secrets.token_urlsafe(32)`(256-bit)生成并持久化,文件权限 `0o600`
+
+环境变量不会写文件,避免管理员临时覆盖被偷偷保存。Jupyter / Grafana 风格的初始 admin token 模式。
+
+辅助函数:
+- `extract_bearer(header)` —— 大小写不敏感的 `Bearer <token>` 解析,return None 处理所有缺失/畸形
+- `verify(presented, expected)` —— `secrets.compare_digest` 常量时间比较,防止 token 猜测 time-channel 泄漏
+
+**Scope 模型**:
+
+`ToolSpec.scope: Literal["read", "write"]`,默认 `"read"`。
+
+- **read** tools(6 个原有):开放访问,任何客户端都能调
+- **write** tools(3 个新增):需要 `Authorization: Bearer <token>` 头
+
+`MCPServer.__init__(state, expected_token=None)` —— `expected_token=None` 时 write 工具也开放(dev/test 模式)。`tools/call` 派发时检查 scope + 验证 token,失败抛 `MCPError(UNAUTHORIZED=-32001, ...)`。
+
+**新 write 工具**:
+
+| 工具 | 参数 | 后端 |
+|---|---|---|
+| `webrain_memory_store` | `content`, `level?`, `source?`, `session_id?` | `MemoryManager.store()` |
+| `webrain_wiki_create` | `title`, `content`, `tags?` | `WikiEngine.create_note()` |
+| `webrain_rag_index_file` | `path` | `RAGRetriever.index_file()` |
+
+每个 handler 内部:
+- `_require_str` 校验非空字符串 → `INVALID_PARAMS`
+- 子系统缺失 → `INTERNAL_ERROR` 显式提示
+- 业务异常包成 `INTERNAL_ERROR` + 类型名 + 原 message,不让 raw Python exception 渗出去
+
+**`main_brain.py` 改动**:
+
+- lifespan 调 `resolve_token(data_dir)` 加进 `_state["mcp_token"]`
+- `/mcp/jsonrpc` 接 FastAPI `Request`,从 `authorization` header 提 bearer,passthrough 给 `MCPServer.handle(payload, bearer_token=...)`
+- `/mcp/info` 返回 `auth_required_for_write: true` + `token_configured: bool` + 每个工具的 `scope`,**不返回 token 本身**(/mcp/info 本身没鉴权,客户端通过 env / file 读 token)
+
+**Stdio bridge 改动(`tools/mcp_stdio_bridge.py`)**:
+
+- 新增 `--token` CLI 参数 + `WEBRAIN_MCP_TOKEN` 环境变量
+- `_post_json(url, body, timeout, token=None)` 在 token 非空时加 `Authorization: Bearer <token>` header
+- read 工具也带 header(server 端忽略),所以 bridge 无差别加 header 安全
+
+**前端改动**:
+
+- `frontend/src/api/mcp.ts` `MCPSelfServerInfo` 新增 `auth_required_for_write`/`token_configured`,`MCPExposedToolSummary` 新增 `scope`
+- `frontend/src/components/settings/MCPInfoPanel.tsx`:
+  - 新增「鉴权状态」card 段,显示 `🔒 write 工具需要 token` / `🔓 write 工具开放(未配置 token)` + `已配置 token` 绿 chip
+  - Tools table 新增 `scope` 列,write 工具用 🔒 黄 tag,read 用灰 tag
+  - Stdio bridge snippet 在 `authRequired` 时自动加 `export WEBRAIN_MCP_TOKEN="<your-token-here>"` 提示行
+  - 移除之前误导性的「v1 仅暴露只读工具」黄色 Alert
+
+**测试**:
+
+- `tests/test_mcp_auth.py`(26 用例):
+  - 6 个 `extract_bearer`(缺失 / 非 Bearer / 空 token / well-formed / 大小写 / trim)
+  - 5 个 `verify`(匹配 / 不匹配 / 长度不同 / 空 presented / 空 expected 一律拒)
+  - 5 个 `resolve_token`(env 优先 / file fallback / 自动生成 + 0o600 / 幂等 / 空白 env 视作未设)
+  - 6 个 scope gating(read 开放 / write 无 bearer 拒 / write 错 bearer 拒 / write 正确 bearer 通 / 参数透传 / 错 level 拒)
+  - 1 个 `expected_token=None` 全开放(dev 模式)
+  - 3 个 wiki_create + rag_index_file dispatch
+- 前端 `MCPInfoPanel.test.tsx` 新增 4 用例:auth 状态显示 / 未配置 token 显示 / scope 列 write tag / tool count 含 write 数
+
+**运行验收**:
+
+```
+main-brain  pytest test_mcp_auth.py + test_mcp_server.py + test_mcp_stdio_bridge.py  → 67 pass
+main-brain  pytest tests/(除 watchdog dep)                                            → 262 pass(+26)
+frontend    tsc --noEmit                                                              → 0 errors
+frontend    vitest run                                                                → 120 files / 1204 pass(+3)
+```
+
+**用户操作流**:
+
+1. 第一次启动 webrain → main_brain log 打印 `MCP token generated and persisted to ~/.webrain/mcp_token`
+2. 读取该文件拿到 token(或自己设 `WEBRAIN_MCP_TOKEN` env)
+3. 外部 MCP 客户端配 `export WEBRAIN_MCP_TOKEN=<token>` + spawn `mcp_stdio_bridge.py` 子进程
+4. read 工具(memory_query / rag_query 等)无 token 也能调
+5. write 工具(memory_store / wiki_create / rag_index_file)只有带正确 token 才能调,缺 / 错都返回 -32001
+
+**安全前后对比**:
+
+| 攻击向量 | 之前(M4b) | 之后(M4b.1) |
+|---|---|---|
+| 内网攻击者发现 sub-brain | 能查全部 memory / RAG / wiki / KG | 只能读,不能写 |
+| 内网攻击者拿到 token | n/a | 完全访问(token 是 256-bit 随机,猜测不可行) |
+| Time-channel attack 猜 token | 朴素 `==` 可能泄漏长度 | `compare_digest` 常量时间 |
+| Token 文件被读 | n/a | `0o600` 仅当前用户可读 |
+
+**故意未做(M4b.2 follow-up)**:
+
+- ❌ Token 轮换 / 多 token / 按客户端发 token —— 单 token 满足初版
+- ❌ Per-tool 更细粒度 scope —— read/write 二分够用
+- ❌ Audit log —— 哪个 token 在何时调了哪个 write 工具,需要 持久化设施
+- ❌ `WEBRAIN_MCP_REQUIRE_AUTH=1` 强制所有 read 也要 token —— 保留低摩擦默认
+- ❌ TLS —— 由部署层(reverse proxy)解决
+
+### 6.13 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -799,10 +903,11 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 | 🔥 | **M6b 桌面壳(Tauri)** | 把 webrain 打包成桌面应用,自带 sub-brain/main-brain 启动。Rust 工具链 + venv 嵌入 + 跨平台签名,独立 2-3 周。Roadmap 最后一块。 |
 | 🔥 | M6.1 Skill FS/网络沙箱 | worker_threads 解决了 shell injection,但 skill 仍可 `require("fs")` 读宿主文件。容器或 isolated-vm 二选一。 |
 | 🔥 | M5.1 Channel 高级控制 | per-channel agent_id / 关键词过滤 / 时段限制 / 黑白名单 / 回复延迟模拟。 |
-| 🔥 | M4b.1 MCP 鉴权 + write 工具 | bearer token + 白名单。鉴权落地后开放 `memory_store` / `wiki_create` / `rag_index_file` 等 write 类工具。 |
+| 🔥 | M4b.2 MCP audit log | 持久化「谁(token)何时调了哪个 write 工具」,前端展示最近 invocation 记录。 |
 | 🔥 | M4a.1 流式 failover | 当前流路径仍用 `get_primary()`,首 chunk 之前若失败需要 failover。需要 stream 启动失败检测 + endpoint 切换。 |
 | 🔥 | M3.5 PlanExecutor 流式进度 | 当前 `/plan/execute` 是同步返回。后续做 SSE,每个 attempt 完成实时推送给前端,UI 显示「task 2/5 第 3 次尝试中...」。 |
 | 📦 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
+| ✅ | ~~M4b.1 MCP 鉴权 + write 工具~~ | 完成于 2026-05-20(§6.12)。bearer token + 3 个 write 工具上线。 |
 | ✅ | ~~M6a Skill 执行隔离~~ | 完成于 2026-05-19(§6.11)。worker_threads + spawn+stdin 替换 shell-injection 老路径。 |
 | ✅ | ~~M5 Channel inbound → chat 自动回复~~ | 完成于 2026-05-19(§6.10)。 |
 | ✅ | ~~M4b MCP server 暴露~~ | 完成于 2026-05-19(§6.9)。 |

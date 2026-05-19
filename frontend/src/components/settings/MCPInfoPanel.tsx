@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { Card, Table, Tag, Typography, Empty, message, Alert, Space, Button } from "antd";
-import { ApiOutlined, CopyOutlined } from "@ant-design/icons";
+import { ApiOutlined, CopyOutlined, LockOutlined, UnlockOutlined } from "@ant-design/icons";
 import { mcpApi, type MCPSelfServerInfo, type MCPExposedToolSummary } from "../../api/mcp";
 
 const { Paragraph, Text } = Typography;
@@ -86,7 +86,17 @@ export default function MCPInfoPanel() {
   }
 
   const mcpUrl = resolveMcpUrl();
-  const bridgeSnippet = `# Stdio bridge for MCP clients that spawn subprocesses
+  const authRequired = !!info.auth_required_for_write;
+  const tokenConfigured = !!info.token_configured;
+  const writeToolCount = info.tools.filter((t) => t.scope === "write").length;
+  const bridgeSnippet = authRequired
+    ? `# Stdio bridge for MCP clients that spawn subprocesses
+# Set WEBRAIN_MCP_TOKEN env var first (read it from ~/.webrain/mcp_token
+# after first launch, or set your own WEBRAIN_MCP_TOKEN before startup).
+export WEBRAIN_MCP_TOKEN="<your-token-here>"
+python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
+    --url ${mcpUrl}`
+    : `# Stdio bridge for MCP clients that spawn subprocesses
 python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
     --url ${mcpUrl}`;
 
@@ -118,8 +128,44 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
       <CopyableSnippet label="HTTP 端点 (JSON-RPC 2.0)" code={mcpUrl} />
       <CopyableSnippet label="Stdio bridge 命令" code={bridgeSnippet} />
 
+      {/* M4b.1 — authentication status */}
+      <div
+        style={{
+          marginTop: 16,
+          padding: "12px 16px",
+          borderRadius: 8,
+          border: "1px solid var(--c-border)",
+          background: "var(--c-bg-2, #f5f5f5)",
+        }}
+      >
+        <Space direction="vertical" size={4} style={{ width: "100%" }}>
+          <Space>
+            <Text strong>鉴权状态</Text>
+            {authRequired ? (
+              <Tag icon={<LockOutlined />} color="warning">
+                write 工具需要 token
+              </Tag>
+            ) : (
+              <Tag icon={<UnlockOutlined />} color="default">
+                write 工具开放(未配置 token)
+              </Tag>
+            )}
+            {tokenConfigured && (
+              <Tag color="success">已配置 token</Tag>
+            )}
+          </Space>
+          <Text style={{ fontSize: 12, color: "var(--c-text-3)" }}>
+            Token 通过 <Text code>WEBRAIN_MCP_TOKEN</Text> 环境变量 或 <Text code>~/.webrain/mcp_token</Text> 文件
+            提供 / 自动生成。read 类工具(query / search / stats)不需要 token,write 类工具(memory_store /
+            wiki_create / rag_index_file)需要 <Text code>Authorization: Bearer &lt;token&gt;</Text> 头。
+          </Text>
+        </Space>
+      </div>
+
       <div style={{ marginTop: 24 }}>
-        <Text strong>暴露的工具 ({info.tool_count}):</Text>
+        <Text strong>
+          暴露的工具 ({info.tool_count}{writeToolCount > 0 && ` · ${writeToolCount} 个 write`}):
+        </Text>
         <Table<MCPExposedToolSummary>
           dataSource={info.tools}
           rowKey="name"
@@ -134,6 +180,17 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               render: (n: string) => <Text code style={{ fontSize: 12 }}>{n}</Text>,
             },
             {
+              title: "scope",
+              dataIndex: "scope",
+              width: 80,
+              render: (s: string | undefined) =>
+                s === "write" ? (
+                  <Tag icon={<LockOutlined />} color="warning">write</Tag>
+                ) : (
+                  <Tag color="default">read</Tag>
+                ),
+            },
+            {
               title: "描述",
               dataIndex: "description",
               render: (d: string) => <span style={{ fontSize: 12 }}>{d}</span>,
@@ -141,14 +198,6 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
           ]}
         />
       </div>
-
-      <Alert
-        type="warning"
-        showIcon
-        style={{ marginTop: 16 }}
-        message="v1 仅暴露只读工具"
-        description="当前未对 MCP endpoint 做认证,只暴露 query/search 类只读工具。后续加 token 鉴权后再开放 write 类工具。"
-      />
     </Card>
   );
 }

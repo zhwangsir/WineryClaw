@@ -21,13 +21,16 @@ import { mcpApi } from "../../api/mcp";
 
 const baseInfo = {
   ok: true,
-  server: { name: "webrain-mcp", version: "0.1.0" },
+  server: { name: "webrain-mcp", version: "0.1.1" },
   transport: "json-rpc-2.0-http",
   endpoint: "/mcp/jsonrpc",
-  tool_count: 2,
+  auth_required_for_write: true,
+  token_configured: true,
+  tool_count: 3,
   tools: [
-    { name: "webrain_memory_query", description: "Semantic search across memory layers." },
-    { name: "webrain_rag_query", description: "Retrieve top-k document chunks." },
+    { name: "webrain_memory_query", description: "Semantic search across memory layers.", scope: "read" as const },
+    { name: "webrain_rag_query", description: "Retrieve top-k document chunks.", scope: "read" as const },
+    { name: "webrain_memory_store", description: "Append a new memory entry. Requires authentication.", scope: "write" as const },
   ],
 };
 
@@ -39,7 +42,7 @@ describe("MCPInfoPanel", () => {
   it("shows server identity tags", async () => {
     vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
     render(<MCPInfoPanel />);
-    expect(await screen.findByText("webrain-mcp v0.1.0")).toBeInTheDocument();
+    expect(await screen.findByText("webrain-mcp v0.1.1")).toBeInTheDocument();
     expect(screen.getByText("json-rpc-2.0-http")).toBeInTheDocument();
   });
 
@@ -56,16 +59,48 @@ describe("MCPInfoPanel", () => {
     vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
     const { container } = render(<MCPInfoPanel />);
     // Wait for the panel to fully render before scanning the DOM
-    await screen.findByText("webrain-mcp v0.1.0");
+    await screen.findByText("webrain-mcp v0.1.1");
     // URL ends up inside <pre>, which findByText struggles with — scan
     // the container's text content directly.
     expect(container.textContent).toMatch(/\/brain\/mcp\/jsonrpc/);
   });
 
-  it("shows tool count in the section header", async () => {
+  it("shows tool count and write-tool count in the section header", async () => {
     vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
     render(<MCPInfoPanel />);
-    expect(await screen.findByText(/暴露的工具 \(2\)/)).toBeInTheDocument();
+    // M4b.1 — baseInfo has 3 tools, 1 of which is write
+    expect(await screen.findByText(/暴露的工具 \(3 · 1 个 write\)/)).toBeInTheDocument();
+  });
+
+  it("shows auth status when auth is required and token is configured", async () => {
+    vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
+    render(<MCPInfoPanel />);
+    expect(await screen.findByText("鉴权状态")).toBeInTheDocument();
+    expect(screen.getByText(/write 工具需要 token/)).toBeInTheDocument();
+    expect(screen.getByText("已配置 token")).toBeInTheDocument();
+  });
+
+  it("shows unconfigured-token tag when auth not required", async () => {
+    vi.mocked(mcpApi.selfInfo).mockResolvedValue({
+      ...baseInfo,
+      auth_required_for_write: false,
+      token_configured: false,
+    });
+    render(<MCPInfoPanel />);
+    await screen.findByText("鉴权状态");
+    expect(screen.getByText(/write 工具开放/)).toBeInTheDocument();
+    expect(screen.queryByText("已配置 token")).not.toBeInTheDocument();
+  });
+
+  it("scope column shows write tag on write-scope tools", async () => {
+    vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
+    render(<MCPInfoPanel />);
+    // wait for table to render
+    await screen.findByText("webrain_memory_store");
+    // There should be at least one "write" tag (in our baseInfo, exactly one)
+    expect(screen.getAllByText("write").length).toBeGreaterThanOrEqual(1);
+    // And at least two "read" tags
+    expect(screen.getAllByText("read").length).toBeGreaterThanOrEqual(2);
   });
 
   it("surfaces error message via antd.message on load failure", async () => {

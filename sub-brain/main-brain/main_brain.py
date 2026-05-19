@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from memory.memory_manager import MemoryManager
@@ -38,7 +38,7 @@ from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
 from chat.llm_health_monitor import LLMHealthMonitor
-from mcp import MCPServer, TOOL_REGISTRY
+from mcp import MCPServer, TOOL_REGISTRY, extract_bearer, resolve_token
 from planner import Planner
 from wiki.wiki_engine import WikiEngine
 from memory.dreaming_engine import DreamingEngine
@@ -165,6 +165,10 @@ async def lifespan(app: FastAPI) -> None:
     )
     # Planner (M2) — task decomposition layer. Stateless, share single instance.
     _state["planner"] = Planner(llm_config=llm_config)
+
+    # MCP bearer token (M4b.1) — env > persisted file > generated-and-persisted.
+    # Held in _state so the /mcp/jsonrpc handler can gate write-class tools.
+    _state["mcp_token"] = resolve_token(data_dir)
 
     _state["chat"] = ChatEngine(
         memory_manager=_state["memory"],
@@ -834,7 +838,7 @@ async def plan_execute(request: Dict[str, Any]):
 
 
 @app.post("/mcp/jsonrpc")
-async def mcp_jsonrpc(request: Any):
+async def mcp_jsonrpc(request: Any, http_request: Request):
     """JSON-RPC 2.0 endpoint exposing webrain as an MCP server.
 
     Supports single requests and batches. Notifications (no `id` field)
@@ -843,9 +847,14 @@ async def mcp_jsonrpc(request: Any):
 
     External clients reach this via the sub-brain proxy at
     `POST /brain/mcp/jsonrpc`.
+
+    M4b.1: write-scope tools require `Authorization: Bearer <token>`.
+    Read-scope tools remain open so existing integrations don't break.
     """
-    server = MCPServer(_state)
-    response = await server.handle(request)
+    expected_token = _state.get("mcp_token")
+    bearer = extract_bearer(http_request.headers.get("authorization"))
+    server = MCPServer(_state, expected_token=expected_token)
+    response = await server.handle(request, bearer_token=bearer)
     if response is None:
         # All requests in the batch (or the single request) were
         # notifications — JSON-RPC says don't reply at all.
@@ -860,15 +869,23 @@ async def mcp_info():
 
     Drives the frontend MCPInfoPanel. Returns the tool list in a
     compact form (without input schemas) so the panel stays light.
+
+    M4b.1: reports `auth_required_for_write` + `token_configured`
+    (boolean, not the token itself — clients learn the token via
+    `WEBRAIN_MCP_TOKEN` env var or the persisted `~/.webrain/mcp_token`
+    file). Read-scope tools remain accessible without auth.
     """
+    token = _state.get("mcp_token")
     return {
         "ok": True,
-        "server": {"name": "webrain-mcp", "version": "0.1.0"},
+        "server": {"name": "webrain-mcp", "version": "0.1.1"},
         "transport": "json-rpc-2.0-http",
         "endpoint": "/mcp/jsonrpc",
+        "auth_required_for_write": True,
+        "token_configured": bool(token),
         "tool_count": len(TOOL_REGISTRY),
         "tools": [
-            {"name": t.name, "description": t.description}
+            {"name": t.name, "description": t.description, "scope": t.scope}
             for t in TOOL_REGISTRY
         ],
     }

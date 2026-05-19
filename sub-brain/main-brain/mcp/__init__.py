@@ -8,6 +8,7 @@ Transport: HTTP via `POST /mcp/jsonrpc`. A separate `tools/mcp_stdio_
 bridge.py` script wraps stdio for MCP clients that spawn subprocesses.
 """
 
+from .auth import extract_bearer, resolve_token, verify
 from .protocol import (
     INVALID_PARAMS,
     INVALID_REQUEST,
@@ -18,7 +19,7 @@ from .protocol import (
     error_response,
     success_response,
 )
-from .server import MCPServer
+from .server import UNAUTHORIZED, MCPServer
 from .tools import TOOL_REGISTRY, ToolHandler, ToolSpec
 
 __all__ = [
@@ -32,6 +33,10 @@ __all__ = [
     "METHOD_NOT_FOUND",
     "INVALID_PARAMS",
     "INTERNAL_ERROR",
+    "UNAUTHORIZED",
     "error_response",
     "success_response",
+    "resolve_token",
+    "extract_bearer",
+    "verify",
 ]

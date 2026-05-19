@@ -43,13 +43,19 @@ import urllib.request
 from typing import Any, Dict, Optional
 
 
-def _post_json(url: str, body: Dict[str, Any], timeout: float) -> Optional[Dict[str, Any]]:
+def _post_json(url: str, body: Dict[str, Any], timeout: float, token: Optional[str] = None) -> Optional[Dict[str, Any]]:
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        # M4b.1: webrain MCP write-class tools require this header. Read
+        # tools tolerate it being present, so adding it unconditionally
+        # is safe and means the bridge "just works" for both scopes.
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         url,
         data=data,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -98,7 +104,17 @@ def main(argv: Optional[list] = None) -> int:
         default=float(os.environ.get("WEBRAIN_MCP_TIMEOUT", "30")),
         help="Per-request HTTP timeout in seconds (default: 30)",
     )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("WEBRAIN_MCP_TOKEN", ""),
+        help=(
+            "Bearer token for write-class MCP tools. Defaults to "
+            "$WEBRAIN_MCP_TOKEN. Get it from ~/.webrain/mcp_token after "
+            "the first webrain launch."
+        ),
+    )
     args = parser.parse_args(argv)
+    token = (args.token or "").strip() or None
 
     # Use unbuffered stdin reads and explicit stdout flush — MCP clients
     # expect line-by-line interactive behavior, not block-buffered IO.
@@ -114,7 +130,7 @@ def main(argv: Optional[list] = None) -> int:
             sys.stdout.flush()
             continue
 
-        response = _post_json(args.url, req, args.timeout)
+        response = _post_json(args.url, req, args.timeout, token=token)
         if response is None:
             # Notification — no response. Some MCP clients still want a
             # newline to know we've moved on; we send nothing per spec.

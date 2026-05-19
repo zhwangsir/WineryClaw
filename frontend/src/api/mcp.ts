@@ -25,6 +25,8 @@ export interface McpTool {
 export interface MCPExposedToolSummary {
   name: string;
   description: string;
+  /** M4b.1: "read" (open) or "write" (requires bearer auth). */
+  scope?: "read" | "write";
 }
 
 export interface MCPSelfServerInfo {
@@ -32,6 +34,10 @@ export interface MCPSelfServerInfo {
   server: { name: string; version: string };
   transport: string;
   endpoint: string;
+  /** M4b.1: when true, write-scope tools need Authorization: Bearer <token>. */
+  auth_required_for_write?: boolean;
+  /** M4b.1: true when the server resolved a token from env/file/generated. */
+  token_configured?: boolean;
   tool_count: number;
   tools: MCPExposedToolSummary[];
 }

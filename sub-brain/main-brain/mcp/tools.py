@@ -41,6 +41,11 @@ class ToolSpec:
     description: str
     input_schema: Dict[str, Any]
     handler: ToolHandler
+    # M4b.1: "read" tools are open-access (read-only over webrain state);
+    # "write" tools mutate state and require a valid bearer token.
+    # Default is "read" to keep tooling that doesn't set scope explicitly
+    # on the safe side.
+    scope: str = "read"
 
     def to_dict(self) -> Dict[str, Any]:
         """MCP shape returned by `tools/list`."""
@@ -48,6 +53,9 @@ class ToolSpec:
             "name": self.name,
             "description": self.description,
             "inputSchema": self.input_schema,
+            # Custom annotation — MCP spec doesn't standardize "scope" yet,
+            # but informational fields are tolerated and the frontend uses it.
+            "scope": self.scope,
         }
 
 
@@ -142,6 +150,61 @@ async def _wiki_search(state: Dict[str, Any], args: Dict[str, Any]) -> Any:
     except Exception as e:
         raise MCPError(INTERNAL_ERROR, f"wiki search failed: {type(e).__name__}: {e}")
     return {"notes": results, "count": len(results)}
+
+
+async def _memory_store(state: Dict[str, Any], args: Dict[str, Any]) -> Any:
+    """Write tool — append a new memory entry. Requires bearer auth."""
+    memory = _require(state, "memory")
+    content = _require_str(args, "content")
+    level = str(args.get("level", "L2")).strip() or "L2"
+    if level not in ("L1", "L2", "L3", "L4"):
+        raise MCPError(INVALID_PARAMS, f"invalid level {level!r}; expected L1|L2|L3|L4")
+    source = str(args.get("source", "mcp")).strip() or "mcp"
+    session_id = str(args.get("session_id", "")).strip() or None
+    entry: Dict[str, Any] = {"level": level, "content": content, "source": source}
+    if session_id:
+        entry["session_id"] = session_id
+    result = await memory.store(entry)
+    return {"stored": True, "entry": result}
+
+
+async def _wiki_create(state: Dict[str, Any], args: Dict[str, Any]) -> Any:
+    """Write tool — create a wiki note. Requires bearer auth."""
+    wiki = _require(state, "wiki")
+    title = _require_str(args, "title")
+    content = _require_str(args, "content")
+    tags_raw = args.get("tags") or []
+    if not isinstance(tags_raw, list):
+        raise MCPError(INVALID_PARAMS, "'tags' must be a list of strings")
+    tags = [str(t) for t in tags_raw if isinstance(t, (str, int, float))]
+
+    try:
+        # WikiEngine has shifted shapes across versions — try the most-common
+        # method names in order of preference, surface a clear error if none
+        # match the installed engine.
+        if hasattr(wiki, "create_note"):
+            note = wiki.create_note(title=title, content=content, tags=tags)
+        elif hasattr(wiki, "add_note"):
+            note = wiki.add_note(title=title, content=content, tags=tags)
+        else:
+            raise MCPError(INTERNAL_ERROR, "wiki engine has no create_note/add_note method")
+    except MCPError:
+        raise
+    except Exception as e:
+        raise MCPError(INTERNAL_ERROR, f"wiki create failed: {type(e).__name__}: {e}")
+    return {"created": True, "note": note}
+
+
+async def _rag_index_file(state: Dict[str, Any], args: Dict[str, Any]) -> Any:
+    """Write tool — index a file into the RAG corpus. Requires bearer auth."""
+    rag = _require(state, "rag")
+    path = _require_str(args, "path")
+    try:
+        result = rag.index_file(path)
+    except Exception as e:
+        raise MCPError(INTERNAL_ERROR, f"rag index_file failed: {type(e).__name__}: {e}")
+    # RAGRetriever.index_file returns a dict already in the right shape
+    return result if isinstance(result, dict) else {"indexed": True, "result": result}
 
 
 async def _kg_search(state: Dict[str, Any], args: Dict[str, Any]) -> Any:
@@ -249,6 +312,55 @@ TOOL_REGISTRY: List[ToolSpec] = [
             "required": ["query"],
         },
         handler=_kg_search,
+    ),
+    # ----- M4b.1 write-class tools (require bearer auth) -----
+    ToolSpec(
+        name="webrain_memory_store",
+        description="Append a new memory entry. Requires authentication.",
+        scope="write",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Memory content"},
+                "level": {
+                    "type": "string",
+                    "enum": ["L1", "L2", "L3", "L4"],
+                    "description": "Memory layer (default L2)",
+                },
+                "source": {"type": "string", "description": "Source tag (default 'mcp')"},
+                "session_id": {"type": "string", "description": "Optional session id to associate"},
+            },
+            "required": ["content"],
+        },
+        handler=_memory_store,
+    ),
+    ToolSpec(
+        name="webrain_wiki_create",
+        description="Create a new wiki note. Requires authentication.",
+        scope="write",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Note title"},
+                "content": {"type": "string", "description": "Note markdown body"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tag list"},
+            },
+            "required": ["title", "content"],
+        },
+        handler=_wiki_create,
+    ),
+    ToolSpec(
+        name="webrain_rag_index_file",
+        description="Index a local file into the RAG corpus. Requires authentication.",
+        scope="write",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the file"},
+            },
+            "required": ["path"],
+        },
+        handler=_rag_index_file,
     ),
 ]
 
