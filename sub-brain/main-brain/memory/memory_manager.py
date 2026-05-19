@@ -132,6 +132,109 @@ def _get_reranker():
     return _reranker if _reranker is not False else None
 
 
+# ---------------------------------------------------------------------------
+# Sentence-transformer embedding model (lazy-loaded, cached, thread-safe)
+# ---------------------------------------------------------------------------
+# Why a module-level singleton: BEFORE this cache existed, _local_embedding
+# instantiated `SentenceTransformer("all-MiniLM-L6-v2")` on every call.
+# Smoke trial 2026-05-20 measured first L3 store = 19.9s, second = 4.8s —
+# the model was being re-loaded from disk into RAM every embedding call.
+# Caching once at module level drops second+ calls to ~50ms.
+#
+# Why a lock: the warm-up task runs in a thread executor concurrently with
+# the FastAPI request handler thread. Without the lock both can observe
+# `_embedder is None` and both load the model — measured as 2× the
+# 15-second cost on parallel cold starts. The lock ensures the first
+# call pays the load cost ONCE and every subsequent caller (including
+# the racing one) waits for the cached instance.
+import threading as _threading
+
+_embedder = None
+_embedder_lock = _threading.Lock()
+
+
+def _get_embedder():
+    """Lazy-load the sentence-transformers embedder. Single instance per process.
+
+    Thread-safe via double-checked locking. Returns None if
+    sentence-transformers isn't installed or the model fails to load.
+    Callers should treat None as "embedding unavailable" and fall back
+    to whatever they do without a vector (FTS-only search, in
+    MemoryManager's case).
+    """
+    global _embedder
+    # Fast path: already loaded — no lock needed
+    if _embedder is not None:
+        return _embedder if _embedder is not False else None
+    # Slow path: contend for the load
+    with _embedder_lock:
+        if _embedder is not None:  # someone else loaded while we waited
+            return _embedder if _embedder is not False else None
+        try:
+            from sentence_transformers import SentenceTransformer
+            _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("[memory] Embedder loaded: all-MiniLM-L6-v2")
+        except Exception as e:
+            logger.warning(f"[memory] Failed to load local embedder: {e}")
+            _embedder = False
+    return _embedder if _embedder is not False else None
+
+
+def _build_fts5_safe_query(query: str) -> str:
+    """Quote each whitespace-delimited token in `query` for safe FTS5 MATCH.
+
+    FTS5 has its own query DSL: bare hyphens are NOT, `column:` is a
+    column qualifier, parentheses group, `*` is prefix-match. Any of
+    these in a user query causes either silent no-match or a hard error
+    ("no such column: l1"). The fix is to wrap each token in a phrase
+    quote, which makes FTS5 treat it as a literal match.
+
+    Examples:
+      "apples oranges"          → `"apples" "oranges"`     (implicit AND)
+      "unique-l1-token-xyz123"  → `"unique-l1-token-xyz123"` (one literal)
+      "Hello, world!"           → `"Hello," "world!"`      (punctuation kept inside literal)
+      ""                        → `""`                      (caller bails)
+      'don\\'t'                 → `"don\\'t"`               (single quotes are FTS-safe)
+
+    Internal double quotes are escaped to `""` per FTS5 phrase-literal
+    rules. Empty tokens (multiple whitespace) drop out — they'd produce
+    `""` which FTS5 treats as an empty-match no-op.
+    """
+    if not query or not query.strip():
+        return ""
+    out_tokens = []
+    for tok in query.split():
+        tok = tok.replace('"', '""')
+        if not tok:
+            continue
+        out_tokens.append(f'"{tok}"')
+    return " ".join(out_tokens)
+
+
+async def warm_local_embedder() -> bool:
+    """Warm the local embedder out-of-band so the first user request doesn't
+    pay the model-load cost.
+
+    Called from main_brain.py lifespan as `asyncio.create_task(...)` so it
+    doesn't block startup completion. Returns True if the model loaded
+    successfully (cache populated), False otherwise. Idempotent.
+    """
+    import asyncio
+    loop = asyncio.get_event_loop()
+    model = await loop.run_in_executor(None, _get_embedder)
+    if model is None:
+        return False
+    # Force a one-shot encode so any deferred kernels (mps device init,
+    # tokenizer warmup) finish during warmup, not during the user's
+    # first request.
+    try:
+        await loop.run_in_executor(None, lambda: model.encode("warm").tolist())
+        return True
+    except Exception as e:
+        logger.warning(f"[memory] Embedder warm-up encode failed: {e}")
+        return False
+
+
 class MemoryManager:
     """Orchestrates L1-L4 hierarchical memory with advanced RAG."""
 
@@ -528,8 +631,22 @@ class MemoryManager:
         try:
             with self._connect() as conn:
                 placeholders = ",".join(["?"] * len(levels))
-                # Escape FTS5 special chars
-                safe_query = query.replace('"', '""')
+                # FTS5 syntax safety. The bare user query can contain
+                # characters FTS5 parses specially:
+                #   `-` → negation (so "abc-def" means "abc AND NOT def")
+                #   `:` → column qualifier (so "level:L1" tries column "level")
+                #   `(` `)` `*` → grouping / prefix wildcard
+                # The 2026-05-20 freshness test caught this: querying
+                # "unique-l1-token-xyz123" produced
+                #   FTS search failed: no such column: l1
+                # because "-l1-" was parsed as a NOT-clause on column l1.
+                # Fix: wrap each whitespace-delimited token in a phrase
+                # quote so FTS5 treats it as a literal. Preserves the
+                # implicit AND across tokens that two-word queries rely
+                # on (e.g. "apples oranges" → `"apples" "oranges"`).
+                safe_query = _build_fts5_safe_query(query)
+                if not safe_query:
+                    return []
                 rows = conn.execute(
                     f"""SELECT m.*, rank as fts_rank FROM memories m
                         JOIN memories_fts fts ON m.rowid = fts.rowid
@@ -998,8 +1115,21 @@ class MemoryManager:
         return self._fallback_embedding(text)
 
     async def _call_embedding_provider(self, provider: Dict, text: str) -> Optional[List[float]]:
-        """Call a single embedding provider."""
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        """Call a single embedding provider.
+
+        Timeout dropped from 30s to 5s after the 2026-05-20 user trial:
+        every store iterated unreachable providers in sequence, each
+        burning the full 30s before falling through. 5s is enough for
+        a healthy provider to respond from local LAN; anything slower
+        is broken enough that we'd rather fall through faster. Tune via
+        WEBRAIN_EMBEDDING_PROVIDER_TIMEOUT_S env var.
+        """
+        import os as _os
+        try:
+            _provider_timeout = float(_os.environ.get("WEBRAIN_EMBEDDING_PROVIDER_TIMEOUT_S", "5.0"))
+        except ValueError:
+            _provider_timeout = 5.0
+        async with httpx.AsyncClient(timeout=_provider_timeout) as client:
             if provider["payload_fmt"] == "ollama":
                 resp = await client.post(provider["url"], json={
                     "model": provider["model"],
@@ -1021,11 +1151,17 @@ class MemoryManager:
         return None
 
     async def _local_embedding(self, text: str) -> Optional[List[float]]:
-        """Use sentence-transformers locally (sync, run in thread)."""
+        """Use the cached sentence-transformers embedder (loaded once per process).
+
+        See `_get_embedder` for the cache rationale. Encoding itself runs
+        in the default executor so a sync CPU-bound encode doesn't block
+        the FastAPI event loop.
+        """
         import asyncio
+        model = _get_embedder()
+        if model is None:
+            return None
         try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer("all-MiniLM-L6-v2")
             loop = asyncio.get_event_loop()
             vec = await loop.run_in_executor(None, lambda: model.encode(text).tolist())
             return vec

@@ -138,6 +138,28 @@ async def lifespan(app: FastAPI) -> None:
 
     _state["memory"] = MemoryManager(db_path=str(data_dir / "memory.db"), llm_config=llm_config)
 
+    # Warm the local sentence-transformers embedder in the background so the
+    # FIRST L3 store doesn't pay a ~20s model load cost (smoke trial
+    # 2026-05-20 measured this). Fire-and-forget — if it fails, embedding
+    # falls back to hash fallback and the user gets a degraded experience
+    # but the process stays up. Skip via WEBRAIN_EMBEDDER_WARMUP_DISABLED=1
+    # in environments where SentenceTransformer isn't installed and we
+    # don't want the failure noise in logs.
+    if os.environ.get("WEBRAIN_EMBEDDER_WARMUP_DISABLED") != "1":
+        from memory.memory_manager import warm_local_embedder
+
+        async def _warm_embedder_task():
+            try:
+                ok = await warm_local_embedder()
+                if ok:
+                    logger.info("Local embedder warmed (first request no longer cold)")
+                else:
+                    logger.warning("Local embedder warm-up failed; first request will pay model load cost")
+            except Exception as e:
+                logger.warning("Local embedder warm-up exception (non-fatal): %s", e)
+
+        _state["_embedder_warmup_task"] = asyncio.create_task(_warm_embedder_task())
+
     # M-Memory-1: wire the L3 conflict detector. Without this, every L3
     # store quietly skips contradiction checks — the entire conflict UI is
     # dead code. Discovered during 2026-05-20 user trial when two

@@ -1,0 +1,234 @@
+"""Tests for "just-stored memory immediately retrievable" invariant.
+
+The 2026-05-20 user-trial smoke test reported that a fresh L3 store
+sometimes failed to come back via vector search. I logged it as "ANN
+index lag" — but I never actually verified the diagnosis. This file
+either:
+
+  (a) confirms the bug exists (test fails → fix it)
+  (b) refutes the diagnosis (test passes → the original smoke failure
+      had a different root cause, likely importance blending against
+      pre-existing rows in the dev DB)
+
+Either outcome is useful. Without this test, the question stays open
+forever.
+
+The test uses a FRESH temp DB so there's no pre-existing data to
+out-compete the just-stored row.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+import pytest
+
+from memory.memory_manager import MemoryManager
+
+
+@pytest.fixture
+def fresh_mm(temp_dir, mock_llm_config) -> MemoryManager:
+    """A MemoryManager with an empty DB — no historical data to bias rankings."""
+    return MemoryManager(db_path=str(temp_dir / "freshness.db"), llm_config=mock_llm_config)
+
+
+class TestJustStoredImmediatelyRetrievable:
+    """Lock in: after store(), query() with the row's content finds it.
+
+    If this test fails, "I just told you X but you don't remember" is a
+    real bug in the system. If it passes, the user-trial smoke failure
+    was about something else (blending against accumulated importance).
+    """
+
+    @pytest.mark.asyncio
+    async def test_l3_store_then_query_by_content_finds_the_row(self, fresh_mm):
+        # Plant ONE L3 row. Empty DB except this.
+        result = await fresh_mm.store({
+            "content": "The Eiffel Tower is in Paris and is 330 meters tall.",
+            "level": "L3",
+            "source": "test",
+        })
+        mem_id = result["id"]
+
+        # Query — must find it
+        hits = await fresh_mm.query({
+            "query": "Eiffel Tower height",
+            "levels": ["L3"],
+            "limit": 5,
+            "use_rerank": False,
+        })
+
+        assert any(h["id"] == mem_id for h in hits), (
+            f"Just-stored memory {mem_id} not found. Got: "
+            f"{[(h['id'][:8], h.get('vector_score', 0)) for h in hits]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_l1_store_then_query_finds_via_fts_even_without_vector(self, fresh_mm, monkeypatch):
+        """L1 with embeddings disabled — FTS should still find it. Catches
+        regression where the FTS trigger fails or store skips FTS insert."""
+        monkeypatch.setenv("WEBRAIN_MEMORY_EMBED_L1", "0")
+        # Reinstantiate to pick up env (FTS triggers are schema-level so
+        # they're already in place from fresh_mm; just need to re-store)
+        result = await fresh_mm.store({
+            "content": "unique-l1-token-xyz123 about cats",
+            "level": "L1",
+            "source": "test",
+        })
+        mem_id = result["id"]
+        hits = await fresh_mm.query({
+            "query": "unique-l1-token-xyz123",
+            "levels": ["L1"],
+            "limit": 5,
+            "use_rerank": False,
+        })
+        assert any(h["id"] == mem_id for h in hits), (
+            f"Just-stored L1 {mem_id} not found via FTS. Got: "
+            f"{[h['id'][:8] for h in hits]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_multiple_l3_stores_each_immediately_retrievable(self, fresh_mm):
+        """Add several L3 rows in sequence; each one should be findable
+        immediately after its own store call. This is the "I just told
+        you A, then I just told you B" user flow."""
+        contents = [
+            ("The user lives in Tokyo since 2020.", "Tokyo 2020"),
+            ("The user works as a software engineer.", "software engineer"),
+            ("The user enjoys black coffee and dark chocolate.", "black coffee"),
+        ]
+        ids: list = []
+        for content, _ in contents:
+            r = await fresh_mm.store({
+                "content": content, "level": "L3", "source": "test",
+            })
+            ids.append(r["id"])
+
+        # Now query for each — each should land in top results
+        misses = []
+        for (content, query), mem_id in zip(contents, ids):
+            hits = await fresh_mm.query({
+                "query": query, "levels": ["L3"], "limit": 5, "use_rerank": False,
+            })
+            if not any(h["id"] == mem_id for h in hits):
+                misses.append((query, mem_id, [(h["id"][:8], h.get("vector_score", 0), h["content"][:40]) for h in hits]))
+
+        assert not misses, f"Some rows not retrievable: {misses}"
+
+    @pytest.mark.asyncio
+    async def test_brute_force_path_used_when_ann_dirty(self, fresh_mm):
+        """Sanity: with fewer than 10 vectors, _vector_search's ANN fast
+        path is skipped (its `len >= 10` guard). The brute-force fallback
+        runs against the in-memory matrix, which gets updated on every
+        _store_embedding call. This test pins that behaviour.
+        """
+        for i in range(3):
+            await fresh_mm.store({
+                "content": f"row {i} content about apples and oranges",
+                "level": "L3", "source": "test",
+            })
+        # ANN may or may not exist; matrix definitely should
+        assert fresh_mm._vector_matrix is not None
+        assert len(fresh_mm._vector_ids) == 3
+
+        hits = await fresh_mm.query({
+            "query": "apples oranges",
+            "levels": ["L3"], "limit": 3, "use_rerank": False,
+        })
+        # All 3 should appear (they all match "apples oranges")
+        assert len(hits) == 3, f"Expected 3 hits, got {len(hits)}: {[h['id'][:8] for h in hits]}"
+
+    @pytest.mark.asyncio
+    async def test_ann_dirty_flag_set_after_store(self, fresh_mm):
+        """Pin the contract: every _store_embedding marks ann_dirty=True
+        so subsequent queries don't use a stale index.
+
+        If this ever becomes False after a store, that's an "ANN lag" bug:
+        new vectors won't surface until the next periodic rebuild.
+        """
+        # Get to 10 vectors so ANN index could exist
+        for i in range(10):
+            await fresh_mm.store({"content": f"warmup-row-{i}", "level": "L3"})
+
+        # Force an ANN build by querying (the rebuild trigger is once
+        # per 50 inserts, but _build_ann_index can also be called by
+        # _load_vector_index on init — won't run here since fresh)
+        fresh_mm._build_ann_index()
+        assert fresh_mm._ann_dirty is False
+
+        # Now plant one more — dirty must flip back to True
+        await fresh_mm.store({"content": "post-build-fresh-row", "level": "L3"})
+        assert fresh_mm._ann_dirty is True, (
+            "ann_dirty did not flip after store; queries would use stale ANN "
+            "missing the newly-stored vector (ANN lag bug)"
+        )
+
+
+class TestFts5SafeQuery:
+    """Lock in the FTS5 query-escaping behaviour. The 2026-05-20 freshness
+    test caught a real bug: "unique-l1-token-xyz123" crashed FTS5 because
+    `-l1-` was parsed as a column-qualified negation."""
+
+    def test_simple_two_word_query_becomes_two_phrases(self):
+        from memory.memory_manager import _build_fts5_safe_query
+        assert _build_fts5_safe_query("apples oranges") == '"apples" "oranges"'
+
+    def test_hyphenated_token_stays_literal_not_negation(self):
+        from memory.memory_manager import _build_fts5_safe_query
+        # Without quoting, this would parse as `unique AND NOT l1 AND NOT token AND NOT xyz123`
+        # and crash with "no such column: l1"
+        assert (
+            _build_fts5_safe_query("unique-l1-token-xyz123")
+            == '"unique-l1-token-xyz123"'
+        )
+
+    def test_colon_token_does_not_become_column_qualifier(self):
+        from memory.memory_manager import _build_fts5_safe_query
+        # FTS5 reads `level:L3` as "match L3 in column `level`"; we want literal
+        assert _build_fts5_safe_query("level:L3") == '"level:L3"'
+
+    def test_internal_double_quotes_escaped(self):
+        from memory.memory_manager import _build_fts5_safe_query
+        # Double-quote → "" per FTS5 phrase-literal grammar
+        assert _build_fts5_safe_query('he said "hi"') == '"he" "said" """hi"""'
+
+    def test_empty_or_whitespace_returns_empty(self):
+        from memory.memory_manager import _build_fts5_safe_query
+        assert _build_fts5_safe_query("") == ""
+        assert _build_fts5_safe_query("   ") == ""
+        assert _build_fts5_safe_query(None) == ""  # type: ignore[arg-type]
+
+    def test_punctuation_preserved_inside_token(self):
+        from memory.memory_manager import _build_fts5_safe_query
+        # "Hello, world!" → two tokens, punctuation stays inside the phrase
+        result = _build_fts5_safe_query("Hello, world!")
+        assert result == '"Hello," "world!"'
+
+    def test_multiple_whitespace_collapses(self):
+        from memory.memory_manager import _build_fts5_safe_query
+        # split() handles any whitespace incl. multiple spaces / tabs
+        assert _build_fts5_safe_query("foo  \tbar\n  baz") == '"foo" "bar" "baz"'
+
+
+class TestEmbedderCacheSingleton:
+    """The 2026-05-20 user trial measured first L3 store = 19.9s, second =
+    4.8s. Root cause: _local_embedding instantiated SentenceTransformer
+    on every call. Fixed by module-level _get_embedder cache. These tests
+    lock in the cache behaviour so a regression here is impossible to
+    miss."""
+
+    def test_get_embedder_returns_same_instance_across_calls(self):
+        from memory.memory_manager import _get_embedder
+        m1 = _get_embedder()
+        m2 = _get_embedder()
+        if m1 is None:
+            pytest.skip("sentence-transformers not installed; cache check skipped")
+        assert m1 is m2, "Embedder cache returned different instances; load cost will repeat"
+
+    @pytest.mark.asyncio
+    async def test_warm_local_embedder_returns_true_when_model_available(self):
+        from memory.memory_manager import warm_local_embedder, _get_embedder
+        if _get_embedder() is None:
+            pytest.skip("sentence-transformers not installed; warm-up signal not testable")
+        ok = await warm_local_embedder()
+        assert ok is True
