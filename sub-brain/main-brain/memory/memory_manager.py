@@ -707,6 +707,16 @@ class MemoryManager:
         # don't influence their own ranking via the boost they just earned.
         self._increment_access([r["id"] for r in fused])
 
+        # User-trial #2: the rows we return still hold the PRE-bump values
+        # because we fetched them before _increment_access. Reflect the
+        # bump in the returned payload so callers don't see "access_count=0"
+        # right after retrieving a row. Pure in-memory mutation — the DB
+        # has already been updated by _increment_access. No second query.
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for r in fused:
+            r["access_count"] = (r.get("access_count") or 0) + 1
+            r["last_accessed_at"] = now_iso
+
         return fused
 
     # ========== FTS5 Search ==========

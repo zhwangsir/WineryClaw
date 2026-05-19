@@ -102,7 +102,7 @@ WeBrain 是一个基于**双脑架构**的 AI 集成平台，通过分离"推理
 
 ### 环境要求
 - Node.js 22+
-- Python 3.11+
+- Python 3.9+ (3.11+ recommended for newer asyncio features)
 - pnpm (推荐) 或 npm
 
 ### 安装依赖
@@ -144,6 +144,16 @@ pnpm dev
 
 ```bash
 docker-compose up --build
+```
+
+### 安装检查
+
+```bash
+# 验证依赖、venv、node_modules 是否就绪
+./scripts/verify-install.sh
+
+# 同时跑 e2e smoke 测试(~50s)
+./scripts/verify-install.sh --smoke
 ```
 
 ---

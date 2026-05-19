@@ -210,6 +210,69 @@ class TestFts5SafeQuery:
         assert _build_fts5_safe_query("foo  \tbar\n  baz") == '"foo" "bar" "baz"'
 
 
+class TestQueryReturnsPostIncrementAccessCount:
+    """User-trial #2: callers querying memory used to see access_count for
+    each returned row as the value BEFORE the bump triggered by the query
+    itself. The MemoryPage UI then displayed `access_count: 0` for a row
+    the user had just retrieved, which was confusing. Locked in here: the
+    rows we return reflect the bump that just happened."""
+
+    @pytest.mark.asyncio
+    async def test_returned_row_shows_bumped_access_count(self, fresh_mm):
+        result = await fresh_mm.store({
+            "content": "user trial issue #2 sentinel", "level": "L3", "source": "test",
+        })
+        mem_id = result["id"]
+
+        # First query — row should report access_count=1, not 0
+        hits = await fresh_mm.query({
+            "query": "user trial issue #2",
+            "levels": ["L3"], "limit": 5, "use_rerank": False,
+        })
+        row = next(h for h in hits if h["id"] == mem_id)
+        assert row["access_count"] == 1, (
+            f"Expected access_count=1 (post-bump), got {row['access_count']}. "
+            "User-trial #2 regression."
+        )
+
+    @pytest.mark.asyncio
+    async def test_second_query_increments_again(self, fresh_mm):
+        result = await fresh_mm.store({
+            "content": "double-query sentinel", "level": "L3", "source": "test",
+        })
+        mem_id = result["id"]
+
+        for expected_count in (1, 2, 3):
+            hits = await fresh_mm.query({
+                "query": "double-query sentinel",
+                "levels": ["L3"], "limit": 5, "use_rerank": False,
+            })
+            row = next(h for h in hits if h["id"] == mem_id)
+            assert row["access_count"] == expected_count
+
+    @pytest.mark.asyncio
+    async def test_last_accessed_at_reflects_current_time(self, fresh_mm):
+        from datetime import datetime, timezone
+        result = await fresh_mm.store({
+            "content": "timestamp test", "level": "L3", "source": "test",
+        })
+        mem_id = result["id"]
+        before = datetime.now(timezone.utc)
+        hits = await fresh_mm.query({
+            "query": "timestamp test",
+            "levels": ["L3"], "limit": 5, "use_rerank": False,
+        })
+        after = datetime.now(timezone.utc)
+        row = next(h for h in hits if h["id"] == mem_id)
+        last_iso = row.get("last_accessed_at")
+        assert last_iso, "last_accessed_at should be populated on returned row"
+        last_ts = datetime.fromisoformat(last_iso)
+        # The bump's timestamp should fall within the query's wall clock window
+        assert before <= last_ts <= after, (
+            f"last_accessed_at={last_ts} not within [{before}, {after}]"
+        )
+
+
 class TestEmbedderCacheSingleton:
     """The 2026-05-20 user trial measured first L3 store = 19.9s, second =
     4.8s. Root cause: _local_embedding instantiated SentenceTransformer

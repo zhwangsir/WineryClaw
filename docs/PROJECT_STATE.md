@@ -1026,3 +1026,22 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 3. 更新 §8（进行中）和 §9（下一步）。
 4. 顶部「最后更新」改日期。
 5. 新技术债记入 §12。
+
+---
+
+## 14. Memory Benchmark — 历史 baseline
+
+固定 fixture(`tests/fixtures/memory_7day_log.json`,7 天 26 个 L1 + 20 个 ground-truth queries)。运行:`pytest -m benchmark -s tests/test_memory_benchmark.py`。
+
+| 日期 | 阶段 | recall@5 | recall@10 | MRR | 说明 |
+|---|---|---|---|---|---|
+| 2026-05-19 | M-Memory-1 首测 | 0.000 | 0.000 | 0.000 | L1 没 embedding(发现 bug → 修) |
+| 2026-05-19 | 启用 L1 embedding | 0.425 | 0.650 | 0.344 | baseline 阶跃 |
+| 2026-05-19 | + consolidation | 0.425 | 0.625 | 0.383 | recall@10 略降 0.025,MRR +0.039 |
+| 2026-05-20 | + embedder 缓存 + FTS5 escape | 0.425 | 0.625 | 0.383 | 不变(修速度 / 崩溃,不动算法) |
+
+下一次想动 baseline 的方向:
+- Blender 权重 grid search:relevance 0.7 / importance 0.3 这个分割可能不是最优
+- Re-rank 加回(实验里关掉了避免冷加载)
+- 真实对话 fixture 替换手工 fixture
+- L4 promotion 上线后看 recall 收益
