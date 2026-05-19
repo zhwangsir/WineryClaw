@@ -37,6 +37,7 @@ from evolution.llm_client import make_llm_call_from_config
 from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
+from chat.llm_health_monitor import LLMHealthMonitor
 from planner import Planner
 from wiki.wiki_engine import WikiEngine
 from memory.dreaming_engine import DreamingEngine
@@ -173,6 +174,18 @@ async def lifespan(app: FastAPI) -> None:
         planner=_state["planner"],
     )
 
+    # LLM health monitor (M4a) — opt out with WEBRAIN_LLM_HEALTH_DISABLED=1.
+    # Interval is env-tunable for tests / low-traffic deploys.
+    if os.environ.get("WEBRAIN_LLM_HEALTH_DISABLED") != "1":
+        try:
+            interval = float(os.environ.get("WEBRAIN_LLM_HEALTH_INTERVAL_SEC", "60"))
+        except ValueError:
+            interval = 60.0
+        _state["llm_health_monitor"] = LLMHealthMonitor(
+            _state["chat"].router, interval_sec=interval
+        )
+        _state["llm_health_monitor"].start()
+
     # Initialize Wiki
     _state["wiki"] = WikiEngine()
     wiki_stats = _state["wiki"].get_stats()
@@ -245,6 +258,11 @@ async def lifespan(app: FastAPI) -> None:
             await _state["_metrics_persist_task"]
         except asyncio.CancelledError:
             pass
+    if "llm_health_monitor" in _state:
+        try:
+            await _state["llm_health_monitor"].stop()
+        except Exception as e:
+            logger.warning(f"LLM health monitor stop raised: {e}")
     if "rag_watcher" in _state:
         _state["rag_watcher"].stop()
     if "cron" in _state:
@@ -612,6 +630,52 @@ async def health_models():
         "total_count": total_count,
         "endpoints": health,
     }
+
+
+# ========== LLM Router Stats (M4a) ==========
+
+
+@app.get("/llm/stats")
+async def llm_stats():
+    """Per-endpoint stats — success/failure counts, avg latency, current
+    health, last error. Drives the frontend health panel.
+
+    Unlike `/health/models` this does NOT trigger a fresh probe; it
+    returns the in-memory snapshot maintained by the router from real
+    traffic + the background monitor.
+    """
+    chat_engine = _state.get("chat")
+    if not chat_engine or not hasattr(chat_engine, "router"):
+        return {"ok": False, "error": "chat engine not initialized", "endpoints": []}
+    snap = chat_engine.router.stats()
+    monitor = _state.get("llm_health_monitor")
+    snap["monitor_running"] = bool(monitor and monitor.running)
+    snap["ok"] = True
+    return snap
+
+
+@app.post("/llm/health/recheck")
+async def llm_health_recheck(request: Optional[Dict[str, Any]] = None):
+    """Force an immediate out-of-band probe of all endpoints (or one
+    named endpoint via `{"name": "..."}`).
+
+    Useful after fixing a misconfigured key — you don't have to wait
+    for the next interval tick.
+    """
+    chat_engine = _state.get("chat")
+    if not chat_engine or not hasattr(chat_engine, "router"):
+        return {"ok": False, "error": "chat engine not initialized"}
+
+    name = (request or {}).get("name")
+    if name:
+        ep = chat_engine.router.find_by_name(str(name))
+        if ep is None:
+            return {"ok": False, "error": f"endpoint {name!r} not found"}
+        ok = await ep.health_check()
+        return {"ok": True, "endpoint": ep.to_dict(), "probed": True, "healthy": ok}
+
+    results = await chat_engine.router.health_check_all()
+    return {"ok": True, "probed": True, "endpoints": results}
 
 
 # ========== Memory API ==========

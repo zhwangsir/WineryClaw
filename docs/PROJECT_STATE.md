@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（M3 完成 — PlanExecutor 验证+重试,新增 `/brain/plan/execute`,前端「执行计划」按钮 + 逐 task 结果展示）
+> **最后更新**：2026-05-19（M4a 完成 — 多 LLM 端点自动 failover + 后台健康监视器 + 前端健康面板;MCP server 推到 M4b）
 
 ---
 
@@ -345,7 +345,104 @@ frontend    vitest run                                                          
 - ❌ Tool-call 在每个 task 内独立执行——目前每个 task 通过 chat() 跑,chat() 自己的 tool-call 循环复用了,但 task 之间不共享 tool state(刻意保持 task 独立性,避免 task 1 的副作用影响 task 2 的判定)
 - ❌ Plan 历史持久化——`/plan/execute` 是无状态的,每次调用独立
 
-### 6.8 自学习闭环的物理路径（已全线打通）
+### 6.8 M4a — 多 LLM 路由 + 自动 failover + 健康面板（本轮）
+
+原本计划的 M4 是「多 LLM 路由 + MCP server」,工作量评估后切分:本轮做 M4a(路由 + failover + 健康监视器 + 前端面板),MCP server 暴露推到 M4b 单独一轮(协议实现量非小)。
+
+**后端改动**:
+
+`chat/chat_engine.py` 重写 `LLMEndpoint` + `LLMRouter`:
+
+- `LLMEndpoint` 新增统计字段:`success_count` / `failure_count` / `_total_latency_ms` / `last_success_at` / `last_failure_at` / `unhealthy_since`,属性 `avg_latency_ms`,方法 `record_success(latency)` / `record_failure(error)` / `to_dict()`
+  - `unhealthy_since` 只在「首次失败」时设置,后续连续失败不刷新——这是"出问题多久了"的指标,不是"上次失败时间"
+  - `health_check()` 是 OOB 探针,**不计入** success_count(避免人为膨胀流量统计)
+- `LLMRouter` 新增 `iter_failover()` 迭代器(healthy 优先 + priority desc 排序)/ `find_by_name()` / `mark_success()` / `mark_failure()` / `stats()` 完整快照
+- 保留 `get_primary()` 兼容流式路径(M4a 暂不做流 failover)
+
+`chat/chat_engine.py` 重写 `_chat_completion`:
+
+```python
+for ep in self.router.iter_failover():
+    try:
+        # ...httpx.post...
+        self.router.mark_success(ep.name, latency_ms)
+        result["_endpoint"] = ep.name  # 诊断字段
+        return result
+    except Exception as e:
+        self.router.mark_failure(ep.name, str(e))
+        continue
+raise RuntimeError(f"All {tried} LLM endpoint(s) failed; last endpoint {name!r} raised ...")
+```
+
+每个端点最多试一次,healthy ones first。失败的统计完整记录,成功的端点也会被在 `result["_endpoint"]` 里标识(测试 / 监控可观测)。
+
+**新增 `chat/llm_health_monitor.py`(95 行)**:
+
+- `LLMHealthMonitor(router, interval_sec=60.0)` 单 asyncio task
+- `start()` 立即跑一次首探 + 之后周期循环
+- `stop()` 通过 `asyncio.Event` 优雅退出,不傻等下一个 tick
+- 时间间隔下限 5s(防止人为配错 0.1s 把流量打爆)
+
+**main_brain.py lifespan**:
+
+- 实例化 monitor 并 `start()`,`WEBRAIN_LLM_HEALTH_DISABLED=1` 可关
+- `WEBRAIN_LLM_HEALTH_INTERVAL_SEC` 可调间隔
+- 在 shutdown 时 `await monitor.stop()`
+
+**新增 endpoints**:
+
+- `GET /llm/stats` —— 路由器内存快照(不重新探测),返回每个端点的全部统计 + `monitor_running` 标志
+- `POST /llm/health/recheck` —— 强制 OOB 探测一次。可选 `{name: "..."}` 单端点,不传则全部探
+
+**前端改动**:
+
+- `frontend/src/api/llm.ts` —— `LLMEndpointStats` / `LLMStats` / `LLMRecheckResult` 类型 + `llmApi.stats()` / `recheck(name?)`
+- `frontend/src/components/settings/LLMHealthPanel.tsx`(218 行):
+  - Card 标题处:状态 chip(全部在线 / 部分降级 / 全部离线)+ "监视中" 标签 + "全部重新探测" 按钮
+  - Table:端点名 + base_url、模型、provider、priority、healthy chip(✓在线 / ✗离线)、成功/失败计数、avg 延迟、最近活动相对时间、最近错误(Tooltip 全文)、单行"探测"按钮
+  - 自动 15s 轮询刷新(in-memory 端点本来就便宜)
+- `SettingsPage.tsx` 把 LLMHealthPanel 挂在「模型」tab 里 ModelConfigPanel 下方
+
+**测试**:
+
+- `tests/test_llm_router.py` 新增 **25 用例**:
+  - 7 个 endpoint stats:初始 healthy / record_success 重置 unhealthy / 多次平均延迟 / record_failure / `unhealthy_since` 不被后续失败覆盖 / 成功清 unhealthy_since / `to_dict` 字段完整
+  - 9 个 router:全 healthy 时 priority desc / unhealthy 排末尾 / 全 unhealthy 仍全部 yield / mark_success-via-router / 未知 endpoint no-op / stats 聚合 healthy/degraded/down / get_primary 行为
+  - 5 个 chat completion failover:primary 健康直走 / primary 失败自动切 secondary 且 stats 正确 / 全失败抛带名错误 / 预标记 unhealthy 被排末位 / 无 endpoint 时抛
+  - 4 个 health monitor:启动跑初探 / stop 幂等且取消 task / start 幂等 / interval ≤ 5s 自动 clamp
+- `frontend/src/api/llm.test.ts` 3 用例:`stats` / `recheck(undefined)` 空 body / `recheck("name")` 带 name
+- `frontend/src/components/settings/LLMHealthPanel.test.tsx` 5 用例:正常渲染 / degraded 状态 / 全部重探按钮 / 单行重探按钮带 name / 服务端 error 信息显示
+
+**运行验收**:
+
+```
+main-brain  pytest test_llm_router.py                  → 25 pass
+main-brain  pytest tests/(除 watchdog dep)            → 195 pass(+25)
+frontend    tsc --noEmit                              → 0 errors
+frontend    vitest run                                → 119 files / 1193 pass(+8)
+```
+
+**故意未做(M4a.1 + M4b)**:
+
+- ❌ **流式 failover** —— 流一旦开始就不能换 endpoint(partial output 已发),用户重发即可。M4a.1 follow-up
+- ❌ 动态运行时加 endpoint(管理员 API)
+- ❌ **MCP server 暴露(M4b)** —— webrain 自己作为 MCP server,外部 MCP 客户端能调 memory/RAG/skill。协议实现非小,独立一轮做。Roadmap 原 M5/M6 因此后移一格
+
+**配置示例**(`config/llm.json` 多端点):
+
+```json
+{
+  "endpoints": [
+    {"name": "primary-local", "base_url": "http://192.168.x.x:1234/v1", "model_id": "...", "priority": 10, "timeout": 120},
+    {"name": "fallback-openai-compat", "base_url": "https://api.example.com/v1", "model_id": "...", "api_key": "...", "priority": 5, "timeout": 60},
+    {"name": "cheap-deep", "base_url": "https://api.example.com/v1", "model_id": "...", "api_key": "...", "priority": 1, "provider": "deepseek"}
+  ]
+}
+```
+
+当 priority=10 的本地端点挂掉,下次 chat 自动切到 priority=5,前端面板上 primary-local 变红,几秒后后台监视器再次探测,恢复后自动转绿,下次 chat 会重新优先选回去。
+
+### 6.9 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -394,9 +491,11 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 
 | 优先 | 任务 | 说明 |
 |---|---|---|
-| 🔥 | **M4 Multi-LLM 路由 + MCP server** | 当前只有本地 LM Studio 一个端点,加多家云端提供商(OpenAI 兼容协议优先,其他按需);同时把 webrain 自己作为 MCP server 暴露,让外部 MCP 客户端能复用 webrain 的 memory/RAG/skill。 |
+| 🔥 | **M4b MCP server 暴露** | 把 webrain 作为 MCP server,通过 stdio / WebSocket 让外部 MCP 客户端调用 memory/RAG/skill/wiki。需要实现 MCP 协议握手、capabilities、tool 调用分发。 |
+| 🔥 | M4a.1 流式 failover | 当前流路径仍用 `get_primary()`,首 chunk 之前若失败需要 failover。需要 stream 启动失败检测 + endpoint 切换。 |
 | 🔥 | M3.5 PlanExecutor 流式进度 | 当前 `/plan/execute` 是同步返回。后续做 SSE,每个 attempt 完成实时推送给前端,UI 显示「task 2/5 第 3 次尝试中...」。 |
-| 🔥 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
+| 📦 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
+| ✅ | ~~M4a Multi-LLM failover + 健康面板~~ | 完成于 2026-05-19(§6.8)。原 M5/M6 roadmap 因 M4 拆分而后移一格。 |
 | ✅ | ~~M3 Planner Verify+Retry~~ | 完成于 2026-05-19(§6.7)。 |
 | ✅ | ~~M2 Planner 任务拆解~~ | 完成于 2026-05-19(§6.6)。 |
 | ✅ | ~~M1 RAG 接入 chat~~ | 完成于 2026-05-19(§6.5)。 |

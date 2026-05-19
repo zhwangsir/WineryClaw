@@ -4,6 +4,7 @@ import { PageShell } from "../components/common/PageShell";
 import ModelConfigPanel from "../components/settings/ModelConfigPanel";
 import GlobalConfigPanel from "../components/settings/GlobalConfigPanel";
 import AboutPanel from "../components/settings/AboutPanel";
+import LLMHealthPanel from "../components/settings/LLMHealthPanel";
 
 export default function SettingsPage() {
   return (
@@ -31,7 +32,12 @@ export default function SettingsPage() {
                   模型
                 </span>
               ),
-              children: <ModelConfigPanel />,
+              children: (
+                <>
+                  <ModelConfigPanel />
+                  <LLMHealthPanel />
+                </>
+              ),
             },
             {
               key: "general",
