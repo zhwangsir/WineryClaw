@@ -407,9 +407,133 @@ class DreamingEngine:
             out.append({"kind": kind, "statement": statement})
         return out
 
-    # ========== Phase 3: Deep Sleep (L3 → L4) ==========
+    # ========== Phase 3: Deep Sleep (L3 → L4 promotion) ==========
+    # The M-Memory-1 design defines L4 as "high-frequency facts promoted from
+    # L3 — long-term identity, accessed many times, decay-immune". The new
+    # `promote_l3_to_l4` below implements that contract: an L3 fact retrieved
+    # ≥5 times with importance ≥0.7 gets a new L4 copy whose provenance_refs
+    # points back at the source L3.
+    #
+    # The OLD `consolidate_l3_to_l4` below generated `skills` table entries
+    # from frequently-mentioned entities. That's a different concept (executable
+    # skill patterns) and rightfully belongs in evolution_engine. We keep the
+    # method alive but rename it to `_legacy_generate_skill_patterns` and
+    # remove it from run_cycle(). It can be called manually if someone wants
+    # the old behaviour.
+
+    DEFAULT_L4_PROMOTE_ACCESS_THRESHOLD = 5
+    DEFAULT_L4_PROMOTE_IMPORTANCE_THRESHOLD = 0.7
+    L4_PROMOTE_BATCH = 50
+
+    async def promote_l3_to_l4(
+        self,
+        access_threshold: Optional[int] = None,
+        importance_threshold: Optional[float] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Promote highly-recurring L3 facts to L4 (long-term identity).
+
+        Selection criteria (M-Memory-1):
+          - level = 'L3'
+          - access_count >= access_threshold (default 5)
+          - importance >= importance_threshold (default 0.7)
+          - is_current = 1 (skip rows superseded by conflict resolution)
+          - NOT already promoted (no existing L4 with this L3 id in its
+            provenance_refs)
+
+        Each qualifying L3 row produces ONE new L4 row:
+          - content copied verbatim from the L3
+          - provenance_source = "promotion_l3_l4"
+          - provenance_refs = [source L3 id]
+          - importance = 0.9 (L4 baseline)
+
+        The source L3 is NOT superseded — L4 is an elevated copy, the L3
+        keeps accumulating access for any future re-promotion decisions
+        (we don't re-promote already-promoted ones — guarded above).
+
+        Returns dict with `promoted` count and `evaluated` count.
+        """
+        access_min = access_threshold if access_threshold is not None else self.DEFAULT_L4_PROMOTE_ACCESS_THRESHOLD
+        importance_min = importance_threshold if importance_threshold is not None else self.DEFAULT_L4_PROMOTE_IMPORTANCE_THRESHOLD
+        batch = limit if limit is not None else self.L4_PROMOTE_BATCH
+
+        # Step 1: find qualifying L3 rows
+        with self.memory._connect() as conn:
+            l3_rows = conn.execute(
+                """SELECT id, content, session_id, importance, access_count
+                   FROM memories
+                   WHERE level = 'L3'
+                     AND access_count >= ?
+                     AND importance >= ?
+                     AND (is_current = 1 OR is_current IS NULL)
+                     AND archived = 0
+                   ORDER BY access_count DESC, importance DESC
+                   LIMIT ?""",
+                (access_min, importance_min, batch * 3),  # over-fetch for filtering
+            ).fetchall()
+
+            # Step 2: filter out already-promoted (L4 rows whose
+            # provenance_refs contains the L3 id)
+            l4_refs_rows = conn.execute(
+                "SELECT provenance_refs FROM memories WHERE level = 'L4'"
+            ).fetchall()
+
+        promoted_l3_ids: set = set()
+        for r in l4_refs_rows:
+            try:
+                refs = json.loads(r["provenance_refs"] or "[]")
+                promoted_l3_ids.update(refs)
+            except (ValueError, TypeError):
+                continue
+
+        qualifying = [r for r in l3_rows if r["id"] not in promoted_l3_ids][:batch]
+
+        if not qualifying:
+            return {
+                "promoted": 0,
+                "evaluated": len(l3_rows),
+                "message": "No L3 rows meet the promotion criteria",
+            }
+
+        promoted = 0
+        for l3 in qualifying:
+            try:
+                await self.memory.store({
+                    "level": "L4",
+                    "content": l3["content"],
+                    "source": "dreaming_promotion",
+                    "session_id": l3["session_id"] or "",
+                    "provenance_source": "promotion_l3_l4",
+                    "provenance_refs": [l3["id"]],
+                    "importance": 0.9,
+                })
+                promoted += 1
+            except Exception as e:
+                logger.warning(
+                    "[Dreaming] L3→L4 promotion failed for %s: %s",
+                    l3["id"][:8], e,
+                )
+
+        logger.info(
+            "[Dreaming] L3→L4: promoted %d of %d qualifying L3 rows (access_min=%d, importance_min=%.2f)",
+            promoted, len(qualifying), access_min, importance_min,
+        )
+        return {
+            "promoted": promoted,
+            "evaluated": len(l3_rows),
+            "qualifying": len(qualifying),
+        }
+
+    # ========== Legacy: skill generation (now in evolution_engine territory) ==========
     async def consolidate_l3_to_l4(self, min_mentions: int = 3) -> Dict[str, Any]:
-        """Generate skill patterns from frequently mentioned entities/facts."""
+        """Legacy: generate `skills` table entries from frequent entity patterns.
+
+        This was the original L3→L4 implementation but it doesn't match the
+        M-Memory-1 design ("L4 = elevated long-term L3 facts"). It writes to
+        the `skills` table, not L4 memory rows. Keeping it for backward
+        compatibility / manual triggering. Use `promote_l3_to_l4()` for the
+        real L4 promotion that creates L4 memory rows.
+        """
         conn = self.memory._connect()
         try:
             # Find frequently mentioned entities
@@ -489,12 +613,23 @@ Generate skills in JSON format:
 
     # ========== Full Cycle ==========
     async def run_cycle(self) -> Dict[str, Any]:
-        """Run full dreaming consolidation cycle."""
+        """Run full dreaming consolidation cycle.
+
+        Phases:
+          - light_sleep: L1 sessions → L2 summaries (consolidate_l1_to_l2)
+          - rem_sleep:   L2 summaries → L3 facts (consolidate_l2_to_l3)
+          - deep_sleep:  L3 high-frequency → L4 promotion (promote_l3_to_l4)
+
+        Note: `consolidate_l3_to_l4` (legacy skill generation) is NOT
+        called here anymore. Trigger it explicitly via /dreaming/skills
+        if you want the old behaviour. The deep sleep phase now correctly
+        elevates L3 facts to L4 per M-Memory-1 design.
+        """
         logger.info("[Dreaming] Starting consolidation cycle...")
 
         phase1 = await self.consolidate_l1_to_l2()
         phase2 = await self.consolidate_l2_to_l3()
-        phase3 = await self.consolidate_l3_to_l4()
+        phase3 = await self.promote_l3_to_l4()
 
         result = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -505,5 +640,10 @@ Generate skills in JSON format:
             },
         }
 
-        logger.info(f"[Dreaming] Cycle complete: L1→L2={phase1.get('consolidated', 0)}, L2→L3={phase2.get('extracted', 0)}, L3→L4={phase3.get('skills_created', 0)}")
+        logger.info(
+            "[Dreaming] Cycle complete: L1→L2=%d, L2→L3=%d facts, L3→L4=%d promoted",
+            phase1.get("consolidated", 0),
+            phase2.get("facts_created", 0),
+            phase3.get("promoted", 0),
+        )
         return result

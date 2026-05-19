@@ -496,6 +496,128 @@ class TestL2ToL3FactExtraction:
         assert result["facts_created"] == 1
 
 
+class TestL3ToL4Promotion:
+    """Round B1 (2026-05-20): L4 promotion implements the M-Memory-1 design
+    contract — high-access, high-importance L3 facts get elevated to L4 with
+    provenance back to the source. L4 has half-life ∞ so it survives decay.
+
+    Replaces the old `consolidate_l3_to_l4` (which generated `skills` rows,
+    a different concept, kept as legacy method).
+    """
+
+    async def _plant_l3(self, mm: MemoryManager, *, content: str = "test fact",
+                        importance: float = 0.7, access_count: int = 0,
+                        is_current: int = 1) -> str:
+        """Insert an L3 directly so we can set access_count + importance."""
+        import uuid
+        from datetime import datetime, timezone
+        mem_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        with mm._connect() as conn:
+            conn.execute(
+                """INSERT INTO memories
+                   (id, level, content, source, session_id, created_at,
+                    importance, last_accessed_at, access_count,
+                    provenance_source, provenance_refs, is_current)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (mem_id, "L3", content, "test", "s", now,
+                 importance, now, access_count, "", "[]", is_current),
+            )
+            conn.commit()
+        return mem_id
+
+    def _count_l4(self, mm: MemoryManager) -> int:
+        with mm._connect() as conn:
+            return conn.execute("SELECT COUNT(*) AS c FROM memories WHERE level = 'L4'").fetchone()["c"]
+
+    @pytest.mark.asyncio
+    async def test_promotes_high_access_high_importance_l3(self, mm, engine):
+        l3_id = await self._plant_l3(
+            mm, content="user lives in Beijing",
+            importance=0.8, access_count=7,
+        )
+        result = await engine.promote_l3_to_l4()
+        assert result["promoted"] == 1
+        assert self._count_l4(mm) == 1
+
+        # New L4 carries provenance back to the source L3
+        with mm._connect() as conn:
+            row = conn.execute("SELECT * FROM memories WHERE level = 'L4'").fetchone()
+        assert row["provenance_source"] == "promotion_l3_l4"
+        assert json.loads(row["provenance_refs"]) == [l3_id]
+        assert row["content"] == "user lives in Beijing"
+        # L4 baseline importance per M-Memory-1 design
+        assert row["importance"] >= 0.9 - 1e-9
+
+    @pytest.mark.asyncio
+    async def test_l3_source_not_superseded(self, mm, engine):
+        # L4 is an ELEVATED copy; the source L3 keeps existing + accumulating
+        l3_id = await self._plant_l3(mm, importance=0.8, access_count=6)
+        await engine.promote_l3_to_l4()
+        with mm._connect() as conn:
+            row = conn.execute("SELECT superseded_by FROM memories WHERE id = ?", (l3_id,)).fetchone()
+        assert row["superseded_by"] is None
+
+    @pytest.mark.asyncio
+    async def test_idempotent_no_double_promotion(self, mm, engine):
+        await self._plant_l3(mm, importance=0.8, access_count=6)
+        first = await engine.promote_l3_to_l4()
+        assert first["promoted"] == 1
+
+        # Run again — same L3 already promoted (its id is in L4's provenance)
+        second = await engine.promote_l3_to_l4()
+        assert second["promoted"] == 0
+        assert self._count_l4(mm) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_l3_below_access_threshold(self, mm, engine):
+        # access_count=2 < default 5
+        await self._plant_l3(mm, importance=0.9, access_count=2)
+        result = await engine.promote_l3_to_l4()
+        assert result["promoted"] == 0
+        assert self._count_l4(mm) == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_l3_below_importance_threshold(self, mm, engine):
+        # access high but importance low
+        await self._plant_l3(mm, importance=0.5, access_count=10)
+        result = await engine.promote_l3_to_l4()
+        assert result["promoted"] == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_superseded_l3(self, mm, engine):
+        # L3 that was knocked out by conflict resolution shouldn't be promoted
+        await self._plant_l3(
+            mm, importance=0.9, access_count=10, is_current=0,
+        )
+        result = await engine.promote_l3_to_l4()
+        assert result["promoted"] == 0
+
+    @pytest.mark.asyncio
+    async def test_custom_thresholds_override_defaults(self, mm, engine):
+        # Tight thresholds — should promote what defaults would skip
+        l3_id = await self._plant_l3(mm, importance=0.55, access_count=3)
+        # Defaults would skip (access=3 < 5, importance=0.55 < 0.7)
+        skip_result = await engine.promote_l3_to_l4()
+        assert skip_result["promoted"] == 0
+        # Custom thresholds — should promote
+        custom_result = await engine.promote_l3_to_l4(
+            access_threshold=3, importance_threshold=0.5,
+        )
+        assert custom_result["promoted"] == 1
+
+    @pytest.mark.asyncio
+    async def test_run_cycle_invokes_promotion_not_legacy_skills(self, mm, engine):
+        """`run_cycle` must call promote_l3_to_l4, not the legacy skill-generation
+        method. Locks the architecture decision from M-Memory-1."""
+        l3_id = await self._plant_l3(mm, importance=0.8, access_count=10)
+        result = await engine.run_cycle()
+        assert "deep_sleep" in result["phases"]
+        # Promotion result has `promoted` key; legacy had `skills_created`
+        assert "promoted" in result["phases"]["deep_sleep"]
+        assert result["phases"]["deep_sleep"]["promoted"] == 1
+
+
 class TestLongSessions:
     @pytest.mark.asyncio
     async def test_session_over_cap_uses_head_and_tail(self, mm, engine, monkeypatch):
