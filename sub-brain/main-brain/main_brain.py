@@ -211,14 +211,26 @@ async def lifespan(app: FastAPI) -> None:
 
         # Build a thin LLM caller that shares the configured llm_config. Falls
         # back to a chat-completion against the highest-priority endpoint.
+        #
+        # Reads the CURRENT llm_config from _state on every call rather than
+        # capturing it in the closure. Without this, /config/reload would
+        # update ChatEngine's config but the conflict caller would keep
+        # hitting the original (now-stale) endpoint — symptom: store an L3
+        # via UI after switching model, no contradictions get marked
+        # because every judge call quietly fails on a doomed httpx call.
+        # Same bug class as Round C2's /config/reload propagation fix.
         async def _conflict_llm_caller(messages):
-            endpoints = llm_config.get("endpoints") or []
+            chat_engine = _state.get("chat")
+            current_config = (
+                getattr(chat_engine, "llm_config", None) or llm_config
+            )
+            endpoints = current_config.get("endpoints") or []
             if not endpoints:
                 # Single-endpoint legacy config
                 endpoints = [{
-                    "base_url": llm_config.get("base_url", ""),
-                    "model_id": llm_config.get("model_id", ""),
-                    "api_key": llm_config.get("api_key"),
+                    "base_url": current_config.get("base_url", ""),
+                    "model_id": current_config.get("model_id", ""),
+                    "api_key": current_config.get("api_key"),
                 }]
             # Use highest-priority endpoint (sorted desc in chat router)
             ep = sorted(endpoints, key=lambda e: -(e.get("priority", 0)))[0]
