@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-19（M4a 完成 — 多 LLM 端点自动 failover + 后台健康监视器 + 前端健康面板;MCP server 推到 M4b）
+> **最后更新**：2026-05-19（M4b 完成 — webrain 自身作为 MCP server 暴露,JSON-RPC 2.0 over HTTP + stdio bridge + 6 个只读工具 + 前端信息面板）
 
 ---
 
@@ -442,7 +442,102 @@ frontend    vitest run                                → 119 files / 1193 pass(
 
 当 priority=10 的本地端点挂掉,下次 chat 自动切到 priority=5,前端面板上 primary-local 变红,几秒后后台监视器再次探测,恢复后自动转绿,下次 chat 会重新优先选回去。
 
-### 6.9 自学习闭环的物理路径（已全线打通）
+### 6.9 M4b — webrain 作为 MCP server 暴露（本轮）
+
+把 webrain 的 memory / RAG / wiki / knowledge graph 能力包装成符合 MCP(Model Context Protocol)规范的 JSON-RPC 2.0 服务,让任何 MCP 兼容客户端都能调用。
+
+**新增 `mcp/` 包(`sub-brain/main-brain/mcp/`)**:
+
+- `protocol.py`(81 行) —— JSON-RPC 2.0 标准:错误码常量(`PARSE_ERROR` -32700 / `INVALID_REQUEST` / `METHOD_NOT_FOUND` / `INVALID_PARAMS` / `INTERNAL_ERROR` -32603)、`MCPError` 异常类、`success_response()` / `error_response()` builder、`validate_request()` 检查 `jsonrpc=="2.0"` + method 是非空字符串、`is_notification()` 判定无 id 字段
+- `tools.py`(196 行) —— `ToolSpec` dataclass(name / description / input_schema / handler)+ `ToolHandler` 类型签名(`async (state, args) -> result`)。**v1 只暴露 6 个只读工具**:
+  - `webrain_memory_query`(query+levels+limit)/ `webrain_memory_recent`(level?+limit)
+  - `webrain_rag_query`(query+k)/ `webrain_rag_stats`
+  - `webrain_wiki_search`(query+limit)/ `webrain_kg_search`(query+limit)
+  - 每个 handler 内部 `_require(state, key)` 在子系统未初始化时抛 `INTERNAL_ERROR`(不让 KeyError 裸奔出来)
+  - `_require_str(args, key)` 非空字符串校验失败抛 `INVALID_PARAMS`
+- `server.py`(143 行) —— `MCPServer(state)`:
+  - `handle(payload)` 支持单请求和 batch(数组),notification(无 id)返回 None
+  - 方法路由:`initialize` → 协议版本 + capabilities + serverInfo / `ping` → 空对象 / `tools/list` → 完整 registry / `tools/call` → 派发到对应 handler
+  - **serverInfo `{name: "webrain-mcp", version: "0.1.0"}`** —— 没有 Claude/Anthropic 字符串(测试用 `assert "claude" not in identity_str.lower()` 守护)
+  - 工具结果按 MCP 约定包成 `{content: [{type: "text", text: json.dumps(result)}], isError: false}`
+
+**新增 `main_brain.py` endpoints**:
+
+- `POST /mcp/jsonrpc` —— 主入口。返回 `null` 时(全是 notification)发 204 No Content
+- `GET /mcp/info` —— 人类可读的服务器描述(server identity / transport / endpoint / tool count + tool name & description list)。前端 panel 用它
+
+**新增 stdio bridge 脚本(`tools/mcp_stdio_bridge.py`,116 行)**:
+
+很多 MCP 客户端(IDE / 桌面助手 / agent)用 stdio 传输:派生子进程,通过 stdin/stdout 收发 JSON-RPC line-by-line。webrain 是 HTTP-only 的,这个脚本是桥:
+
+```bash
+python tools/mcp_stdio_bridge.py --url http://127.0.0.1:3000/brain/mcp/jsonrpc
+```
+
+行为:
+- 每行读一个 JSON-RPC object 从 stdin
+- POST 到 webrain HTTP endpoint
+- 把 response 写回 stdout(notification 不写),flush 立即可见
+- parse 错误返回 JSON-RPC 错误信封(-32700)而非崩溃,客户端能看到清晰的报错
+- 标准库 only —— 没有任何第三方依赖,可在任意精简环境里跑
+
+**前端改动**:
+
+- `frontend/src/api/mcp.ts` —— 在已有的「webrain-as-client」mcpApi 之外,新增「webrain-as-server」的 `MCPSelfServerInfo` 类型 + `mcpApi.selfInfo()`,接 `/brain/mcp/info`
+- `frontend/src/components/settings/MCPInfoPanel.tsx`(160 行):
+  - 服务器身份 chip(`webrain-mcp v0.1.0` + transport tag)
+  - HTTP endpoint 完整 URL(用 `window.location.origin + /brain/mcp/jsonrpc`)+ 一键复制
+  - stdio bridge 完整 shell 命令 + 一键复制
+  - 工具表:工具名(monospace code style)+ 描述
+  - 黄色 warning Alert 标明「v1 仅暴露只读工具,后续加 token 鉴权后再开放 write」
+- `SettingsPage.tsx`「模型」tab 现在挂 3 个 panel:ModelConfigPanel + LLMHealthPanel + MCPInfoPanel
+
+**测试**:
+
+- `tests/test_mcp_server.py`(33 用例):
+  - 7 protocol primitives(success/error 响应形状 / 错误码携带 data / is_notification 判定 / validate_request 接受 well-formed、拒绝 non-object、拒绝错版本、拒绝缺 method)
+  - 3 tool registry sanity(必备 6 个工具齐全 / 每个 schema 合法 / `to_dict` 用 camelCase inputSchema 键)
+  - 1 initialize(返回协议版本 + capabilities + 不含 Claude/Anthropic 身份字符串)
+  - 1 tools/list(返回完整 registry)
+  - 6 tools/call(正确派发到 memory_query handler / unknown tool → METHOD_NOT_FOUND / name 缺失 → INVALID_PARAMS / arguments 类型错误 → INVALID_PARAMS / handler 内 INVALID_PARAMS 透传 / 子系统未初始化 → INTERNAL_ERROR)
+  - 3 notifications & unknown(notification 返回 None / unknown method → METHOD_NOT_FOUND / ping 返回 `{}`)
+  - 4 batch(数组返回 / notification 过滤 / 全 notification 返回 None / 空 batch → error)
+  - 2 malformed(non-object / 错版本)
+  - 5 per-tool integration(RAG chunk 序列化 / RAG stats 透传 / RAG retriever 异常 → INTERNAL_ERROR / wiki search / kg search_entities 备用路径)
+- `tests/test_mcp_stdio_bridge.py`(8 用例):
+  - 4 `_post_json`(200 → 解析返回 / 204 → None / HTTP 错误 → JSON-RPC 错误信封 / 连接错误 → JSON-RPC 错误信封)
+  - 4 stdio loop(invalid JSON → -32700 / 正常请求 → forward+ writeback / notification → no stdout / 空行 skip)
+- 前端 `api/mcp.test.ts` +1 `selfInfo` 用例
+- 前端 `components/settings/MCPInfoPanel.test.tsx`(5 用例):server 身份 / 工具表 / 绝对 URL / 工具数计数 / 错误处理
+
+**运行验收**:
+
+```
+main-brain  pytest test_mcp_server.py + test_mcp_stdio_bridge.py  → 41 pass
+main-brain  pytest tests/(除 watchdog dep)                       → 236 pass(+41)
+frontend    tsc --noEmit                                          → 0 errors
+frontend    vitest run                                            → 120 files / 1198+ pass(+6;偶发 SkillsPage 系统压力 flake,隔离重跑全过)
+```
+
+**故意未做(v1 范围控制)**:
+
+- ❌ **MCP endpoint 鉴权** —— 当前任何能访问 sub-brain 的客户端都能调用。本地单机部署可接受,网络部署前必须加 token bearer
+- ❌ **write 类工具** —— `memory_store` / `wiki_create` / `rag_index_file` 等。鉴权落地后再开放
+- ❌ **MCP resources/* + prompts/* 接口** —— MCP 协议的可选 surface,v1 跳过(客户端可优雅 fallback 到 tools-only 模式)
+- ❌ **MCP notifications(server→client)** —— 比如 `tools/listChanged`。`capabilities.tools.listChanged: false` 已声明
+- ❌ **MCP sampling** —— webrain 不向客户端开放 LLM 请求
+- ❌ **stdio long-lived 进程内文件描述符多路复用** —— bridge 是单连接长寿命进程,够主流客户端用了
+
+**用户操作示例**:
+
+外部 MCP 客户端连过来(伪配置):
+```json
+{"type": "stdio", "command": "python", "args": ["sub-brain/main-brain/tools/mcp_stdio_bridge.py"]}
+```
+
+客户端拿到 6 个工具后,可以让 LLM 自主调用 `webrain_memory_query` / `webrain_rag_query` 等访问 webrain 的"记忆 + 文档"图谱,无需用户手动复制粘贴。
+
+### 6.10 自学习闭环的物理路径（已全线打通）
 
 ```
 main-brain 后台任务 _skill_evolution_scheduler（每 1h）
@@ -491,11 +586,13 @@ main-brain python -m pytest tests/      → 75 pass / 0 fail（自 Round E 起�
 
 | 优先 | 任务 | 说明 |
 |---|---|---|
-| 🔥 | **M4b MCP server 暴露** | 把 webrain 作为 MCP server,通过 stdio / WebSocket 让外部 MCP 客户端调用 memory/RAG/skill/wiki。需要实现 MCP 协议握手、capabilities、tool 调用分发。 |
+| 🔥 | **M5 多 channel 集成** | 接入 Telegram / Discord(自托管 IM 优先,云依赖避免);消息从外部 channel → sub-brain → main-brain chat 闭环。涉及 channel manager 设计。 |
+| 🔥 | M4b.1 MCP 鉴权 + write 工具 | bearer token + 白名单。鉴权落地后开放 `memory_store` / `wiki_create` / `rag_index_file` 等 write 类工具。 |
 | 🔥 | M4a.1 流式 failover | 当前流路径仍用 `get_primary()`,首 chunk 之前若失败需要 failover。需要 stream 启动失败检测 + endpoint 切换。 |
 | 🔥 | M3.5 PlanExecutor 流式进度 | 当前 `/plan/execute` 是同步返回。后续做 SSE,每个 attempt 完成实时推送给前端,UI 显示「task 2/5 第 3 次尝试中...」。 |
 | 📦 | 默认 registry 种子 | 给本地默认 registry 配 1–2 个示范 skill,首次打开 marketplace 不空。 |
-| ✅ | ~~M4a Multi-LLM failover + 健康面板~~ | 完成于 2026-05-19(§6.8)。原 M5/M6 roadmap 因 M4 拆分而后移一格。 |
+| ✅ | ~~M4b MCP server 暴露~~ | 完成于 2026-05-19(§6.9)。 |
+| ✅ | ~~M4a Multi-LLM failover + 健康面板~~ | 完成于 2026-05-19(§6.8)。 |
 | ✅ | ~~M3 Planner Verify+Retry~~ | 完成于 2026-05-19(§6.7)。 |
 | ✅ | ~~M2 Planner 任务拆解~~ | 完成于 2026-05-19(§6.6)。 |
 | ✅ | ~~M1 RAG 接入 chat~~ | 完成于 2026-05-19(§6.5)。 |

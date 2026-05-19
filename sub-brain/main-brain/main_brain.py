@@ -38,6 +38,7 @@ from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
 from chat.llm_health_monitor import LLMHealthMonitor
+from mcp import MCPServer, TOOL_REGISTRY
 from planner import Planner
 from wiki.wiki_engine import WikiEngine
 from memory.dreaming_engine import DreamingEngine
@@ -827,6 +828,50 @@ async def plan_execute(request: Dict[str, Any]):
     payload["ok"] = True
     payload["plan"] = plan.to_dict()  # echo the plan back for client convenience
     return payload
+
+
+# ========== MCP Server (M4b) ==========
+
+
+@app.post("/mcp/jsonrpc")
+async def mcp_jsonrpc(request: Any):
+    """JSON-RPC 2.0 endpoint exposing webrain as an MCP server.
+
+    Supports single requests and batches. Notifications (no `id` field)
+    return 204 No Content. See `mcp/` package for the protocol surface
+    and tool registry.
+
+    External clients reach this via the sub-brain proxy at
+    `POST /brain/mcp/jsonrpc`.
+    """
+    server = MCPServer(_state)
+    response = await server.handle(request)
+    if response is None:
+        # All requests in the batch (or the single request) were
+        # notifications — JSON-RPC says don't reply at all.
+        from fastapi import Response
+        return Response(status_code=204)
+    return response
+
+
+@app.get("/mcp/info")
+async def mcp_info():
+    """Human-readable summary of the MCP server's exposed surface.
+
+    Drives the frontend MCPInfoPanel. Returns the tool list in a
+    compact form (without input schemas) so the panel stays light.
+    """
+    return {
+        "ok": True,
+        "server": {"name": "webrain-mcp", "version": "0.1.0"},
+        "transport": "json-rpc-2.0-http",
+        "endpoint": "/mcp/jsonrpc",
+        "tool_count": len(TOOL_REGISTRY),
+        "tools": [
+            {"name": t.name, "description": t.description}
+            for t in TOOL_REGISTRY
+        ],
+    }
 
 
 # ========== Evolution API ==========

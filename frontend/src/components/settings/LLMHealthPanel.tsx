@@ -85,8 +85,7 @@ export default function LLMHealthPanel() {
     );
   }
 
-  const statusColor =
-    stats.status === "healthy" ? "success" : stats.status === "degraded" ? "warning" : "error";
+  const statusColor = stats.status === "healthy" ? "success" : stats.status === "degraded" ? "warning" : "error";
 
   return (
     <Card
@@ -98,7 +97,9 @@ export default function LLMHealthPanel() {
           </Tag>
           {stats.monitor_running && (
             <Tooltip title="后台健康监视器正在运行(默认 60s 周期)">
-              <Tag icon={<ThunderboltOutlined />} color="blue">监视中</Tag>
+              <Tag icon={<ThunderboltOutlined />} color="blue">
+                监视中
+              </Tag>
             </Tooltip>
           )}
         </Space>
@@ -161,9 +162,13 @@ export default function LLMHealthPanel() {
               width: 90,
               render: (healthy: boolean) =>
                 healthy ? (
-                  <Tag icon={<CheckCircleOutlined />} color="success">在线</Tag>
+                  <Tag icon={<CheckCircleOutlined />} color="success">
+                    在线
+                  </Tag>
                 ) : (
-                  <Tag icon={<CloseCircleOutlined />} color="error">离线</Tag>
+                  <Tag icon={<CloseCircleOutlined />} color="error">
+                    离线
+                  </Tag>
                 ),
             },
             {
@@ -174,9 +179,7 @@ export default function LLMHealthPanel() {
                 <span style={{ fontSize: 12 }}>
                   <span style={{ color: "#15803d" }}>{r.success_count}</span>
                   {" / "}
-                  <span style={{ color: r.failure_count > 0 ? "#b91c1c" : "var(--c-text-3)" }}>
-                    {r.failure_count}
-                  </span>
+                  <span style={{ color: r.failure_count > 0 ? "#b91c1c" : "var(--c-text-3)" }}>{r.failure_count}</span>
                 </span>
               ),
             },
