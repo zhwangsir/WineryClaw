@@ -10,7 +10,7 @@ import uuid
 import math
 import re
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -18,6 +18,99 @@ import httpx
 import numpy as np
 
 logger = logging.getLogger("webrain.memory")
+
+# ---------------------------------------------------------------------------
+# Memory layer semantics — M-Memory-1
+# ---------------------------------------------------------------------------
+# Default importance per level. New L1 entries are "raw events" with modest
+# importance; L2 are session summaries (higher signal); L3 are extracted
+# semantic facts (high); L4 are long-term identity (highest baseline).
+#
+# These are *defaults* — callers may pass an explicit importance. Stays
+# inside [0.0, 1.0] regardless of upstream value.
+DEFAULT_IMPORTANCE_BY_LEVEL: Dict[str, float] = {
+    "L1": 0.4,
+    "L2": 0.6,
+    "L3": 0.7,
+    "L4": 0.9,
+}
+
+# Forgetting-curve half-lives in days. effective = importance * exp(-elapsed / half_life).
+# L4 is effectively immortal — a sufficiently large number that decay is
+# imperceptible over any realistic lifetime.
+HALF_LIFE_DAYS_BY_LEVEL: Dict[str, float] = {
+    "L1": 2.0,
+    "L2": 14.0,
+    "L3": 90.0,
+    "L4": 1.0e9,
+}
+
+# On every retrieve, importance is bumped by this amount (clamped to 1.0).
+# Frequent recall → memory stays alive against decay; never-recalled →
+# eventually drowned by stronger memories at query time.
+RETRIEVAL_BOOST = 0.05
+
+# Query-time blending of textual relevance vs decayed importance.
+# final_score = relevance * RELEVANCE_WEIGHT + effective_importance * IMPORTANCE_WEIGHT
+# At 0.7/0.3 a strong-match-but-old memory can still win against a weak-match
+# fresh one, but only when its importance was already non-trivial. Tune by
+# benchmark (Task #8) rather than intuition.
+RELEVANCE_WEIGHT = 0.7
+IMPORTANCE_WEIGHT = 0.3
+
+
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    """Lenient ISO-8601 parser that returns None for empty / unparseable input.
+
+    SQLite stores timestamps as TEXT; rows from before M-Memory-1 may have
+    last_accessed_at = NULL despite the backfill (race conditions, manual
+    inserts in tests, etc.). Callers handle None as "treat as freshly
+    created" rather than crashing.
+    """
+    if not ts:
+        return None
+    try:
+        # datetime.fromisoformat accepts the format we write
+        dt = datetime.fromisoformat(ts)
+        # Treat naive timestamps as UTC for consistent math
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (TypeError, ValueError):
+        return None
+
+
+def effective_importance(
+    importance: float,
+    level: str,
+    last_accessed_at: Optional[str],
+    now: Optional[datetime] = None,
+) -> float:
+    """Apply forgetting-curve decay to a memory's stored importance.
+
+    Formula: effective = importance * exp(-elapsed_days / half_life)
+
+    Half-life depends on level (see HALF_LIFE_DAYS_BY_LEVEL). L4 has an
+    effectively infinite half-life so it does not decay over any
+    realistic timescale.
+
+    `last_accessed_at` is the reference timestamp — typically set to
+    created_at on insert, then bumped by `_increment_access` on every
+    retrieve. If missing or unparseable, returns the raw importance
+    (no decay applied) — safer than zeroing out the memory.
+    """
+    if importance is None:
+        importance = 0.5
+    importance = max(0.0, min(1.0, float(importance)))
+    half_life = HALF_LIFE_DAYS_BY_LEVEL.get(level, 14.0)
+    anchor = _parse_iso(last_accessed_at)
+    if anchor is None:
+        return importance
+    now = now or datetime.now(timezone.utc)
+    elapsed = (now - anchor).total_seconds() / 86400.0
+    if elapsed <= 0:
+        return importance
+    return importance * math.exp(-elapsed / half_life)
 
 # ---------------------------------------------------------------------------
 # Re-ranking model (lazy-loaded)
@@ -57,8 +150,22 @@ class MemoryManager:
         self._ann_index: Optional[Any] = None  # sklearn NearestNeighbors
         self._ann_dirty = True
         self._http_client: Optional[httpx.AsyncClient] = None
+        # M-Memory-1: optional L3 conflict detector. None → no contradiction
+        # check (backward compatible default). Wire via set_conflict_detector
+        # after construction so we don't introduce a circular import.
+        self._conflict_detector: Optional[Any] = None
         self._init_db()
         self._load_vector_index()  # build index from existing DB vectors
+
+    def set_conflict_detector(self, detector: Optional[Any]) -> None:
+        """Plug in (or remove) the L3 conflict detector.
+
+        Production code calls this after MemoryManager construction in
+        main_brain.py lifespan, once an LLM caller is available. Tests
+        either skip wiring (no detector → no conflict checks) or inject
+        a stub that returns canned verdicts.
+        """
+        self._conflict_detector = detector
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -159,6 +266,34 @@ class MemoryManager:
                 conn.execute("ALTER TABLE memories ADD COLUMN archived INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+            # M-Memory-1 migration: importance + decay + provenance + conflict
+            # All idempotent (catch duplicate-column). Defaults chosen so that
+            # rows created before the migration still behave sensibly:
+            #   - importance defaults to 0.5 (mid-range; was effectively None before)
+            #   - last_accessed_at defaults to created_at via UPDATE below
+            #   - is_current defaults to 1 (everything pre-migration is "current")
+            for col_sql in (
+                "ALTER TABLE memories ADD COLUMN importance REAL DEFAULT 0.5",
+                "ALTER TABLE memories ADD COLUMN last_accessed_at TEXT",
+                "ALTER TABLE memories ADD COLUMN provenance_source TEXT",
+                "ALTER TABLE memories ADD COLUMN provenance_refs TEXT DEFAULT '[]'",
+                "ALTER TABLE memories ADD COLUMN superseded_by TEXT",
+                "ALTER TABLE memories ADD COLUMN conflict_group TEXT",
+                "ALTER TABLE memories ADD COLUMN is_current INTEGER DEFAULT 1",
+            ):
+                try:
+                    conn.execute(col_sql)
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+            # Backfill last_accessed_at for pre-migration rows so decay math
+            # doesn't see NULL and crash. Use created_at as the seed.
+            try:
+                conn.execute(
+                    "UPDATE memories SET last_accessed_at = created_at "
+                    "WHERE last_accessed_at IS NULL"
+                )
+            except sqlite3.OperationalError:
+                pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memories_archive (
                     id TEXT PRIMARY KEY, level TEXT NOT NULL, content TEXT NOT NULL,
@@ -233,12 +368,37 @@ class MemoryManager:
 
     # ========== L1-L4 CRUD ==========
     async def store(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Store a memory entry.
+
+        Beyond the original fields, M-Memory-1 accepts:
+          - importance: 0.0-1.0, defaults per-level (see DEFAULT_IMPORTANCE_BY_LEVEL)
+          - provenance_source: free-form label ("chat", "channel:tg",
+            "consolidation_l1_l2", "fact_extraction_l2_l3", "promotion_l3_l4")
+          - provenance_refs: list of source memory IDs this entry was derived from
+        These get persisted on every chunk produced by the chunker so lineage
+        survives chunking.
+        """
         mem_id = str(uuid.uuid4())
         level = data.get("level", "L1")
         content = data.get("content", "")
         source = data.get("source", "")
         session_id = data.get("session_id", "")
         now = datetime.now(timezone.utc).isoformat()
+
+        # M-Memory-1 new fields
+        raw_importance = data.get("importance")
+        if raw_importance is None:
+            importance = DEFAULT_IMPORTANCE_BY_LEVEL.get(level, 0.5)
+        else:
+            try:
+                importance = max(0.0, min(1.0, float(raw_importance)))
+            except (TypeError, ValueError):
+                importance = DEFAULT_IMPORTANCE_BY_LEVEL.get(level, 0.5)
+        provenance_source = data.get("provenance_source") or ""
+        raw_refs = data.get("provenance_refs") or []
+        if not isinstance(raw_refs, list):
+            raw_refs = []
+        provenance_refs_json = json.dumps([str(r) for r in raw_refs])
 
         # Smart chunking for long content
         chunks = self._chunk_text(content)
@@ -248,18 +408,28 @@ class MemoryManager:
             if len(chunks) <= 1:
                 # Single chunk — store as-is
                 conn.execute(
-                    "INSERT INTO memories (id, level, content, source, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (mem_id, level, content, source, session_id, now),
+                    """INSERT INTO memories
+                       (id, level, content, source, session_id, created_at,
+                        importance, last_accessed_at, provenance_source, provenance_refs)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (mem_id, level, content, source, session_id, now,
+                     importance, now, provenance_source, provenance_refs_json),
                 )
                 stored_ids.append(mem_id)
             else:
-                # Multiple chunks — store each with chunk metadata
+                # Multiple chunks — store each with chunk metadata. All chunks
+                # share the same importance + provenance — they're the same
+                # logical memory, just sliced.
                 for i, chunk in enumerate(chunks):
                     cid = str(uuid.uuid4()) if i > 0 else mem_id
                     meta = json.dumps({"chunk_index": i, "total_chunks": len(chunks), "parent_id": mem_id})
                     conn.execute(
-                        "INSERT INTO memories (id, level, content, source, session_id, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (cid, level, chunk, source, session_id, now, meta),
+                        """INSERT INTO memories
+                           (id, level, content, source, session_id, created_at, metadata,
+                            importance, last_accessed_at, provenance_source, provenance_refs)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (cid, level, chunk, source, session_id, now, meta,
+                         importance, now, provenance_source, provenance_refs_json),
                     )
                     stored_ids.append(cid)
             conn.commit()
@@ -268,12 +438,49 @@ class MemoryManager:
         if level in ("L2", "L3") and len(content) > 10:
             await self.extract_semantic(content)
 
-        # Generate embeddings for L2+ chunks
-        if level in ("L2", "L3"):
+        # Generate embeddings.
+        # M-Memory-1: L1 now gets embeddings by default — SQLite FTS5's
+        # default tokenizer does not segment CJK text, so vector search is
+        # the ONLY way Chinese chat history is retrievable. Cost is one
+        # local sentence-transformers call per chunk (~5-10ms on CPU for
+        # the multilingual MiniLM).  Heavy-write deployments can opt out
+        # via WEBRAIN_MEMORY_EMBED_L1=0.
+        import os as _os
+        embed_l1 = _os.environ.get("WEBRAIN_MEMORY_EMBED_L1", "1") != "0"
+        levels_to_embed = {"L2", "L3", "L4"}
+        if embed_l1:
+            levels_to_embed.add("L1")
+        if level in levels_to_embed:
             for sid, chunk in zip(stored_ids, chunks):
                 await self._store_embedding(sid, chunk)
 
-        return {"id": mem_id, "level": level, "stored": True, "chunks": len(stored_ids)}
+        # M-Memory-1: contradiction check on L3 only. Runs AFTER persistence
+        # + embedding generation so the detector can use the live vector
+        # index. The new memory is already addressable; any conflict mark
+        # is applied as a follow-up UPDATE, never blocking the return value.
+        conflict_result: Optional[Dict[str, Any]] = None
+        if level == "L3" and self._conflict_detector is not None and content.strip():
+            try:
+                conflict_result = await self._conflict_detector.detect_and_mark(
+                    self, mem_id, content,
+                )
+            except Exception as e:
+                # Detection is best-effort — never sabotage a store() that
+                # otherwise succeeded.
+                logger.warning("conflict detector failed (non-fatal): %s", e)
+                conflict_result = None
+
+        ret: Dict[str, Any] = {
+            "id": mem_id,
+            "level": level,
+            "stored": True,
+            "chunks": len(stored_ids),
+            "importance": importance,
+            "provenance_source": provenance_source,
+        }
+        if conflict_result is not None:
+            ret["conflict"] = conflict_result
+        return ret
 
     # ========== Advanced Query: Hybrid Search + Re-ranking ==========
     async def query(self, query_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -293,16 +500,25 @@ class MemoryManager:
         if use_vector:
             vec_results = await self._vector_search(q, top_k, exclude_ids=[r["id"] for r in fts_results])
 
-        # Phase 2: Hybrid fusion (RRF)
+        # Phase 2: Hybrid fusion (RRF) — annotates each row with rrf_score
         fused = self._rrf_fuse([fts_results, vec_results], k=60)
 
-        # Phase 3: Re-ranking (if enabled and available)
+        # Phase 3: Re-ranking (if enabled and available) — annotates rerank_score
+        # on each row. We keep a larger pool here (top_k, not limit) so the
+        # importance blender has enough candidates to re-order; final truncation
+        # happens in phase 4.
         if use_rerank and len(fused) > 1:
-            fused = await self._rerank(q, fused, limit=limit)
-        else:
-            fused = fused[:limit]
+            fused = await self._rerank(q, fused, limit=top_k)
 
-        # Increment access count for retrieved memories
+        # Phase 4 (M-Memory-1): blend textual relevance with decayed importance.
+        # Memories with high importance survive against fresher but weaker
+        # matches; never-recalled memories naturally fade as their decay grows.
+        # _blend_with_importance also truncates to `limit`.
+        fused = self._blend_with_importance(fused, limit=limit)
+
+        # Increment access count + reset last_accessed_at + bump importance.
+        # Order matters: blender ran on PRE-bump state so this query's results
+        # don't influence their own ranking via the boost they just earned.
         self._increment_access([r["id"] for r in fused])
 
         return fused
@@ -426,7 +642,11 @@ class MemoryManager:
 
     # ========== RRF Fusion ==========
     def _rrf_fuse(self, result_lists: List[List[Dict]], k: int = 60) -> List[Dict]:
-        """Reciprocal Rank Fusion across multiple result lists."""
+        """Reciprocal Rank Fusion across multiple result lists.
+
+        Annotates each surviving item with `rrf_score` so the downstream
+        blender (M-Memory-1) can normalise + combine with importance.
+        """
         scores: Dict[str, float] = {}
         items: Dict[str, Dict] = {}
 
@@ -436,9 +656,82 @@ class MemoryManager:
                 items[item_id] = item
                 scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank + 1)
 
-        # Sort by fused score descending
+        # Sort by fused score descending and attach the score on each item
         fused = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return [items[iid] for iid, _ in fused]
+        out: List[Dict] = []
+        for iid, sc in fused:
+            row = dict(items[iid])
+            row["rrf_score"] = sc
+            out.append(row)
+        return out
+
+    # ========== Importance Blending (M-Memory-1) ==========
+    def _blend_with_importance(
+        self,
+        candidates: List[Dict],
+        limit: int,
+        now: Optional[datetime] = None,
+    ) -> List[Dict]:
+        """Blend textual relevance with decayed importance, re-sort, truncate.
+
+        Each candidate must already carry a relevance score under either
+        `rerank_score` (when re-ranking ran) or `rrf_score` (when it didn't).
+        We min-max normalize within the candidate set so the score lives in
+        [0, 1] regardless of source — RRF scores cluster near 0, cross-encoder
+        scores can be negative. Then:
+
+            final_score = relevance_norm * RELEVANCE_WEIGHT
+                        + effective_importance * IMPORTANCE_WEIGHT
+
+        The blender annotates each item with `effective_importance` and
+        `final_score` for debugging + frontend display.
+
+        Empty / singleton candidate lists are returned untouched (no blend
+        to do — nothing to compare against).
+        """
+        if not candidates:
+            return []
+        if len(candidates) == 1:
+            row = dict(candidates[0])
+            row.setdefault("effective_importance", effective_importance(
+                row.get("importance", 0.5), row.get("level", "L1"),
+                row.get("last_accessed_at"), now=now,
+            ))
+            row.setdefault("final_score", row["effective_importance"])
+            return [row]
+
+        # Pick the relevance source per item — rerank wins when present
+        def _relevance(c: Dict) -> float:
+            if "rerank_score" in c:
+                return float(c["rerank_score"])
+            return float(c.get("rrf_score", 0.0))
+
+        rels = [_relevance(c) for c in candidates]
+        r_min, r_max = min(rels), max(rels)
+        spread = r_max - r_min
+        # If every candidate has the same score, normalised value is 0.5
+        # (a neutral choice — pushes importance to break the tie).
+        def _normalize(r: float) -> float:
+            if spread <= 1e-9:
+                return 0.5
+            return (r - r_min) / spread
+
+        blended: List[Dict] = []
+        for c, r in zip(candidates, rels):
+            row = dict(c)
+            eff = effective_importance(
+                row.get("importance", 0.5),
+                row.get("level", "L1"),
+                row.get("last_accessed_at"),
+                now=now,
+            )
+            final = _normalize(r) * RELEVANCE_WEIGHT + eff * IMPORTANCE_WEIGHT
+            row["effective_importance"] = eff
+            row["final_score"] = final
+            blended.append(row)
+
+        blended.sort(key=lambda x: x["final_score"], reverse=True)
+        return blended[:limit]
 
     # ========== Re-ranking ==========
     async def _rerank(self, query: str, candidates: List[Dict], limit: int = 10) -> List[Dict]:
@@ -513,15 +806,30 @@ class MemoryManager:
 
         return chunks
 
-    # ========== Access Tracking ==========
+    # ========== Access Tracking + Reinforcement (M-Memory-1) ==========
     def _increment_access(self, ids: List[str]) -> None:
+        """Called by query() after retrieval. Updates three signals:
+
+          1. access_count — raw retrieval counter (used in stats)
+          2. last_accessed_at — resets the decay clock for forgetting curve
+          3. importance — bumped by RETRIEVAL_BOOST (capped at 1.0) so
+             repeatedly-recalled memories climb the ranking
+
+        SQL uses MIN(1.0, importance + boost) for the cap. We do this in
+        one statement per call (small N) rather than per-memory.
+        """
         if not ids:
             return
+        now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             placeholders = ",".join(["?"] * len(ids))
             conn.execute(
-                f"UPDATE memories SET access_count = access_count + 1 WHERE id IN ({placeholders})",
-                tuple(ids),
+                f"""UPDATE memories
+                    SET access_count = access_count + 1,
+                        last_accessed_at = ?,
+                        importance = MIN(1.0, COALESCE(importance, 0.5) + ?)
+                    WHERE id IN ({placeholders})""",
+                (now, RETRIEVAL_BOOST, *ids),
             )
             conn.commit()
 

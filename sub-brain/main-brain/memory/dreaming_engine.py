@@ -63,86 +63,349 @@ class DreamingEngine:
         logger.error(f"All LLM endpoints failed for dreaming: {last_error}")
         return ""
 
-    # ========== Phase 1: Light Sleep (L1 → L2) ==========
-    async def consolidate_l1_to_l2(self, hours: int = 24) -> Dict[str, Any]:
-        """Summarize recent L1 session memories into L2."""
-        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    # ========== Phase 1: Light Sleep (L1 → L2) — M-Memory-1 rewrite ==========
+    # The original implementation re-ran every scheduler tick and created a
+    # fresh L2 summary for the same session each time — yielding ~4
+    # duplicate summaries per day per session. The rewrite:
+    #   1. Only consolidates sessions that have been QUIET for `quiet_minutes`
+    #      (default 30) — actively-running conversations are still mutating
+    #      and shouldn't be frozen yet.
+    #   2. Skips any L1 row whose `superseded_by` is already set — guarantees
+    #      a single L1 contributes to exactly one L2 across all consolidation
+    #      runs, ever.
+    #   3. Writes provenance_source="consolidation_l1_l2" and
+    #      provenance_refs=[L1 ids] on the new L2 row so the lineage can be
+    #      walked back to source events.
+    #   4. Marks each contributing L1 row with `superseded_by = <new L2 id>`.
+    #      Original content stays — superseded means "rolled up", not deleted.
+    QUIET_MINUTES = 30
+    MIN_L1_PER_SESSION = 3
+    MAX_L1_PER_SESSION = 80  # cap prompt size for very long sessions
 
-        # Get recent L1 memories
-        conn = self.memory._connect()
-        try:
+    async def consolidate_l1_to_l2(
+        self,
+        quiet_minutes: Optional[int] = None,
+        lookback_days: int = 7,
+    ) -> Dict[str, Any]:
+        """Summarize quiet, unconsolidated L1 session windows into L2.
+
+        Args:
+            quiet_minutes: a session is "quiet" when its latest L1 row is
+                older than this many minutes. Defaults to QUIET_MINUTES.
+            lookback_days: only consider sessions with L1 activity in the
+                last N days; older orphans should already be archived.
+
+        Returns dict with:
+            consolidated: count of L2 rows created
+            sessions_evaluated: sessions that had any L1 in scope
+            sessions_skipped_active: dropped because still active
+            sessions_skipped_short: dropped because fewer than MIN_L1
+            sessions_skipped_done: dropped because all L1 already superseded
+        """
+        quiet = quiet_minutes if quiet_minutes is not None else self.QUIET_MINUTES
+        cutoff_quiet = (datetime.now(timezone.utc) - timedelta(minutes=quiet)).isoformat()
+        cutoff_old = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+
+        # One query: fetch unsuperseded L1 in the lookback window. Filter the
+        # quiet check in Python — needs per-session max(created_at) which is
+        # cleaner to compute after grouping.
+        with self.memory._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM memories WHERE level = 'L1' AND created_at > ? ORDER BY created_at",
-                (since,),
+                """SELECT id, content, session_id, created_at, source
+                   FROM memories
+                   WHERE level = 'L1'
+                     AND (superseded_by IS NULL OR superseded_by = '')
+                     AND created_at > ?
+                   ORDER BY created_at""",
+                (cutoff_old,),
             ).fetchall()
-        finally:
-            conn.close()
 
         if not rows:
-            return {"consolidated": 0, "message": "No L1 memories to consolidate"}
+            return {
+                "consolidated": 0, "sessions_evaluated": 0,
+                "sessions_skipped_active": 0, "sessions_skipped_short": 0,
+                "sessions_skipped_done": 0,
+                "message": "No unconsolidated L1 memories in lookback window",
+            }
 
-        # Group by session
-        sessions: Dict[str, List[str]] = {}
+        # Group by session (skip empty session_ids — those are orphan events
+        # without a conversation thread and aren't worth a summary).
+        sessions: Dict[str, List[Dict[str, Any]]] = {}
         for row in rows:
-            sid = row["session_id"] or "default"
-            if sid not in sessions:
-                sessions[sid] = []
-            sessions[sid].append(row["content"])
+            sid = row["session_id"]
+            if not sid:
+                continue
+            sessions.setdefault(sid, []).append(dict(row))
 
         consolidated = 0
-        for session_id, messages in sessions.items():
-            if len(messages) < 3:
+        skipped_active = 0
+        skipped_short = 0
+        skipped_done = 0  # placeholder — query already excluded these
+
+        for session_id, l1_rows in sessions.items():
+            # Quiet check: latest L1 in this session must be older than cutoff
+            latest_ts = max(r["created_at"] for r in l1_rows)
+            if latest_ts >= cutoff_quiet:
+                skipped_active += 1
+                continue
+            if len(l1_rows) < self.MIN_L1_PER_SESSION:
+                skipped_short += 1
                 continue
 
-            text = "\n".join(messages[-20:])  # Last 20 messages
-            prompt = f"""Summarize the following conversation into key points and insights.
-Keep important facts, decisions, and action items.
+            # Cap to MAX_L1_PER_SESSION (keep earliest + latest blocks if long)
+            if len(l1_rows) > self.MAX_L1_PER_SESSION:
+                head = self.MAX_L1_PER_SESSION // 2
+                tail = self.MAX_L1_PER_SESSION - head
+                selected = l1_rows[:head] + l1_rows[-tail:]
+            else:
+                selected = l1_rows
 
-Conversation:
-{text}
+            text = "\n".join(r["content"] for r in selected)
+            summary = await self._llm_call(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a memory consolidation expert. Produce a concise, "
+                            "factual summary in the dominant language of the input. "
+                            "Capture: key facts, user preferences expressed, decisions made, "
+                            "open questions, and any explicit action items. Skip pleasantries. "
+                            "Stay under 200 words."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Summarize this conversation (session {session_id[:8]}, "
+                            f"{len(selected)} messages):\n\n{text}\n\nSummary:"
+                        ),
+                    },
+                ],
+                max_tokens=512,
+            )
 
-Summary:"""
+            if not summary or not summary.strip():
+                # LLM unavailable or empty — leave L1 unsuperseded so next
+                # run can retry. Don't mark as failed/done.
+                continue
 
-            summary = await self._llm_call([
-                {"role": "system", "content": "You are a memory consolidation expert. Create concise, factual summaries."},
-                {"role": "user", "content": prompt},
-            ], max_tokens=512)
+            l1_ids = [r["id"] for r in selected]
+            result = await self.memory.store({
+                "level": "L2",
+                "content": f"[Session {session_id[:8]}] {summary.strip()}",
+                "source": "dreaming_l1_to_l2",
+                "session_id": session_id,
+                "provenance_source": "consolidation_l1_l2",
+                "provenance_refs": l1_ids,
+            })
+            l2_id = result["id"]
 
-            if summary:
-                await self.memory.store({
-                    "level": "L2",
-                    "content": f"[Session {session_id[:8]}] {summary}",
-                    "source": "dreaming_l1_to_l2",
-                    "session_id": session_id,
-                })
-                consolidated += 1
+            # Mark all source L1 rows as superseded by this L2
+            with self.memory._connect() as conn:
+                placeholders = ",".join(["?"] * len(l1_ids))
+                conn.execute(
+                    f"UPDATE memories SET superseded_by = ? WHERE id IN ({placeholders})",
+                    (l2_id, *l1_ids),
+                )
+                conn.commit()
+            consolidated += 1
 
-        logger.info(f"[Dreaming] L1→L2: {consolidated} sessions consolidated")
-        return {"consolidated": consolidated, "sessions": len(sessions)}
+        logger.info(
+            "[Dreaming] L1→L2: %d sessions consolidated, %d active-skip, %d short-skip",
+            consolidated, skipped_active, skipped_short,
+        )
+        return {
+            "consolidated": consolidated,
+            "sessions_evaluated": len(sessions),
+            "sessions_skipped_active": skipped_active,
+            "sessions_skipped_short": skipped_short,
+            "sessions_skipped_done": skipped_done,
+        }
 
-    # ========== Phase 2: REM Sleep (L2 → L3) ==========
-    async def consolidate_l2_to_l3(self, limit: int = 50) -> Dict[str, Any]:
-        """Extract entities and facts from L2 memories into L3."""
-        # Get unprocessed L2 memories
-        conn = self.memory._connect()
-        try:
-            rows = conn.execute(
-                "SELECT * FROM memories WHERE level = 'L2' ORDER BY created_at DESC LIMIT ?",
-                (limit,),
+    # ========== Phase 2: REM Sleep (L2 → L3) — M-Memory-1 rewrite ==========
+    # Original implementation:
+    #   - Called memory.extract_semantic() which writes to entities/facts
+    #     tables, NOT to L3 memory rows. So `levels=["L3"]` queries returned
+    #     empty across the board.
+    #   - Re-ran every tick, re-processing the same L2 rows.
+    #
+    # Rewrite:
+    #   1. Only processes L2 rows that have not already produced an L3 fact
+    #      (tracked via reverse provenance lookup — an L3 row exists with
+    #      this L2 id in its provenance_refs).
+    #   2. LLM produces a JSON list of structured facts; each becomes its
+    #      own L3 row so they're independently retrievable.
+    #   3. L2 is NOT superseded — it's the human-readable narrative, L3 is
+    #      the semantic distillate. Both live on.
+    L2_TO_L3_BATCH = 20  # Max L2 rows processed per run
+    L3_FACT_KINDS = ("preference", "fact", "decision", "goal", "open_question")
+
+    async def consolidate_l2_to_l3(
+        self,
+        limit: Optional[int] = None,
+        lookback_days: int = 14,
+    ) -> Dict[str, Any]:
+        """Distill recent unprocessed L2 summaries into structured L3 facts.
+
+        Idempotency: an L2 row is "processed" iff at least one L3 row's
+        provenance_refs contains its id. This survives restarts and partial
+        failures — if we crash mid-batch, the next run picks up where we
+        left off without duplicating already-extracted facts.
+
+        Returns dict with:
+            l2_processed: number of L2 rows we attempted
+            facts_created: total L3 rows written
+            facts_skipped_empty: L2 rows the LLM produced no facts for
+        """
+        batch = limit if limit is not None else self.L2_TO_L3_BATCH
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+
+        # Step 1: find L2 rows in the lookback window
+        with self.memory._connect() as conn:
+            l2_rows = conn.execute(
+                """SELECT id, content, session_id, created_at
+                   FROM memories
+                   WHERE level = 'L2' AND created_at > ?
+                   ORDER BY created_at DESC
+                   LIMIT ?""",
+                (cutoff, batch * 3),  # over-fetch — many may already be processed
             ).fetchall()
-        finally:
-            conn.close()
 
-        if not rows:
-            return {"extracted": 0, "message": "No L2 memories to process"}
+            # Step 2: pull all L3 rows' provenance_refs to detect already-processed L2s.
+            # SQLite has no JSON_CONTAINS — fetch the whole set once and check in Python.
+            # In practice this is a small set (~hundreds), much cheaper than per-L2 query.
+            l3_refs_rows = conn.execute(
+                "SELECT provenance_refs FROM memories WHERE level = 'L3'"
+            ).fetchall()
 
-        total_extracted = 0
-        for row in rows:
-            result = await self.memory.extract_semantic(row["content"])
-            total_extracted += result.get("extracted", 0)
+        processed_l2_ids: set = set()
+        for r in l3_refs_rows:
+            try:
+                refs = json.loads(r["provenance_refs"] or "[]")
+                processed_l2_ids.update(refs)
+            except (ValueError, TypeError):
+                continue
 
-        logger.info(f"[Dreaming] L2→L3: {total_extracted} entities/facts extracted")
-        return {"extracted": total_extracted}
+        unprocessed = [r for r in l2_rows if r["id"] not in processed_l2_ids]
+        unprocessed = unprocessed[:batch]
+
+        if not unprocessed:
+            return {
+                "l2_processed": 0, "facts_created": 0, "facts_skipped_empty": 0,
+                "message": "No unprocessed L2 memories in lookback window",
+            }
+
+        facts_created = 0
+        facts_skipped_empty = 0
+
+        for row in unprocessed:
+            l2_id = row["id"]
+            l2_content = row["content"]
+            l2_session = row["session_id"] or ""
+
+            facts = await self._extract_l3_facts(l2_content)
+            if not facts:
+                facts_skipped_empty += 1
+                continue
+
+            for fact in facts:
+                kind = fact.get("kind") or "fact"
+                statement = (fact.get("statement") or "").strip()
+                if not statement:
+                    continue
+                # Format: "[kind] statement"
+                # Keeping the kind in-band lets FTS/vector search hit on it
+                # without needing a separate column. Provenance carries the
+                # structured form for future use.
+                content = f"[{kind}] {statement}"
+                await self.memory.store({
+                    "level": "L3",
+                    "content": content,
+                    "source": "dreaming_l2_to_l3",
+                    "session_id": l2_session,
+                    "provenance_source": "fact_extraction_l2_l3",
+                    "provenance_refs": [l2_id],
+                    "importance": 0.7,
+                })
+                facts_created += 1
+
+        logger.info(
+            "[Dreaming] L2→L3: processed %d L2 rows, created %d L3 facts, %d empty",
+            len(unprocessed), facts_created, facts_skipped_empty,
+        )
+        return {
+            "l2_processed": len(unprocessed),
+            "facts_created": facts_created,
+            "facts_skipped_empty": facts_skipped_empty,
+        }
+
+    async def _extract_l3_facts(self, l2_content: str) -> List[Dict[str, str]]:
+        """Ask the LLM to pull structured facts out of an L2 summary.
+
+        Returns a list of {kind, statement} dicts. Each kind must be in
+        L3_FACT_KINDS; the LLM is instructed accordingly and we filter
+        defensively in case the model strays. Returns [] on any parse
+        failure — caller treats that as "this L2 yielded nothing" and
+        moves on, with no provenance written so a retry is possible.
+        """
+        prompt = (
+            "Extract durable semantic facts from this conversation summary. "
+            "Output STRICT JSON only, no markdown. Schema:\n"
+            '{"facts": [{"kind": "preference|fact|decision|goal|open_question", '
+            '"statement": "one concise sentence"}]}\n\n'
+            "Rules:\n"
+            "- preference: user expressed liking/disliking something durable\n"
+            "- fact: stable truth about the user, world, or environment\n"
+            "- decision: commitment made (do X, don't do Y)\n"
+            "- goal: future-oriented intent\n"
+            "- open_question: explicit unresolved question worth tracking\n"
+            "- Skip transient context (greetings, weather, mood)\n"
+            "- Each statement should be self-contained — readable without the "
+            "  original conversation. Use the user's language.\n"
+            "- If nothing durable, return {\"facts\": []}\n\n"
+            f"Summary:\n{l2_content}"
+        )
+
+        response = await self._llm_call(
+            [
+                {"role": "system", "content": "You are a semantic fact extractor. Output JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1024,
+        )
+
+        if not response or not response.strip():
+            return []
+
+        # Lenient JSON parsing — model might wrap in ``` despite instruction.
+        text = response.strip()
+        if "```json" in text:
+            text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in text:
+            text = text.split("```", 1)[1].split("```", 1)[0].strip()
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("L2→L3 LLM produced invalid JSON; skipping this L2")
+            return []
+
+        raw_facts = parsed.get("facts") if isinstance(parsed, dict) else None
+        if not isinstance(raw_facts, list):
+            return []
+
+        out: List[Dict[str, str]] = []
+        for item in raw_facts:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind", "")).strip().lower()
+            statement = str(item.get("statement", "")).strip()
+            if not statement:
+                continue
+            if kind not in self.L3_FACT_KINDS:
+                kind = "fact"  # safe default
+            out.append({"kind": kind, "statement": statement})
+        return out
 
     # ========== Phase 3: Deep Sleep (L3 → L4) ==========
     async def consolidate_l3_to_l4(self, min_mentions: int = 3) -> Dict[str, Any]:

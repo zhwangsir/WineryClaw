@@ -1,0 +1,122 @@
+{
+  "description": "Hand-built 7-day conversation fixture for Memory benchmark. Each entry becomes one L1 row planted with the given created_at offset (days ago). The `queries` section defines ground-truth retrievals — `expects` lists fixture_keys that SHOULD appear in the top results when querying. The query is graded on recall@5, recall@10, and MRR.",
+  "l1": [
+    {"key": "day7-intro-name",     "session": "s-onboard",  "days_ago": 7,    "content": "User: 我叫王震宇,以后请记住我的名字"},
+    {"key": "day7-intro-greet",    "session": "s-onboard",  "days_ago": 7,    "content": "Assistant: 好的,王震宇,很高兴认识你"},
+    {"key": "day7-intro-city",     "session": "s-onboard",  "days_ago": 7,    "content": "User: 我现在住在北京海淀区"},
+    {"key": "day7-intro-work",     "session": "s-onboard",  "days_ago": 7,    "content": "User: 我在做一个叫 WeBrain 的本地 AI 助手项目"},
+    {"key": "day7-intro-tech",     "session": "s-onboard",  "days_ago": 7,    "content": "User: 后端用 Python + FastAPI,前端用 React + Vite,这点必须记牢"},
+
+    {"key": "day6-coffee-1",       "session": "s-prefs-1",  "days_ago": 6,    "content": "User: 顺便说一下,我喝咖啡只喝美式,不喜欢拿铁"},
+    {"key": "day6-coffee-2",       "session": "s-prefs-1",  "days_ago": 6,    "content": "Assistant: 收到,美式不加奶"},
+    {"key": "day6-darkmode",       "session": "s-prefs-1",  "days_ago": 6,    "content": "User: 还有,所有应用我都设深色模式,白底太刺眼"},
+    {"key": "day6-bedtime",        "session": "s-prefs-1",  "days_ago": 6,    "content": "User: 我一般凌晨 1 点睡,中午 12 点起,工作时间偏晚"},
+
+    {"key": "day5-task-rag",       "session": "s-work-1",   "days_ago": 5,    "content": "User: 帮我看一下 RAG 模块的代码结构"},
+    {"key": "day5-task-rag-find",  "session": "s-work-1",   "days_ago": 5,    "content": "Assistant: RAG 在 sub-brain/main-brain/memory/rag_retriever.py,主要用 sentence-transformers"},
+    {"key": "day5-decision-emb",   "session": "s-work-1",   "days_ago": 5,    "content": "User: 决定用 multilingual MiniLM 做 embedding,中英文够用"},
+    {"key": "day5-decision-store", "session": "s-work-1",   "days_ago": 5,    "content": "User: 文档分块存进 SQLite,不上 Qdrant,本地优先"},
+
+    {"key": "day4-question-life",  "session": "s-chat-1",   "days_ago": 4,    "content": "User: 你觉得人生的意义是什么?"},
+    {"key": "day4-followup-life",  "session": "s-chat-1",   "days_ago": 4,    "content": "Assistant: 这个问题没有标准答案,但每个人的选择和经历构成意义本身"},
+    {"key": "day4-tea-mention",    "session": "s-chat-1",   "days_ago": 4,    "content": "User: 顺便提一句,我最近在学习喝乌龙茶,觉得很有意思"},
+
+    {"key": "day3-plan-trip",      "session": "s-travel",   "days_ago": 3,    "content": "User: 我打算 5 月底去杭州出差三天"},
+    {"key": "day3-plan-hotel",     "session": "s-travel",   "days_ago": 3,    "content": "User: 帮我记一下,住在西湖边的湖滨饭店"},
+    {"key": "day3-plan-meeting",   "session": "s-travel",   "days_ago": 3,    "content": "Assistant: 已记录:5 月底 杭州 三天 湖滨饭店"},
+
+    {"key": "day2-goal-product",   "session": "s-goals",    "days_ago": 2,    "content": "User: 我的中期目标是让 WeBrain 成为一个能日常使用的本地 AI 助手,而不是 demo"},
+    {"key": "day2-goal-deploy",    "session": "s-goals",    "days_ago": 2,    "content": "User: 6 个月内做出能装在桌面端的版本"},
+    {"key": "day2-goal-team",      "session": "s-goals",    "days_ago": 2,    "content": "User: 暂时一个人做,不打算融资也不组团队"},
+
+    {"key": "day1-coffee-change",  "session": "s-update",   "days_ago": 1,    "content": "User: 更新一下,我最近改喝手冲咖啡了,美式喝腻了"},
+    {"key": "day1-bug-skill",      "session": "s-work-2",   "days_ago": 1,    "content": "User: 发现 skill 执行有 shell injection 风险,要改成 worker_threads"},
+    {"key": "day1-bug-fix",        "session": "s-work-2",   "days_ago": 1,    "content": "Assistant: 已修复,M6a 完成"},
+
+    {"key": "today-quiet-msg",     "session": "s-today",    "days_ago": 0.1,  "content": "User: 今天先这样,晚点再聊"}
+  ],
+  "queries": [
+    {
+      "query": "用户叫什么名字",
+      "expects": ["day7-intro-name"],
+      "note": "Basic identity recall — should work whether or not consolidation ran."
+    },
+    {
+      "query": "用户住在哪里",
+      "expects": ["day7-intro-city"]
+    },
+    {
+      "query": "用户在做什么项目",
+      "expects": ["day7-intro-work", "day7-intro-tech"]
+    },
+    {
+      "query": "用户用什么后端技术栈",
+      "expects": ["day7-intro-tech"]
+    },
+    {
+      "query": "用户的咖啡偏好",
+      "expects": ["day6-coffee-1", "day1-coffee-change"],
+      "note": "Tests conflict-resolution recall — both the original and updated preference should be retrievable; whoever is `current` decides which the assistant defaults to."
+    },
+    {
+      "query": "用户喜欢用什么主题",
+      "expects": ["day6-darkmode"]
+    },
+    {
+      "query": "用户的作息时间",
+      "expects": ["day6-bedtime"]
+    },
+    {
+      "query": "RAG 模块代码在哪",
+      "expects": ["day5-task-rag-find"]
+    },
+    {
+      "query": "embedding 模型选了哪个",
+      "expects": ["day5-decision-emb"]
+    },
+    {
+      "query": "为什么不用 Qdrant",
+      "expects": ["day5-decision-store"]
+    },
+    {
+      "query": "用户最近在喝什么茶",
+      "expects": ["day4-tea-mention"]
+    },
+    {
+      "query": "用户什么时候去杭州",
+      "expects": ["day3-plan-trip", "day3-plan-meeting"]
+    },
+    {
+      "query": "杭州住哪个酒店",
+      "expects": ["day3-plan-hotel", "day3-plan-meeting"]
+    },
+    {
+      "query": "WeBrain 的中期目标",
+      "expects": ["day2-goal-product"]
+    },
+    {
+      "query": "桌面端什么时候做出来",
+      "expects": ["day2-goal-deploy"]
+    },
+    {
+      "query": "团队规模",
+      "expects": ["day2-goal-team"]
+    },
+    {
+      "query": "skill 执行的安全问题",
+      "expects": ["day1-bug-skill", "day1-bug-fix"]
+    },
+    {
+      "query": "M6a 是什么",
+      "expects": ["day1-bug-fix"]
+    },
+    {
+      "query": "用户对人生意义的看法",
+      "expects": ["day4-question-life", "day4-followup-life"]
+    },
+    {
+      "query": "用户最近改了什么习惯",
+      "expects": ["day1-coffee-change"]
+    }
+  ]
+}
