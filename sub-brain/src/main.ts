@@ -121,6 +121,20 @@ app.addHook("onRequest", async (request, reply) => {
   reply.header("x-trace-id", traceId);
 });
 
+// ===== /api prefix compat (frontend uses /api/channels, sub-brain serves /channels) =====
+// Frontend api/*.ts wrappers consistently call `/api/<resource>` to avoid
+// SPA route collisions on `/channels` and `/config`. But sub-brain serves
+// those at `/channels` and `/config` directly (only skillhub uses the `/api`
+// prefix natively). Without this rewrite, every non-skillhub `/api/*`
+// request hits Fastify's 404, and the frontend's axios layer crashes
+// trying to read JSON from an HTML 404 page.
+app.addHook("onRequest", async (request) => {
+  const url = request.raw.url || "";
+  if (url.startsWith("/api/") && !url.startsWith("/api/skillhub")) {
+    request.raw.url = url.replace(/^\/api/, "");
+  }
+});
+
 app.addHook("onResponse", async (request, reply) => {
   const traceId = (request as any).traceId || "-";
   app.log.info({ traceId, method: request.method, url: request.url, statusCode: reply.statusCode, responseTime: reply.elapsedTime }, "request completed");

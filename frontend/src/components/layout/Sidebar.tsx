@@ -25,10 +25,12 @@ import {
   AppstoreAddOutlined,
   FileOutlined,
   BarChartOutlined,
+  HomeOutlined,
 } from "@ant-design/icons";
 
 const menuItems = [
-  { key: "/", icon: <DashboardOutlined />, label: "仪表板" },
+  { key: "/", icon: <HomeOutlined />, label: "← 返回用户端" },
+  { key: "/dashboard", icon: <DashboardOutlined />, label: "仪表板" },
   { key: "/chat", icon: <MessageOutlined />, label: "对话" },
   { key: "/agents", icon: <TeamOutlined />, label: "智能体" },
   { key: "/tools", icon: <ToolOutlined />, label: "工具" },
