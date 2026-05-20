@@ -1718,18 +1718,96 @@ async def chat_followups_endpoint(request: Dict[str, Any]):
         {"role": "user", "content": f"User just asked:\n{user_msg}\n\nAssistant replied:\n{assistant_reply}"},
     ]
     try:
-        result = await chat_engine._chat_completion(messages, max_tokens=256, temperature=0.4)
-        content = (result.get("content") or "").strip()
-        # Extract JSON array even if the model wrapped it in code fences.
-        if "```" in content:
-            content = content.split("```")[1].lstrip("json").lstrip()
-        parsed = json.loads(content)
-        if isinstance(parsed, list):
-            followups = [str(x).strip() for x in parsed if str(x).strip()][:max_count]
+        # 768-token budget — Qwen / DeepSeek reasoning models use ~300-500
+        # tokens of thinking before the JSON answer; 256 truncates them.
+        result = await chat_engine._chat_completion(messages, max_tokens=768, temperature=0.4)
+        # _chat_completion returns OpenAI-shaped:
+        #   {"choices": [{"message": {"role": ..., "content": "..."}}], ...}
+        # Reasoning models (Qwen3-thinking, DeepSeek-R1) put the visible
+        # answer in `content` AFTER `</think>`, but if max_tokens cut them
+        # off mid-thought OR they emit only via reasoning_content, the
+        # answer often lives there. Try content first, then strip thinking
+        # tags from reasoning_content as a last resort.
+        choices = result.get("choices") or []
+        msg = choices[0].get("message", {}) if choices else {}
+        content = (msg.get("content") or "").strip()
+        if not content:
+            content = (msg.get("reasoning_content") or "").strip()
+            # Strip leading <think>...</think> blocks the model may have emitted
+            # in case content+reasoning got merged into one field.
+            import re as _re
+            content = _re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
+        followups = _extract_followups_from_text(content, max_count)
+        if followups:
             return {"followups": followups}
     except Exception as exc:
         logger.warning(f"chat_followups failed: {exc}")
     return {"followups": []}
+
+
+def _extract_followups_from_text(text: str, max_count: int) -> list:
+    """Pull a list of follow-up question strings out of arbitrary LLM output.
+
+    Tries (in order):
+      1. Strict JSON parse of the whole string.
+      2. JSON parse of the first ``[...]`` substring (handles "Here are:
+         [...]"-style preambles and ```json wrapping).
+      3. Line-by-line scrape: bullet/numbered/quoted lines, deduped.
+
+    Returns at most ``max_count`` clean non-empty strings.
+    """
+    if not text:
+        return []
+    text = text.strip()
+    if text.startswith("```"):
+        # strip ```json ... ``` or ``` ... ``` wrappers
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1].lstrip("json").strip()
+
+    # Tier 1: strict
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            out = [str(x).strip() for x in parsed if str(x).strip()]
+            if out:
+                return out[:max_count]
+    except Exception:
+        pass
+
+    # Tier 2: substring match on the first JSON-looking array
+    import re as _re
+    m = _re.search(r"\[[\s\S]*?\]", text)
+    if m:
+        try:
+            parsed = json.loads(m.group(0))
+            if isinstance(parsed, list):
+                out = [str(x).strip() for x in parsed if str(x).strip()]
+                if out:
+                    return out[:max_count]
+        except Exception:
+            pass
+
+    # Tier 3: line-based scrape (bullets, numbered list, quoted)
+    candidates: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # strip common leading markers: "- ", "* ", "1. ", "2) ", `"foo"`,
+        line = _re.sub(r"^[\-\*•]\s*", "", line)
+        line = _re.sub(r"^\d+[\.\)]\s*", "", line)
+        line = line.strip('"“”\'`')
+        if 2 < len(line) < 120 and not line.lower().startswith(("here", "sure", "okay")):
+            candidates.append(line)
+    # Dedup preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+    return unique[:max_count]
 
 
 # ========== Chat Streaming (SSE) ==========
