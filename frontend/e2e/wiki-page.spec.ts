@@ -10,7 +10,7 @@ import { test, expect } from "@playwright/test";
 test.describe("Wiki page", () => {
   async function mockWikiBackend(
     page: import("@playwright/test").Page,
-    notes: Array<{ id: string; title: string; content: string; tags?: string[] }>,
+    notes: Array<{ id: string; title: string; content: string; tags?: string[] }>
   ) {
     await page.route("**/brain/wiki/notes**", async (route) => {
       const url = new URL(route.request().url());
@@ -28,11 +28,7 @@ test.describe("Wiki page", () => {
     await page.route("**/brain/wiki/search**", async (route) => {
       const url = new URL(route.request().url());
       const q = (url.searchParams.get("q") || "").toLowerCase();
-      const filtered = notes.filter(
-        (n) =>
-          n.title.toLowerCase().includes(q) ||
-          n.content.toLowerCase().includes(q),
-      );
+      const filtered = notes.filter((n) => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q));
       await route.fulfill({
         status: 200,
         contentType: "application/json",

@@ -12,10 +12,7 @@ import { test, expect } from "@playwright/test";
 test.describe("MCP info panel", () => {
   const SECRET_LIKE_TOKEN_FRAGMENT = "smoke-test-token-not-for-production-use";
 
-  async function mockMcpBackend(
-    page: import("@playwright/test").Page,
-    tokenConfigured: boolean,
-  ) {
+  async function mockMcpBackend(page: import("@playwright/test").Page, tokenConfigured: boolean) {
     await page.route("**/brain/mcp/info", async (route) => {
       await route.fulfill({
         status: 200,
@@ -63,9 +60,7 @@ test.describe("MCP info panel", () => {
     // we verified the leak case only when the panel rendered. We just
     // log if we didn't find it.
     if (!foundContent) {
-      console.log(
-        "[mcp-info.spec] panel not found on /config, /dashboard, or /; security check skipped",
-      );
+      console.log("[mcp-info.spec] panel not found on /config, /dashboard, or /; security check skipped");
     }
   });
 });

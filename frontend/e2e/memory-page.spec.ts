@@ -18,7 +18,7 @@ test.describe("Memory page", () => {
       importance?: number;
       created_at?: string;
     }>,
-    conflicts: unknown[] = [],
+    conflicts: unknown[] = []
   ) {
     // /memory/recent — used to populate the initial list
     await page.route("**/brain/memory/recent**", async (route) => {
@@ -32,9 +32,7 @@ test.describe("Memory page", () => {
     await page.route("**/brain/memory/query", async (route) => {
       const body = JSON.parse(route.request().postData() || "{}");
       const q = (body.query || "").toLowerCase();
-      const filtered = memories.filter((m) =>
-        m.content.toLowerCase().includes(q),
-      );
+      const filtered = memories.filter((m) => m.content.toLowerCase().includes(q));
       await route.fulfill({
         status: 200,
         contentType: "application/json",
