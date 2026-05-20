@@ -1674,6 +1674,64 @@ async def chat_session_delete(session_id: str):
         return {"ok": True}
 
 
+# ========== Chat follow-up suggestions (Round K4) ==========
+@app.post("/chat/followups")
+async def chat_followups_endpoint(request: Dict[str, Any]):
+    """Generate 3 short follow-up questions for the last conversation turn.
+
+    Body shape:
+        {"user_message": "...", "assistant_reply": "...", "max": 3}
+
+    Returns:
+        {"followups": ["question 1", "question 2", "question 3"]}
+
+    Implementation notes
+    --------------------
+    Reuses the chat engine's `_chat_completion` so we go through the same
+    multi-endpoint failover as the main chat. We deliberately ask the LLM
+    for compact JSON with `max_tokens=256` to keep the round trip cheap —
+    these are decorative quick-fill prompts, not the main response, so
+    failure should be silent (empty list) instead of a user-facing error.
+    """
+    user_msg = str(request.get("user_message", "")).strip()
+    assistant_reply = str(request.get("assistant_reply", "")).strip()
+    max_count = max(1, min(5, int(request.get("max", 3))))
+    if not user_msg or not assistant_reply:
+        return {"followups": []}
+
+    chat_engine = _state.get("chat")
+    if chat_engine is None:
+        return {"followups": []}
+
+    prompt = (
+        "You are a follow-up question generator. Given a conversation turn, "
+        f"propose exactly {max_count} concise follow-up questions the user "
+        "might naturally ask next. Each question must be:\n"
+        " - short (under 20 Chinese characters or 15 English words)\n"
+        " - directly building on the assistant's reply\n"
+        " - phrased in the user's voice (no quotes, no numbering)\n"
+        "Match the language the user used.\n"
+        'Return ONLY a JSON array of strings, no prose, e.g. ["foo?", "bar?"].'
+    )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"User just asked:\n{user_msg}\n\nAssistant replied:\n{assistant_reply}"},
+    ]
+    try:
+        result = await chat_engine._chat_completion(messages, max_tokens=256, temperature=0.4)
+        content = (result.get("content") or "").strip()
+        # Extract JSON array even if the model wrapped it in code fences.
+        if "```" in content:
+            content = content.split("```")[1].lstrip("json").lstrip()
+        parsed = json.loads(content)
+        if isinstance(parsed, list):
+            followups = [str(x).strip() for x in parsed if str(x).strip()][:max_count]
+            return {"followups": followups}
+    except Exception as exc:
+        logger.warning(f"chat_followups failed: {exc}")
+    return {"followups": []}
+
+
 # ========== Chat Streaming (SSE) ==========
 @app.get("/chat/stream")
 async def chat_stream_endpoint(message: str, session_id: str = "default", agent_id: str = "agent-default", tools_enabled: bool = True):

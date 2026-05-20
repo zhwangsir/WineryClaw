@@ -128,7 +128,10 @@ describe("MessageBubble", () => {
     expect(screen.getByText(/1月15日/i)).toBeInTheDocument();
   });
 
-  it("renders RAG sources badge when ragSources is present", () => {
+  // Round K3: badge format changed from a single "参考 N 篇文档" pill
+  // to numbered footnote pills `[1] [2]` next to a "来源" label, each
+  // pill independently hover-able and linking into the wiki.
+  it("renders RAG sources as numbered footnote pills when ragSources is present", () => {
     render(
       <MessageBubble
         msg={{
@@ -144,17 +147,20 @@ describe("MessageBubble", () => {
         isDark={false}
       />
     );
-    expect(screen.getByText("参考 2 篇文档")).toBeInTheDocument();
+    expect(screen.getByText("来源")).toBeInTheDocument();
+    expect(screen.getByText("[1]")).toBeInTheDocument();
+    expect(screen.getByText("[2]")).toBeInTheDocument();
   });
 
-  it("omits RAG badge when no ragSources present", () => {
+  it("omits RAG label when no ragSources present", () => {
     render(
       <MessageBubble
         msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }}
         isDark={false}
       />
     );
-    expect(screen.queryByText(/参考 \d+ 篇文档/)).not.toBeInTheDocument();
+    expect(screen.queryByText("来源")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^\[\d+\]$/)).not.toBeInTheDocument();
   });
 
   it("renders plan task list when plan is present", () => {

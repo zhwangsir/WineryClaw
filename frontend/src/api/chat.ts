@@ -30,4 +30,16 @@ export const chatApi = {
       .get<{ sessions: { id: string; title: string; updatedAt: string }[] }>("/brain/chat/sessions")
       .then((r) => r.sessions || []),
   deleteSession: (sessionId: string) => api.delete(`/brain/chat/sessions/${sessionId}`),
+  /** Round K4 — ask main-brain for 3 short follow-up questions based on
+   *  the last turn. Silent failure (empty array) by design — these are
+   *  decorative quick-fills, not the main response. */
+  followups: (userMessage: string, assistantReply: string, max = 3) =>
+    api
+      .post<{ followups: string[] }>("/brain/chat/followups", {
+        user_message: userMessage,
+        assistant_reply: assistantReply,
+        max,
+      })
+      .then((r) => r.followups || [])
+      .catch(() => [] as string[]),
 };

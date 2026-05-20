@@ -381,59 +381,92 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
           )}
 
           {msg.isStreaming && (
+            // Round K2 — tighter, accent-color cursor with a smoother
+            // 1.2s blink (was chatPulse green at 1s). Sits inline at the
+            // tail of the streamed content.
             <span
               style={{
                 display: "inline-block",
                 width: 2,
-                height: 16,
-                background: "var(--c-success)",
-                marginLeft: 4,
-                verticalAlign: "middle",
-                animation: "chatPulse 1s infinite",
+                height: 14,
+                background: "var(--c-accent)",
+                marginLeft: 3,
+                verticalAlign: "text-bottom",
+                animation: "chatCursorBlink 1.2s steps(2) infinite",
+                borderRadius: 1,
               }}
+              aria-hidden="true"
             />
           )}
 
-          {/* RAG document sources — shown when the reply consulted indexed docs */}
+          {/* RAG document sources — Round K3 upgraded to per-chunk numbered
+              footnote pills. Each pill is independently hover-able, showing
+              the specific file + chunk + score for that citation. */}
           {msg.ragSources && msg.ragSources.length > 0 && (
-            <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <Tooltip
-                title={
-                  <div style={{ maxWidth: 360 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>引用文档</div>
-                    {msg.ragSources.map((s, i) => {
-                      const name = s.doc_path.split("/").pop() || s.doc_path;
-                      return (
-                        <div key={i} style={{ fontSize: 12, marginBottom: 2 }}>
-                          <span style={{ fontFamily: "monospace" }}>{name}</span>
-                          <span style={{ opacity: 0.7 }}>
-                            {" "}
-                            #{s.chunk_idx} · {s.score.toFixed(2)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                }
+            <div
+              style={{
+                marginTop: 12,
+                paddingTop: 10,
+                borderTop: isDark ? "1px dashed rgba(255,255,255,0.08)" : "1px dashed rgba(0,0,0,0.06)",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 11,
+                  color: isDark ? "#a1a1aa" : "var(--c-text-3)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
               >
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: isDark ? "#93c5fd" : "#1d4ed8",
-                    background: isDark ? "rgba(59,130,246,0.10)" : "rgba(59,130,246,0.08)",
-                    border: isDark ? "1px solid rgba(59,130,246,0.30)" : "1px solid rgba(59,130,246,0.25)",
-                    borderRadius: 4,
-                    padding: "2px 8px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    cursor: "help",
-                  }}
-                >
-                  <FileSearchOutlined style={{ fontSize: 10 }} />
-                  参考 {msg.ragSources.length} 篇文档
-                </span>
-              </Tooltip>
+                <FileSearchOutlined style={{ fontSize: 11 }} />
+                来源
+              </span>
+              {msg.ragSources.map((s, i) => {
+                const name = s.doc_path.split("/").pop() || s.doc_path;
+                return (
+                  <Tooltip
+                    key={`${s.doc_path}-${s.chunk_idx}-${i}`}
+                    title={
+                      <div style={{ maxWidth: 320 }}>
+                        <div style={{ fontFamily: "monospace", fontSize: 12, marginBottom: 4, wordBreak: "break-all" }}>
+                          {name}
+                        </div>
+                        <div style={{ fontSize: 11, opacity: 0.8 }}>
+                          片段 #{s.chunk_idx} · 相关度 {s.score.toFixed(3)}
+                        </div>
+                      </div>
+                    }
+                  >
+                    <a
+                      href={`/wiki?file=${encodeURIComponent(s.doc_path)}`}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        fontSize: 11,
+                        fontFamily: '"SF Mono", Menlo, Consolas, monospace',
+                        color: isDark ? "#93c5fd" : "#1d4ed8",
+                        background: isDark ? "rgba(59,130,246,0.10)" : "rgba(59,130,226,0.08)",
+                        border: isDark ? "1px solid rgba(59,130,246,0.30)" : "1px solid rgba(35,131,226,0.25)",
+                        borderRadius: 10,
+                        padding: "1px 8px",
+                        textDecoration: "none",
+                        lineHeight: "16px",
+                        display: "inline-block",
+                        minWidth: 18,
+                        textAlign: "center",
+                        cursor: "help",
+                        transition: "background 120ms, border-color 120ms",
+                      }}
+                    >
+                      [{i + 1}]
+                    </a>
+                  </Tooltip>
+                );
+              })}
             </div>
           )}
 
