@@ -1,11 +1,12 @@
 import { Card, Tabs } from "antd";
-import { SettingOutlined, RobotOutlined, GlobalOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { SettingOutlined, RobotOutlined, GlobalOutlined, InfoCircleOutlined, SafetyOutlined } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import ModelConfigPanel from "../components/settings/ModelConfigPanel";
 import GlobalConfigPanel from "../components/settings/GlobalConfigPanel";
 import AboutPanel from "../components/settings/AboutPanel";
 import LLMHealthPanel from "../components/settings/LLMHealthPanel";
 import MCPInfoPanel from "../components/settings/MCPInfoPanel";
+import ApiTokenPanel from "../components/settings/ApiTokenPanel";
 
 export default function SettingsPage() {
   return (
@@ -59,6 +60,25 @@ export default function SettingsPage() {
                 </span>
               ),
               children: <GlobalConfigPanel />,
+            },
+            {
+              key: "security",
+              label: (
+                <span
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 14,
+                    fontWeight: 400,
+                    color: "var(--c-text)",
+                  }}
+                >
+                  <SafetyOutlined />
+                  安全
+                </span>
+              ),
+              children: <ApiTokenPanel />,
             },
             {
               key: "about",

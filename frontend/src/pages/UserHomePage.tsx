@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { message, Upload, Tag, Tooltip, Empty, Button, Modal, Drawer, Input } from "antd";
+import { message, Upload, Tag, Tooltip, Empty, Button, Modal, Drawer, Input, Progress } from "antd";
 import {
   SettingOutlined,
   InboxOutlined,
@@ -151,10 +151,19 @@ const SUGGESTIONS = [
  */
 
 interface IndexedDoc {
+  /** Stable per-upload id — lets us identify the row across phase transitions
+   *  even when the user drops two files with the same name. (Round N3) */
+  id: string;
   path: string;
   filename: string;
   chunks: number;
   indexed_at: string;
+  /** Round N3 — explicit two-stage progress so the UI can show
+   *  "uploading → indexing → ready" instead of a single opaque "indexing". */
+  phase?: "uploading" | "indexing" | "ready" | "error";
+  /** 0-100 — UI hint only; we don't measure real bytes-uploaded
+   *  because uploadApi.upload buffers the whole file. Fine grained enough. */
+  progress?: number;
   status: "indexing" | "ready" | "error";
   error?: string;
 }
@@ -341,13 +350,20 @@ export default function UserHomePage(): JSX.Element {
       const stats = await ragApi.stats();
       // stats.documents is [[path, chunks], ...]
       const next: IndexedDoc[] = (stats.documents || []).map(([path, chunks]) => ({
+        id: `srv-${path}`,
         path,
         filename: path.split("/").pop() || path,
         chunks: chunks as number,
         indexed_at: "",
+        phase: "ready",
         status: "ready" as const,
       }));
-      setDocs(next);
+      // Round N3 — preserve any in-flight (uploading/indexing) rows so the
+      // user's progress bars don't blip when we refresh from the server.
+      setDocs((prev) => {
+        const inFlight = prev.filter((d) => d.phase === "uploading" || d.phase === "indexing");
+        return [...inFlight, ...next];
+      });
     } catch (err) {
       console.error("[home] failed to load RAG stats", err);
     } finally {
@@ -430,44 +446,59 @@ export default function UserHomePage(): JSX.Element {
     showUploadList: false,
     accept: ".txt,.md,.pdf,.docx,.json",
     beforeUpload: async (file) => {
-      // optimistic UI entry
+      // Round N3 — stable per-upload id so we can track this row through
+      // upload → index → ready/error transitions even when the user drops
+      // multiple files with the same name (e.g. two report.pdfs).
+      const uploadId = `up-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const tempEntry: IndexedDoc = {
+        id: uploadId,
         path: "",
         filename: file.name,
         chunks: 0,
         indexed_at: "",
+        phase: "uploading",
+        progress: 5,
         status: "indexing",
       };
       setDocs((prev) => [tempEntry, ...prev]);
+
+      const patch = (changes: Partial<IndexedDoc>) =>
+        setDocs((prev) => prev.map((d) => (d.id === uploadId ? { ...d, ...changes } : d)));
+
       try {
-        // Step 1: upload file → server-side path. uploadApi.upload takes
-        // a File and handles base64 conversion internally.
+        // Round N3 — synthetic progress while uploadApi.upload runs.
+        // uploadApi reads + base64-encodes the file in one shot,
+        // so we don't get real byte-progress; emulate with a quick
+        // ramp to 60 % so the bar visibly moves even on small files.
+        const tickStop = (() => {
+          let pct = 5;
+          const handle = setInterval(() => {
+            pct = Math.min(60, pct + 8);
+            patch({ progress: pct });
+          }, 250);
+          return () => clearInterval(handle);
+        })();
+
         const up = await uploadApi.upload(file as File);
+        tickStop();
         if (!up.ok || !up.url) {
           throw new Error(up.error || "上传失败");
         }
-        // up.url is a relative path like /uploads/xxx.pdf
-        // Need the absolute server-side path for index_file
         const serverPath = up.url.startsWith("/") ? `.${up.url}` : up.url;
+        patch({ phase: "indexing", progress: 70, path: serverPath });
 
-        // Step 2: index it
         const idx = await ragApi.indexFile(serverPath);
-        const ready: IndexedDoc = {
-          path: serverPath,
-          filename: file.name,
+        patch({
+          phase: "ready",
+          progress: 100,
           chunks: idx.chunks_count ?? 0,
           indexed_at: new Date().toISOString(),
           status: "ready",
-        };
-        setDocs((prev) => prev.map((d) => (d.filename === file.name && d.status === "indexing" ? ready : d)));
-        message.success(`${file.name} 已索引 (${ready.chunks} 片段)`);
+        });
+        message.success(`${file.name} 已索引 (${idx.chunks_count ?? 0} 片段)`);
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : "索引失败";
-        setDocs((prev) =>
-          prev.map((d) =>
-            d.filename === file.name && d.status === "indexing" ? { ...d, status: "error" as const, error: errMsg } : d
-          )
-        );
+        patch({ phase: "error", progress: 100, status: "error", error: errMsg });
         message.error(`${file.name}: ${errMsg}`);
       }
       return false; // prevent antd's default upload
@@ -700,34 +731,50 @@ export default function UserHomePage(): JSX.Element {
             {docs.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有索引文档" />
             ) : (
-              docs.map((doc) => (
-                <div key={doc.path || doc.filename} className={`user-home__doc user-home__doc--${doc.status}`}>
-                  <FileTextOutlined className="user-home__doc-icon" />
-                  <div className="user-home__doc-meta">
-                    <div className="user-home__doc-name" title={doc.filename}>
-                      {doc.filename}
-                    </div>
-                    <div className="user-home__doc-detail">
-                      {doc.status === "indexing" && <Tag color="processing">索引中</Tag>}
-                      {doc.status === "ready" && <Tag color="success">{doc.chunks} 片段</Tag>}
-                      {doc.status === "error" && (
-                        <Tooltip title={doc.error}>
-                          <Tag color="error">失败</Tag>
-                        </Tooltip>
+              docs.map((doc) => {
+                // Round N3 — derive phase + label from explicit phase field,
+                // falling back to legacy status for server-loaded rows.
+                const phase = doc.phase ?? (doc.status === "ready" ? "ready" : "indexing");
+                const inFlight = phase === "uploading" || phase === "indexing";
+                return (
+                  <div key={doc.id} className={`user-home__doc user-home__doc--${doc.status}`}>
+                    <FileTextOutlined className="user-home__doc-icon" />
+                    <div className="user-home__doc-meta">
+                      <div className="user-home__doc-name" title={doc.filename}>
+                        {doc.filename}
+                      </div>
+                      <div className="user-home__doc-detail">
+                        {phase === "uploading" && <Tag color="processing">上传中</Tag>}
+                        {phase === "indexing" && <Tag color="processing">索引中</Tag>}
+                        {phase === "ready" && <Tag color="success">{doc.chunks} 片段</Tag>}
+                        {phase === "error" && (
+                          <Tooltip title={doc.error}>
+                            <Tag color="error">失败</Tag>
+                          </Tooltip>
+                        )}
+                      </div>
+                      {inFlight && typeof doc.progress === "number" && (
+                        <Progress
+                          percent={doc.progress}
+                          size="small"
+                          showInfo={false}
+                          strokeColor="var(--c-accent)"
+                          style={{ marginTop: 4, marginBottom: 0, lineHeight: 1 }}
+                        />
                       )}
                     </div>
+                    {!inFlight && (
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<DeleteOutlined />}
+                        onClick={() => handleRemoveDoc(doc.path, doc.filename)}
+                        aria-label="删除"
+                      />
+                    )}
                   </div>
-                  {doc.status !== "indexing" && (
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      onClick={() => handleRemoveDoc(doc.path, doc.filename)}
-                      aria-label="删除"
-                    />
-                  )}
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </aside>

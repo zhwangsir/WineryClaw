@@ -121,6 +121,69 @@ app.addHook("onRequest", async (request, reply) => {
   reply.header("x-trace-id", traceId);
 });
 
+// ===== Optional API token auth (Round N2) =====
+// Off by default — when env `WEBRAIN_API_TOKEN` is set, every `/api/*` and
+// `/brain/*` request must carry `Authorization: Bearer <token>` (or
+// `x-webrain-token: <token>` for tools that can't send Authorization).
+// `/health`, `/health/models`, `/metrics` stay public so monitoring +
+// uptime checks don't need credentials.
+//
+// Defense-in-depth, not real auth: this protects against the casual
+// "any process on the host can hit my chat" scenario. For real
+// multi-user auth use a reverse proxy with OIDC.
+const API_TOKEN = process.env.WEBRAIN_API_TOKEN || "";
+const PUBLIC_PATHS = new Set([
+  "/health",
+  "/health/models",
+  "/metrics",
+  "/", // SPA index — frontend itself
+]);
+const PUBLIC_PREFIXES = ["/assets/", "/static/"];
+
+if (API_TOKEN) {
+  app.log.info({ msg: "API token auth enabled" });
+  app.addHook("onRequest", async (request, reply) => {
+    const url = (request.raw.url || "").split("?")[0];
+    // Strip /api prefix for the allow-check so /api/health behaves the same as /health.
+    const normalized = url.startsWith("/api/") && !url.startsWith("/api/skillhub")
+      ? url.replace(/^\/api/, "") || "/"
+      : url;
+    if (PUBLIC_PATHS.has(normalized)) return;
+    if (PUBLIC_PREFIXES.some((p) => normalized.startsWith(p))) return;
+    // Only guard the API surface — the SPA bundle itself is allowed.
+    if (!normalized.startsWith("/api/")
+        && !normalized.startsWith("/brain/")
+        && !normalized.startsWith("/channels")
+        && !normalized.startsWith("/chat")
+        && !normalized.startsWith("/agents")
+        && !normalized.startsWith("/memory")
+        && !normalized.startsWith("/tools")
+        && !normalized.startsWith("/sandbox")
+        && !normalized.startsWith("/config")
+        && !normalized.startsWith("/skills")
+        && !normalized.startsWith("/wiki")
+        && !normalized.startsWith("/identity")
+        && !normalized.startsWith("/plugins")
+        && !normalized.startsWith("/cron")
+        && !normalized.startsWith("/hooks")
+        && !normalized.startsWith("/uploads")
+        && !normalized.startsWith("/proposals")) {
+      return; // not an API path — let it through
+    }
+    const auth = (request.headers["authorization"] as string | undefined) || "";
+    const xToken = (request.headers["x-webrain-token"] as string | undefined) || "";
+    const bearer = auth.toLowerCase().startsWith("bearer ")
+      ? auth.slice(7).trim()
+      : "";
+    const supplied = bearer || xToken;
+    if (supplied && supplied === API_TOKEN) return;
+    reply.code(401).header("www-authenticate", 'Bearer realm="webrain"').send({
+      ok: false,
+      error: "Unauthorized — WEBRAIN_API_TOKEN required",
+    });
+  });
+}
+
 // ===== /api prefix compat (frontend uses /api/channels, sub-brain serves /channels) =====
 // Frontend api/*.ts wrappers consistently call `/api/<resource>` to avoid
 // SPA route collisions on `/channels` and `/config`. But sub-brain serves
