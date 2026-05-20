@@ -290,6 +290,11 @@ class ChatEngine:
         self._agent_config_cache: Dict[str, Any] = {}
         self._agent_config_ttl = 30  # seconds
         self._agent_config_fetched_at: Dict[str, float] = {}
+        # Round O3 — instance-level tool embedding cache + lock
+        # (was class-level in N1; the class-level approach raced).
+        self._tool_embedding_cache = {}
+        self._tool_embedding_signature = ""
+        self._tool_embedding_lock = asyncio.Lock()
         # Tunables (env-overridable so users can adjust at deploy time)
         self.rag_top_k: int = int(os.environ.get("WEBRAIN_RAG_TOP_K", "3"))
         self.rag_min_score: float = float(os.environ.get("WEBRAIN_RAG_MIN_SCORE", "0.0"))
@@ -354,12 +359,23 @@ class ChatEngine:
                     return
                 # Check if we already summarized recently — avoid re-running
                 # every turn once we cross the threshold.
-                summaries = [
-                    r for r in all_rows
-                    if r.get("level") == "L2"
-                    and isinstance(r.get("metadata"), str)
-                    and '"kind": "session-summary"' in r["metadata"]
-                ]
+                # O3 hardening: parse covers_until out of the metadata JSON
+                # instead of doing substring matches on the raw blob (which
+                # broke as soon as any other field in metadata sorted before
+                # the timestamp, causing duplicate summary stores).
+                def _covers_until(row: Dict[str, Any]) -> str:
+                    raw = row.get("metadata", "")
+                    if not isinstance(raw, str) or not raw:
+                        return ""
+                    try:
+                        meta = json.loads(raw)
+                    except (TypeError, ValueError):
+                        return ""
+                    if not isinstance(meta, dict) or meta.get("kind") != "session-summary":
+                        return ""
+                    return str(meta.get("covers_until", ""))
+
+                summaries = [r for r in all_rows if r.get("level") == "L2" and _covers_until(r)]
                 # Sort L1 oldest-first for chronological summary.
                 l1.sort(key=lambda r: r.get("created_at", ""))
                 # We only summarize messages OLDER than the most recent
@@ -368,11 +384,12 @@ class ChatEngine:
                 to_summarize = l1[:-retain]
                 if not to_summarize:
                     return
-                # Skip if a summary already covers everything in to_summarize.
-                if summaries:
-                    latest_cover = max(s.get("metadata", "") for s in summaries)
-                    last_to_cover = to_summarize[-1].get("created_at", "")
-                    if last_to_cover and last_to_cover in latest_cover:
+                last_to_cover = to_summarize[-1].get("created_at", "")
+                # Skip if a prior summary already covers up to (or past)
+                # the last L1 we're about to summarize.
+                if summaries and last_to_cover:
+                    latest_cover = max(_covers_until(s) for s in summaries)
+                    if latest_cover and latest_cover >= last_to_cover:
                         return
                 # Build a compact prompt for the LLM. Truncate hard at 200
                 # messages so the prompt itself doesn't blow up.
@@ -501,13 +518,23 @@ class ChatEngine:
     # Pre-computed tool-description embeddings. Lazy-built on first
     # filter() call; rebuilt whenever the tool registry changes (rare).
     # Stored as {tool_name: numpy.ndarray} so cosine compare is cheap.
-    _tool_embedding_cache: Dict[str, "Any"] = {}  # type: ignore[name-defined]
-    _tool_embedding_signature: str = ""
+    #
+    # Round O3 hardening:
+    #   - Was: sync method that called embedder.encode() directly on the
+    #     event loop (CPU-bound, can block 100ms-30s cold).
+    #     Now: async, all embedder.encode calls go through
+    #     loop.run_in_executor(None, ...) per the project's hot-bug-#4
+    #     pattern (see CLAUDE.md).
+    #   - Was: class-level dict cache with no lock, racy across instances
+    #     and across concurrent chat() calls.
+    #     Now: instance-level cache + asyncio.Lock to serialize writes.
+    _tool_embedding_cache: Dict[str, "Any"]  # type: ignore[name-defined]
+    _tool_embedding_signature: str
+    _tool_embedding_lock: "asyncio.Lock"
 
-    def _filter_tools_by_query(self, tools: List[Dict], user_query: str) -> List[Dict]:
-        """Round N1 — narrow the tool list to the top-K most semantically
-        relevant entries for the user query, using sentence-transformers
-        embeddings.
+    async def _filter_tools_by_query(self, tools: List[Dict], user_query: str) -> List[Dict]:
+        """Round N1 (hardened in O3) — narrow the tool list to the
+        top-K most semantically relevant entries for the user query.
 
         Returns the full `tools` list unchanged when any of:
           - User query is empty / very short (< 2 chars)
@@ -545,42 +572,59 @@ class ChatEngine:
                     if isinstance(t, dict) and t.get("type") == "function"
                 )
             )
-            if sig != type(self)._tool_embedding_signature:
-                type(self)._tool_embedding_cache = {}
-                type(self)._tool_embedding_signature = sig
 
-            # Embed the user query once.
-            q_vec = embedder.encode([q], convert_to_numpy=True, show_progress_bar=False)[0]
-            q_norm = float(np.linalg.norm(q_vec)) or 1.0
+            loop = asyncio.get_event_loop()
+            # Acquire the per-instance lock so concurrent chat() calls don't
+            # race when filling or invalidating the cache.
+            async with self._tool_embedding_lock:
+                if sig != self._tool_embedding_signature:
+                    self._tool_embedding_cache = {}
+                    self._tool_embedding_signature = sig
 
-            scored: List[Tuple[float, Dict]] = []
-            to_embed_names: List[str] = []
-            to_embed_texts: List[str] = []
-            for t in tools:
-                fn = t.get("function") if isinstance(t, dict) else None
-                if not fn:
-                    continue
-                name = fn.get("name", "")
-                if name not in type(self)._tool_embedding_cache:
-                    to_embed_names.append(name)
-                    to_embed_texts.append(f"{name}: {fn.get('description', '')}")
-            if to_embed_texts:
-                vecs = embedder.encode(to_embed_texts, convert_to_numpy=True, show_progress_bar=False)
-                for n, v in zip(to_embed_names, vecs):
-                    type(self)._tool_embedding_cache[n] = v
+                # Embed the user query OFF the event loop.
+                q_vec_arr = await loop.run_in_executor(
+                    None,
+                    lambda: embedder.encode([q], convert_to_numpy=True, show_progress_bar=False),
+                )
+                q_vec = q_vec_arr[0]
+                q_norm = float(np.linalg.norm(q_vec)) or 1.0
 
-            for t in tools:
-                fn = t.get("function", {})
-                name = fn.get("name", "")
-                v = type(self)._tool_embedding_cache.get(name)
-                if v is None:
-                    # Couldn't embed this one — give it a neutral score so it's
-                    # not unfairly dropped.
-                    scored.append((0.0, t))
-                    continue
-                v_norm = float(np.linalg.norm(v)) or 1.0
-                cos = float(np.dot(q_vec, v) / (q_norm * v_norm))
-                scored.append((cos, t))
+                to_embed_names: List[str] = []
+                to_embed_texts: List[str] = []
+                for t in tools:
+                    fn = t.get("function") if isinstance(t, dict) else None
+                    if not fn:
+                        continue
+                    name = fn.get("name", "")
+                    if name not in self._tool_embedding_cache:
+                        to_embed_names.append(name)
+                        to_embed_texts.append(f"{name}: {fn.get('description', '')}")
+                if to_embed_texts:
+                    # Batch encode OFF the event loop.
+                    vecs = await loop.run_in_executor(
+                        None,
+                        lambda: embedder.encode(
+                            to_embed_texts, convert_to_numpy=True, show_progress_bar=False
+                        ),
+                    )
+                    for n, v in zip(to_embed_names, vecs):
+                        self._tool_embedding_cache[n] = v
+
+                # Score under the lock too — cheap (NumPy dot products) and
+                # ensures the cache snapshot we read is consistent.
+                scored: List[Tuple[float, Dict]] = []
+                for t in tools:
+                    fn = t.get("function", {})
+                    name = fn.get("name", "")
+                    v = self._tool_embedding_cache.get(name)
+                    if v is None:
+                        # Couldn't embed this one — give it a neutral score
+                        # so it's not unfairly dropped.
+                        scored.append((0.0, t))
+                        continue
+                    v_norm = float(np.linalg.norm(v)) or 1.0
+                    cos = float(np.dot(q_vec, v) / (q_norm * v_norm))
+                    scored.append((cos, t))
 
             scored.sort(key=lambda pair: pair[0], reverse=True)
             return [t for _score, t in scored[:top_k]]
@@ -1033,8 +1077,10 @@ class ChatEngine:
         tools_enabled = (context or {}).get("tools_enabled", True)
         available_tools = self._get_tools_for_agent(agent_id, agent_config) if tools_enabled else None
         # Round N1 — semantic narrowing of the tool list before LLM sees it.
+        # O3: now async so embedder.encode runs in an executor and doesn't
+        # block the event loop.
         if available_tools:
-            available_tools = self._filter_tools_by_query(available_tools, user_input)
+            available_tools = await self._filter_tools_by_query(available_tools, user_input)
         all_tool_calls: List[Dict] = []
         all_tool_results: List[Dict] = []
 
@@ -1156,8 +1202,10 @@ class ChatEngine:
         tools_enabled = (context or {}).get("tools_enabled", True)
         available_tools = self._get_tools_for_agent(agent_id, agent_config) if tools_enabled else None
         # Round N1 — semantic narrowing of the tool list before LLM sees it.
+        # O3: now async so embedder.encode runs in an executor and doesn't
+        # block the event loop.
         if available_tools:
-            available_tools = self._filter_tools_by_query(available_tools, user_input)
+            available_tools = await self._filter_tools_by_query(available_tools, user_input)
         all_tool_calls: List[Dict] = []
         all_tool_results: List[Dict] = []
 

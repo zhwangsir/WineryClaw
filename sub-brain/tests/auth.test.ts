@@ -146,4 +146,93 @@ describe("registerAuth", () => {
     });
     expect(res.statusCode).toBe(200);
   });
+
+  // ── Round O2 — path-normalization bypass defense ──────────────────
+
+  it("accepts x-webrain-token alternative header", async () => {
+    process.env.WEBRAIN_API_KEY = TEST_KEY;
+    const app = buildAppWithEverythingRoutes();
+    registerAuth(app);
+    const res = await app.inject({
+      method: "GET",
+      url: "/tools",
+      headers: { "x-webrain-token": TEST_KEY },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("WEBRAIN_API_TOKEN env var works as alias", async () => {
+    delete process.env.WEBRAIN_API_KEY;
+    process.env.WEBRAIN_API_TOKEN = "alias-key-xyz";
+    try {
+      const app = buildAppWithEverythingRoutes();
+      registerAuth(app);
+      // wrong key → 401
+      const denied = await app.inject({
+        method: "GET",
+        url: "/tools",
+        headers: { authorization: "Bearer wrong" },
+      });
+      expect(denied.statusCode).toBe(401);
+      // right key → 200
+      const ok = await app.inject({
+        method: "GET",
+        url: "/tools",
+        headers: { authorization: "Bearer alias-key-xyz" },
+      });
+      expect(ok.statusCode).toBe(200);
+    } finally {
+      delete process.env.WEBRAIN_API_TOKEN;
+    }
+  });
+
+  it("/api/tools requires auth (prefix strip on the auth side)", async () => {
+    process.env.WEBRAIN_API_KEY = TEST_KEY;
+    const app = buildAppWithEverythingRoutes();
+    // Mount also at /api/tools so we can hit it directly without main.ts's prefix rewrite.
+    app.get("/api/tools", async () => ({ tools: [] }));
+    registerAuth(app);
+    const denied = await app.inject({ method: "GET", url: "/api/tools" });
+    expect(denied.statusCode).toBe(401);
+  });
+
+  it("denies double-slash bypass (//tools)", async () => {
+    process.env.WEBRAIN_API_KEY = TEST_KEY;
+    const app = buildAppWithEverythingRoutes();
+    registerAuth(app);
+    // Fastify itself routes //tools the same as /tools — verify our hook
+    // also collapses // so the auth check matches the eventual route.
+    const res = await app.inject({ method: "GET", url: "//tools" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("denies case-variant bypass (/TOOLS)", async () => {
+    process.env.WEBRAIN_API_KEY = TEST_KEY;
+    const app = buildAppWithEverythingRoutes();
+    app.get("/TOOLS", async () => ({ tools: [] }));
+    registerAuth(app);
+    const res = await app.inject({ method: "GET", url: "/TOOLS" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("denies dot-segment bypass (/api/./tools)", async () => {
+    process.env.WEBRAIN_API_KEY = TEST_KEY;
+    const app = buildAppWithEverythingRoutes();
+    registerAuth(app);
+    const res = await app.inject({ method: "GET", url: "/api/./tools" });
+    // Should be 401 (auth rejected) — even though Fastify might 404 the
+    // dot-segment route, our guard must classify it as protected.
+    expect([401, 404]).toContain(res.statusCode);
+    // The critical assertion: it must NOT be 200.
+    expect(res.statusCode).not.toBe(200);
+  });
+
+  it("/metrics is public", async () => {
+    process.env.WEBRAIN_API_KEY = TEST_KEY;
+    const app = buildAppWithEverythingRoutes();
+    app.get("/metrics", async () => "# HELP\n");
+    registerAuth(app);
+    const res = await app.inject({ method: "GET", url: "/metrics" });
+    expect(res.statusCode).toBe(200);
+  });
 });

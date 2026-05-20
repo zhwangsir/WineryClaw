@@ -11,39 +11,49 @@
  * Off by default — when WEBRAIN_API_TOKEN is unset on the server side,
  * unauthenticated requests succeed and this panel is purely cosmetic.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Card, Input, Space, Tag, Tooltip, message } from "antd";
 import { SafetyOutlined, EyeOutlined, EyeInvisibleOutlined, ReloadOutlined } from "@ant-design/icons";
 
 const STORAGE_KEY = "webrain-api-key";
 
 export default function ApiTokenPanel() {
-  const [stored, setStored] = useState<string>("");
-  const [draft, setDraft] = useState<string>("");
+  const [stored, setStored] = useState<string>(() => {
+    // O5: read localStorage synchronously on first render so `stored` is
+    // never empty when probe() first fires from the mount effect below.
+    // The old useEffect-based init meant probe() captured stored="" via
+    // closure and always reported "denied" / "unset" on first paint.
+    try {
+      return localStorage.getItem(STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
+  const [draft, setDraft] = useState<string>(stored);
   const [reveal, setReveal] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probeResult, setProbeResult] = useState<"unset" | "ok" | "denied" | null>(null);
 
-  useEffect(() => {
-    try {
-      const v = localStorage.getItem(STORAGE_KEY) || "";
-      setStored(v);
-      setDraft(v);
-    } catch {
-      /* ignore */
-    }
-    probe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   /** Probe sub-brain to see whether auth is enabled and whether the
-   *  currently-stored token (if any) actually works. */
-  const probe = async () => {
+   *  currently-stored token (if any) actually works.
+   *  O5: takes the token as an explicit argument so callers can pass
+   *  the freshly-saved value without waiting for a render cycle. */
+  const probe = useCallback(async (tokenOverride?: string) => {
     setProbing(true);
     try {
-      // Hit /api/sandbox/status — small, cheap, behind the auth wall.
+      // Read localStorage fresh (don't rely on captured `stored`) so
+      // re-probes after save() see the new value without a state lag.
+      const token = tokenOverride !== undefined
+        ? tokenOverride
+        : (() => {
+            try {
+              return localStorage.getItem(STORAGE_KEY) || "";
+            } catch {
+              return "";
+            }
+          })();
       const resp = await fetch("/api/sandbox/status", {
-        headers: stored ? { Authorization: `Bearer ${stored}` } : {},
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (resp.status === 401) setProbeResult("denied");
       else if (resp.ok) setProbeResult("ok");
@@ -53,7 +63,13 @@ export default function ApiTokenPanel() {
     } finally {
       setProbing(false);
     }
-  };
+  }, []);
+
+  // Probe once on mount. Empty dep array is correct: probe() is stable
+  // (useCallback with []), and the first probe should fire exactly once.
+  useEffect(() => {
+    probe();
+  }, [probe]);
 
   const save = () => {
     try {
@@ -61,8 +77,9 @@ export default function ApiTokenPanel() {
       else localStorage.removeItem(STORAGE_KEY);
       setStored(draft);
       message.success(draft ? "API Token 已保存" : "API Token 已清除");
-      // Re-probe so the user sees immediate feedback.
-      setTimeout(probe, 100);
+      // Re-probe with the fresh value rather than relying on the captured
+      // `stored` state which hasn't updated yet (still the previous value).
+      probe(draft);
     } catch (e: any) {
       message.error(e?.message || "保存失败");
     }
@@ -92,22 +109,26 @@ export default function ApiTokenPanel() {
           probeResult === "denied"
             ? "sub-brain 已开启鉴权,但当前 Token 错误或未设置 — 请输入正确的 Token"
             : probeResult === "ok"
-            ? stored
-              ? "sub-brain 已开启鉴权,当前 Token 验证通过"
-              : "sub-brain 未开启鉴权 (WEBRAIN_API_TOKEN 未设置)"
-            : "正在探测 sub-brain 鉴权状态…"
+              ? stored
+                ? "sub-brain 已开启鉴权,当前 Token 验证通过"
+                : "sub-brain 未开启鉴权 (WEBRAIN_API_TOKEN 未设置)"
+              : "正在探测 sub-brain 鉴权状态…"
         }
         action={
-          <Button size="small" icon={<ReloadOutlined spin={probing} />} onClick={probe} disabled={probing}>
+          <Button
+            size="small"
+            icon={<ReloadOutlined spin={probing} />}
+            onClick={() => probe()}
+            disabled={probing}
+          >
             重测
           </Button>
         }
       />
 
       <div style={{ fontSize: 13, color: "var(--c-text-2)", marginBottom: 10 }}>
-        前端会把这个 Token 作为 <code>Authorization: Bearer &lt;token&gt;</code> 注入所有 API 请求。
-        sub-brain 启动时设置 <code>WEBRAIN_API_TOKEN=&lt;一致的值&gt;</code> 即可启用。
-        留空 = 关闭客户端注入。
+        前端会把这个 Token 作为 <code>Authorization: Bearer &lt;token&gt;</code> 注入所有 API 请求。 sub-brain
+        启动时设置 <code>WEBRAIN_API_TOKEN=&lt;一致的值&gt;</code> 即可启用。 留空 = 关闭客户端注入。
       </div>
 
       <Space.Compact style={{ width: "100%", marginBottom: 12 }}>
@@ -130,9 +151,7 @@ export default function ApiTokenPanel() {
         <Button type="primary" disabled={!dirty} onClick={save}>
           {draft ? "保存" : "清除"}
         </Button>
-        {dirty && (
-          <Button onClick={() => setDraft(stored)}>取消修改</Button>
-        )}
+        {dirty && <Button onClick={() => setDraft(stored)}>取消修改</Button>}
       </div>
 
       <div style={{ fontSize: 11, color: "var(--c-text-3)", marginTop: 14, lineHeight: 1.6 }}>
