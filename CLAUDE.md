@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime.
 
 > **Current test totals** (2026-05-21, post J4):
-> 437 sub-brain unit + 1216 frontend unit + 397 main-brain unit + 53 backend smoke + 14 Playwright e2e + 5 benchmarks. **All green.**
+> 437 sub-brain unit + 1216 frontend unit + **402** main-brain unit + 53 backend smoke + 14 Playwright e2e + 5 benchmarks. **All green.**
 
 > **Sandbox runtime decision** — see `docs/adr/0001-sandbox-runtime.md`. We stay on the in-house `DockerSandbox` + workspace mode; do not refactor toward E2B / OpenHands without first re-reading that ADR's "Triggers for revisiting" list.
 

@@ -1311,5 +1311,5 @@ H1 文档化的结论:"WAL 不是 lever,连接池才是"。H2 验证。
 | Sub-brain unit | **437 通过** / 2 skipped | ✅ (+20 vs Round H2 的 417,J1+J2+J3 各加测试) |
 | Frontend unit | **1216 通过** | ✅ |
 | Playwright e2e | **14 通过** | ✅ |
-| Main-brain unit | 397(预计) | 待 J 系列后重跑 |
+| Main-brain unit | **402 通过** | ✅ (主脑代码 J 系列未动,纯回归验证;6:28) |
 | 类型检查 | sub-brain + frontend 全干净 | ✅ |
