@@ -96,6 +96,11 @@
   flex-direction: column;
   min-height: 0;
   padding: 32px 64px 16px;
+  /* Notion-style: keep prose-ish reading column even on ultrawide.
+     The column is centered inside the grid cell. */
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
 }
 
 @media (max-width: 768px) {
@@ -142,8 +147,86 @@
 .user-home__empty p {
   color: var(--uh-text-muted);
   font-size: 15px;
-  margin: 0;
+  margin: 0 0 28px;
   line-height: 1.6;
+}
+
+/* ── suggestion cards (empty state) ───────────────────────── */
+.user-home__suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .user-home__suggestions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.user-home__suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--uh-surface);
+  border: 1px solid var(--uh-border);
+  border-radius: var(--uh-radius);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.user-home__suggestion:hover {
+  border-color: var(--uh-accent);
+  background: var(--uh-bg);
+  transform: translateY(-1px);
+}
+
+.user-home__suggestion:focus-visible {
+  outline: 2px solid var(--uh-accent);
+  outline-offset: 2px;
+}
+
+.user-home__suggestion-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(35, 131, 226, 0.1);
+  color: var(--uh-accent);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.user-home__suggestion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.user-home__suggestion-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--uh-text);
+  line-height: 1.4;
+}
+
+.user-home__suggestion-preview {
+  font-size: 12px;
+  color: var(--uh-text-muted);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .user-home__input {

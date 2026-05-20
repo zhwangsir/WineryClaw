@@ -24,7 +24,9 @@ describe("Sidebar", () => {
       </MemoryRouter>
     );
     expect(screen.getByText("WeBrain")).toBeInTheDocument();
-    expect(screen.getByText("AI Assistant")).toBeInTheDocument();
+    // Round I4: subtitle changed from "AI Assistant" to "管理端" — sidebar
+    // is now explicitly the admin shell, with `/` going to UserHomePage.
+    expect(screen.getByText("管理端")).toBeInTheDocument();
   });
 
   it("renders navigation menu items", () => {

@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { message, Upload, Tag, Tooltip, Empty, Button, Modal } from "antd";
-import { SettingOutlined, InboxOutlined, FileTextOutlined, DeleteOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  SettingOutlined,
+  InboxOutlined,
+  FileTextOutlined,
+  DeleteOutlined,
+  ReloadOutlined,
+  BulbOutlined,
+  ReadOutlined,
+  CodeOutlined,
+  RocketOutlined,
+} from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { useNavigate } from "react-router-dom";
 import { useChatStore } from "../stores/chatStore";
@@ -13,6 +23,58 @@ import { uploadApi } from "../api/upload";
 import "./UserHomePage.css";
 
 const { Dragger } = Upload;
+
+/**
+ * Brand mark — small SVG "brain wave" glyph rendered on the Notion-blue→
+ * violet gradient defined in CSS. Replaces the Unicode `●` placeholder.
+ */
+function BrandMark() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M3 8c0-2.5 2-4.5 4.5-4.5S12 5.5 12 8c0 1-.3 1.9-.9 2.6"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M2.5 10.5c1.2.6 2.6.6 3.8 0 1.2-.6 2.6-.6 3.8 0 1.2.6 2.6.6 3.8 0"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Quick-start suggestion cards rendered on the empty state. Clicking a
+ * card pre-fills the input but does not auto-send — keeps the user in
+ * control of phrasing.
+ */
+const SUGGESTIONS = [
+  {
+    icon: <BulbOutlined />,
+    title: "解释一个概念",
+    prompt: "用通俗的语言解释什么是 RAG (检索增强生成),包含一个生活化的比喻。",
+  },
+  {
+    icon: <ReadOutlined />,
+    title: "总结知识库",
+    prompt: "根据我上传的知识库,总结关键要点,并按主题分组。",
+  },
+  {
+    icon: <CodeOutlined />,
+    title: "写一段代码",
+    prompt: "用 Python 写一个函数,接收一段文本,返回出现频率最高的 10 个词。",
+  },
+  {
+    icon: <RocketOutlined />,
+    title: "头脑风暴",
+    prompt: "我想做一款 AI 助手产品,帮我列出 5 个差异化的市场切入点。",
+  },
+];
 
 /**
  * UserHomePage — clean Notion-styled user mode.
@@ -178,7 +240,9 @@ export default function UserHomePage(): JSX.Element {
     <div className="user-home">
       <header className="user-home__topbar">
         <div className="user-home__brand">
-          <span className="user-home__logo">●</span>
+          <span className="user-home__logo">
+            <BrandMark />
+          </span>
           <span className="user-home__title">WeBrain</span>
         </div>
         <Tooltip title="进入管理端">
@@ -199,6 +263,22 @@ export default function UserHomePage(): JSX.Element {
               <div className="user-home__empty">
                 <h1>有什么可以帮你的?</h1>
                 <p>直接对话,或先在右边上传知识库给我作为上下文。</p>
+                <div className="user-home__suggestions">
+                  {SUGGESTIONS.map((s) => (
+                    <button
+                      key={s.title}
+                      type="button"
+                      className="user-home__suggestion"
+                      onClick={() => setInputValue(s.prompt)}
+                    >
+                      <span className="user-home__suggestion-icon">{s.icon}</span>
+                      <span className="user-home__suggestion-body">
+                        <span className="user-home__suggestion-title">{s.title}</span>
+                        <span className="user-home__suggestion-preview">{s.prompt}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
               <MessageList
