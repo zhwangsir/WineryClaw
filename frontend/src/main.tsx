@@ -4,23 +4,29 @@ import { BrowserRouter } from "react-router-dom";
 import { ConfigProvider, theme as antdTheme } from "antd";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { useIsDark } from "./hooks/useTheme";
 import "./styles/global.css";
 import "./styles/inter-font.css";
 import "./i18n";
 
 /**
- * AntD theme sync (Round I4):
+ * AntD theme sync (Round I4 + Q10 reactive update):
  * Mirror the Notion-style CSS tokens (`--c-accent`, radii, hairline borders)
  * so AntD components (Button/Tag/Input/Upload/Modal/…) feel native to the
- * rest of the app instead of shipping AntD's default electric-blue + 6px
- * radius style.
+ * rest of the app.
  *
- * Light vs dark is keyed off `document.documentElement.dataset.theme`, set
- * by the theme switcher. If neither is set we default to light.
+ * Q10 fix — `isDark` was a module-level const captured once at import,
+ * so when the user toggled the theme button (Sun/Moon) the AntD
+ * algorithm stuck on its initial value. Visible symptom: light mode
+ * showed light text on light bg because dark-mode tokens (e.g.
+ * #e6e6e3 text) leaked in via the unchanged AntD provider while the
+ * CSS vars in global.css correctly flipped to light values. Solution:
+ * read isDark reactively via the existing useIsDark() Zustand hook
+ * and wrap ConfigProvider in a small component so the theme object
+ * recomputes on theme change.
  */
-const isDark = typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
-
-const notionTheme = {
+function buildNotionTheme(isDark: boolean) {
+  return {
   algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
   token: {
     colorPrimary: isDark ? "#5b8def" : "#2383e2",
@@ -61,8 +67,25 @@ const notionTheme = {
       // so the visual hierarchy "page → mask → modal" reads clearly.
       colorBgMask: isDark ? "rgba(0, 0, 0, 0.55)" : "rgba(0, 0, 0, 0.45)",
     },
+    Drawer: {
+      // Round Q9.1 — same dark-mode contrast issue Modal had: the
+      // session-history drawer rendered with bg ~#202020 against page
+      // ~#191919, so the panel was visually nearly invisible. AntD v5
+      // Drawer uses `colorBgElevated` for the content panel BUT the
+      // global `colorBgContainer` token also bleeds in for header/body.
+      // Set both to be safe.
+      colorBgElevated: isDark ? "#2a2a2a" : "#ffffff",
+      colorBgMask: isDark ? "rgba(0, 0, 0, 0.55)" : "rgba(0, 0, 0, 0.45)",
+    },
   },
-};
+  } as const;
+}
+
+/** Wrapper component so the theme object re-derives on every isDark change. */
+function ReactiveConfigProvider({ children }: { children: React.ReactNode }) {
+  const isDark = useIsDark();
+  return <ConfigProvider theme={buildNotionTheme(isDark)}>{children}</ConfigProvider>;
+}
 
 // Register Service Worker for PWA
 if ("serviceWorker" in navigator) {
@@ -85,11 +108,11 @@ if ("serviceWorker" in navigator) {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <ConfigProvider theme={notionTheme}>
+      <ReactiveConfigProvider>
         <BrowserRouter>
           <App />
         </BrowserRouter>
-      </ConfigProvider>
+      </ReactiveConfigProvider>
     </ErrorBoundary>
   </React.StrictMode>
 );

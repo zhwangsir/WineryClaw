@@ -801,6 +801,20 @@ export default function UserHomePage(): JSX.Element {
         width={320}
         open={sessionDrawerOpen}
         onClose={() => setSessionDrawerOpen(false)}
+        // Q9.1 — AntD's theme tokens aren't reliably overriding the
+        // Drawer panel bg in dark mode (it stays #202020, visually
+        // identical to page #191919). Inline-style the content + body
+        // directly with a brighter bg + right-edge shadow so the slide-
+        // out clearly separates from the page.
+        styles={{
+          content: {
+            background: "var(--c-card)",
+            boxShadow: "2px 0 12px rgba(0, 0, 0, 0.4)",
+          },
+          header: { background: "var(--c-card)", borderBottom: "1px solid var(--c-border-light)" },
+          body: { background: "var(--c-card)" },
+          mask: { background: "rgba(0, 0, 0, 0.55)" },
+        }}
       >
         <Input
           allowClear
