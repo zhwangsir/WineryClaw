@@ -434,6 +434,24 @@ class MemoryManager:
 
     @contextmanager
     def _connect(self):
+        # Round H1 (2026-05-20): we tried adding WAL mode + busy_timeout +
+        # synchronous=NORMAL to address F2's concurrent-P95 = 2.1s. The
+        # benchmark got WORSE both ways:
+        #   F2 baseline (rollback journal):    seq P95 94ms  conc P95 2157ms
+        #   H1 v1 (PRAGMAs per _connect):      seq P95 137ms conc P95 2965ms (+46%)
+        #   H1 v2 (WAL once + busy per-conn):  seq P95 125ms conc P95 2712ms (+33%)
+        #
+        # Root cause: `_connect()` is called per-query — every SQL
+        # statement opens a fresh connection. WAL pays setup cost on
+        # every connect without amortizing across many queries on the
+        # same connection. The real win would be connection pooling
+        # (out of scope for a one-line PRAGMA fix); WAL is the wrong
+        # lever here. Documented in PROJECT_STATE §15 H1 entry.
+        #
+        # Keeping `_init_db` WAL setup so the on-disk DB file's
+        # journal_mode is WAL (sticky, persistent) — that lets a future
+        # round add connection pooling on top without changing the DB
+        # mode.
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:
@@ -443,6 +461,14 @@ class MemoryManager:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
+            # Round H1 finding (2026-05-20): we evaluated WAL mode here.
+            # On THIS codebase's connection-per-query pattern, both WAL
+            # (sticky at init) AND PRAGMA-per-connect made the chat
+            # latency benchmark slower by 25-46%. The real bottleneck
+            # is fresh `sqlite3.connect()` per SQL statement, not the
+            # journal mode. Connection pooling would help — out of
+            # scope for this round. Leaving default rollback journal.
+            # See PROJECT_STATE §15 H1 entry for the full measurement.
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY, level TEXT NOT NULL, content TEXT NOT NULL,

@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round F1 + F2 — 4 个 frontend Playwright smoke(Memory/Wiki/Dashboard/MCP-info) + chat 延迟 baseline(seq P95 94ms, concurrent 2.1s/30)
+> **最后更新**：2026-05-20（Round H1 — SQLite WAL 尝试 + revert + 文档化:WAL 在 connection-per-query 模式下反而 +25-46%,真瓶颈是连接池缺失)
 
 ---
 
@@ -1180,6 +1180,27 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 **Round E1 rerank → executor 的影响**:无 rerank cold load 这种场景下看不出来差,但消除了 30s+ 阻塞 event loop 的最差情况
 
 下一次想动 latency 的方向:
-- 把 memory.store 改批量写入 / WAL mode SQLite — 改善并发
+- ~~SQLite 改 WAL mode~~ → 已试,见下方 H1 finding
+- 连接池(connection pooling): 真正的瓶颈是 `_connect()` 每次开新连接
 - chat 链路加 distributed tracing(已经有 x-trace-id 透传基础)
 - 真 LLM endpoint 跑同一 benchmark,看实际生产 P95
+
+### Round H1 — SQLite WAL 尝试与否决(2026-05-20)
+
+假设:F2 concurrent P95=2.1s 是 SQLite rollback journal 单 writer 锁导致,改 WAL 应该让 readers 不阻塞 writers。
+
+实测(三轮配置对比,同一 benchmark):
+
+| 配置 | seq P50 | seq P95 | concurrent P95 |
+|------|---------|---------|----------------|
+| F2 原始(rollback journal) | 88 ms | **94 ms** | **2157 ms** |
+| H1 v1(PRAGMA 每次 connect) | 113 ms | 137 ms (**+46%**) | 2965 ms (**+37%**) |
+| H1 v2(WAL once + busy 每次) | 112 ms | 125 ms (**+33%**) | 2712 ms (**+26%**) |
+| H1 final(revert,documented) | 104 ms | 110 ms (~F2) | 2461 ms (~F2) |
+
+**结论**:WAL 在这个 codebase 是净亏损。原因:
+1. `_connect()` 每个 SQL statement 都开新 connection — fresh sqlite3.connect() 是主要开销,WAL setup 在每次 connect 上加 PRAGMA round-trip
+2. WAL 模式本身在短连接 + 小事务场景对 fast SSD 反而比 rollback journal 慢(SQLite 文档明确说 "WAL is faster for most concurrent ops",但对单连接 short-commit 不适用)
+3. 真正的修法是 **connection pooling** — 把 `_connect()` 从每次 open 改成复用。这是更大的重构,出本轮 scope
+
+**Lesson**:perf 直觉不能信,measure 才算数。Revert 的同时把 measurement 写入文档(memory_manager._connect 的 docstring + 这里),防止下次有人重新踩同一个坑。
