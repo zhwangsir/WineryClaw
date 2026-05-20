@@ -8,7 +8,14 @@ const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://localhost:3000';
 const proxyConfig = {
   '/api': { target: proxyTarget, changeOrigin: true },
   '/brain': { target: proxyTarget, changeOrigin: true },
-  '/uploads': { target: proxyTarget, changeOrigin: true },
+  // Q14.7 (2026-05-21) — '/uploads' became a regex `^/uploads/.+`. The
+  // bare '/uploads' path is the SPA route (UploadsPage); only
+  // /uploads/<filename> is the sub-brain file-server endpoint
+  // (uploads-routes.ts: GET /uploads/:name). With the old loose
+  // '/uploads' key, the dev proxy forwarded the bare path too, so
+  // sub-brain answered with the SPA fallback HTML but the asset
+  // imports failed to resolve and the page rendered completely blank.
+  '^/uploads/.+': { target: proxyTarget, changeOrigin: true },
   // Q14.5 (2026-05-21) — '/tools' removed for the same reason as
   // '/channels' / '/config': both the SPA and the sub-brain expose
   // it, and Vite's dev proxy matches first, so /tools loaded the raw
