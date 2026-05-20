@@ -18,6 +18,7 @@ export default function SandboxPage() {
     stats,
     logs,
     workspaces,
+    defaultImage,
     fetchStatus,
     fetchStats,
     fetchAudit,
@@ -39,7 +40,9 @@ export default function SandboxPage() {
   const [newWsId, setNewWsId] = useState("");
   const [newWsNetwork, setNewWsNetwork] = useState(false);
   const [wsCommand, setWsCommand] = useState<Record<string, string>>({});
-  const [wsResult, setWsResult] = useState<Record<string, { ok: boolean; output: string; exitCode: number; error?: string }>>({});
+  const [wsResult, setWsResult] = useState<
+    Record<string, { ok: boolean; output: string; exitCode: number; error?: string }>
+  >({});
   const [wsLoading, setWsLoading] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -86,11 +89,7 @@ export default function SandboxPage() {
   };
 
   return (
-    <PageShell
-      title="沙箱"
-      subtitle="Docker 沙箱执行环境与审计日志"
-      icon={<SafetyOutlined />}
-    >
+    <PageShell title="沙箱" subtitle="Docker 沙箱执行环境与审计日志" icon={<SafetyOutlined />}>
       {/* Status */}
       <Row gutter={[24, 24]} style={{ marginBottom: 32 }}>
         <Col xs={12} md={6}>
@@ -112,9 +111,21 @@ export default function SandboxPage() {
       </Row>
 
       {/* Execution */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: 24, marginBottom: 32 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
+          gap: 24,
+          marginBottom: 32,
+        }}
+      >
         <Card
-          title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}><CodeOutlined style={{ marginRight: 8 }} />Shell 命令</span>}
+          title={
+            <span style={{ fontWeight: 600, color: "var(--c-text)" }}>
+              <CodeOutlined style={{ marginRight: 8 }} />
+              Shell 命令
+            </span>
+          }
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
           bodyStyle={{ padding: 24 }}
         >
@@ -125,13 +136,24 @@ export default function SandboxPage() {
             onChange={(e) => setCommand(e.target.value)}
             style={{ marginBottom: 12 }}
           />
-          <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecute} loading={execLoading} disabled={!available}>
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            onClick={handleExecute}
+            loading={execLoading}
+            disabled={!available}
+          >
             执行
           </Button>
         </Card>
 
         <Card
-          title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}><CodeOutlined style={{ marginRight: 8 }} />Python 代码</span>}
+          title={
+            <span style={{ fontWeight: 600, color: "var(--c-text)" }}>
+              <CodeOutlined style={{ marginRight: 8 }} />
+              Python 代码
+            </span>
+          }
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
           bodyStyle={{ padding: 24 }}
         >
@@ -142,7 +164,13 @@ export default function SandboxPage() {
             onChange={(e) => setPythonCode(e.target.value)}
             style={{ marginBottom: 12, fontFamily: "monospace" }}
           />
-          <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecutePython} loading={execLoading} disabled={!available}>
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            onClick={handleExecutePython}
+            loading={execLoading}
+            disabled={!available}
+          >
             执行
           </Button>
         </Card>
@@ -173,10 +201,29 @@ export default function SandboxPage() {
           </Button>
         }
       >
-        <p style={{ color: "var(--c-text-3)", fontSize: 12, marginTop: 0, marginBottom: 16 }}>
+        <p style={{ color: "var(--c-text-3)", fontSize: 12, marginTop: 0, marginBottom: 8 }}>
           长寿命容器 + 持久挂载 (<code>~/.webrain/workspaces/&lt;id&gt;/</code>)。文件、`apt-get install`、`pip install`
           会跨调用保留。可选放开网络。
         </p>
+        {defaultImage && (
+          <p style={{ fontSize: 12, marginTop: 0, marginBottom: 16 }}>
+            {defaultImage === "webrain-workspace:latest" ? (
+              <span style={{ color: "var(--c-text-2)" }}>
+                默认镜像:<code>{defaultImage}</code>
+                <Tag color="success" style={{ marginLeft: 8, fontSize: 11 }}>
+                  已就绪
+                </Tag>
+              </span>
+            ) : (
+              <span style={{ color: "var(--c-text-3)" }}>
+                默认镜像:<code>{defaultImage}</code> (回退) ·{" "}
+                <span style={{ color: "var(--c-text-2)" }}>
+                  跑 <code>./sub-brain/docker/workspace/build.sh</code> 构建 ubuntu 镜像可解锁 apt-get / pip / ffmpeg
+                </span>
+              </span>
+            )}
+          </p>
+        )}
 
         {workspaces.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无工作区" />
@@ -191,7 +238,9 @@ export default function SandboxPage() {
                   style={{ background: "var(--c-card)", border: "1px solid var(--c-border-light)" }}
                   bodyStyle={{ padding: 16 }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}
+                  >
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 600, fontFamily: "monospace" }}>{ws.workspaceId}</span>
                       <Tag style={{ fontSize: 11 }}>{ws.image}</Tag>
@@ -223,9 +272,7 @@ export default function SandboxPage() {
                     <Input
                       placeholder="ls / pip install / apt update && apt install -y curl …"
                       value={wsCommand[ws.workspaceId] ?? ""}
-                      onChange={(e) =>
-                        setWsCommand((p) => ({ ...p, [ws.workspaceId]: e.target.value }))
-                      }
+                      onChange={(e) => setWsCommand((p) => ({ ...p, [ws.workspaceId]: e.target.value }))}
                       onPressEnter={() => handleWorkspaceExec(ws.workspaceId)}
                       style={{ fontFamily: "monospace", fontSize: 13 }}
                     />
@@ -312,12 +359,32 @@ export default function SandboxPage() {
           }
         >
           {execResult.stdout && (
-            <pre style={{ background: "var(--c-hover)", padding: 12, borderRadius: 8, fontSize: 12, overflow: "auto", maxHeight: 200 }}>
+            <pre
+              style={{
+                background: "var(--c-hover)",
+                padding: 12,
+                borderRadius: 8,
+                fontSize: 12,
+                overflow: "auto",
+                maxHeight: 200,
+              }}
+            >
               {execResult.stdout}
             </pre>
           )}
           {execResult.stderr && (
-            <pre style={{ background: "#fff1f0", padding: 12, borderRadius: 8, fontSize: 12, color: "#cf1322", overflow: "auto", maxHeight: 200, marginTop: 8 }}>
+            <pre
+              style={{
+                background: "#fff1f0",
+                padding: 12,
+                borderRadius: 8,
+                fontSize: 12,
+                color: "#cf1322",
+                overflow: "auto",
+                maxHeight: 200,
+                marginTop: 8,
+              }}
+            >
               {execResult.stderr}
             </pre>
           )}
@@ -330,7 +397,9 @@ export default function SandboxPage() {
         style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
         bodyStyle={{ padding: 24 }}
         extra={
-          <Button size="small" icon={<ClearOutlined />} onClick={() => fetchAudit(undefined, 50)}>刷新</Button>
+          <Button size="small" icon={<ClearOutlined />} onClick={() => fetchAudit(undefined, 50)}>
+            刷新
+          </Button>
         }
       >
         {logs.length === 0 ? (
@@ -342,9 +411,19 @@ export default function SandboxPage() {
             size="small"
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "Agent", dataIndex: "agentId", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v}</span> },
+              {
+                title: "Agent",
+                dataIndex: "agentId",
+                render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v}</span>,
+              },
               { title: "操作", dataIndex: "action", render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag> },
-              { title: "时间", dataIndex: "timestamp", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span> },
+              {
+                title: "时间",
+                dataIndex: "timestamp",
+                render: (v: string) => (
+                  <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span>
+                ),
+              },
             ]}
           />
         )}

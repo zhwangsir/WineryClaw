@@ -21,10 +21,9 @@ function createMockStore(overrides: Partial<Parameters<typeof useSandboxStore>[0
   return {
     available: true,
     stats: { cpu: 12, memory: 256 },
-    logs: [
-      { agentId: "agent-1", action: "exec", timestamp: "2024-01-01T00:00:00Z" },
-    ],
+    logs: [{ agentId: "agent-1", action: "exec", timestamp: "2024-01-01T00:00:00Z" }],
     workspaces: [],
+    defaultImage: "webrain-workspace:latest",
     fetchStatus,
     fetchStats,
     fetchAudit,
@@ -85,8 +84,8 @@ describe("SandboxPage", () => {
   });
 
   it("shows unavailable status when available is false", () => {
-    vi.mocked(useSandboxStore).mockImplementation(() =>
-      createMockStore({ available: false, stats: {}, logs: [] }) as any
+    vi.mocked(useSandboxStore).mockImplementation(
+      () => createMockStore({ available: false, stats: {}, logs: [] }) as any
     );
     render(
       <BrowserRouter>
@@ -117,9 +116,7 @@ describe("SandboxPage", () => {
   });
 
   it("shows empty when no audit logs", () => {
-    vi.mocked(useSandboxStore).mockImplementation(() =>
-      createMockStore({ logs: [] }) as any
-    );
+    vi.mocked(useSandboxStore).mockImplementation(() => createMockStore({ logs: [] }) as any);
     render(
       <BrowserRouter>
         <SandboxPage />

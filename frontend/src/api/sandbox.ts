@@ -31,8 +31,10 @@ export const sandboxApi = {
     api.post<{ stdout: string; stderr: string; exitCode: number }>("/api/sandbox/python", { code }),
 
   // ── Round J1 — stateful workspaces ────────────────────────────────
+  /** Includes the resolved defaultImage (J2) so the UI can tell user
+   *  whether they'll get ubuntu or the alpine fallback. */
   listWorkspaces: () =>
-    api.get<{ workspaces: SandboxWorkspace[] }>("/api/sandbox/workspaces").then((r) => r.workspaces),
+    api.get<{ workspaces: SandboxWorkspace[]; defaultImage: string }>("/api/sandbox/workspaces"),
   createWorkspace: (opts: {
     workspaceId: string;
     image?: string;

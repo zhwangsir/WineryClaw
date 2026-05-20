@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round H2 — SQLite 连接池 + WAL 摊销 pragmas:序列 P95 -6% modest win,并发场景因 pool 太小(4) overflow 仍无改善;基础设施就位,后续可调 pool 大小或转 writer queue)
+> **最后更新**：2026-05-21（Round J1-J4 — Sandbox 升级为持久工作区:长寿命容器 + bind-mount 持久挂载 + ubuntu:24.04 镜像 + skill 沙箱 executor + ADR-0001 决策不接 E2B/OpenHands。让 AI 能真正在一个可写、可装包、状态保留的 Linux 环境里干活）
 
 ---
 
@@ -1230,3 +1230,86 @@ H1 文档化的结论:"WAL 不是 lever,连接池才是"。H2 验证。
 - 整体迁移到 asyncpg / 真正的 RDBMS:超出本项目范围
 
 **Lesson #2**:理论上正确的优化(连接池)实测仍可能只是 marginal win。pool 是基础设施改进,日后调参/扩展空间打开了,但不是 free 的 wholesale latency 收益。F2 baseline 维持,smoke + unit 全过。
+
+---
+
+## 16. Round I/J 系列 — UI 重构 + Sandbox 升级 (2026-05-20 → 2026-05-21)
+
+### Round I1 — User/Admin 二分 + RAG 知识库 + Notion 风格
+
+- 根路由 `/` 改为 `UserHomePage` (Notion 风聊天 + 右侧知识库栏);原 Dashboard 迁到 `/dashboard`,所有管理页面挂在 `AdminShell` 下
+- 关键修复:`sub-brain/src/main.ts` 加 `onRequest` hook,把 `/api/*` 前缀剥到 `/*` (除 `/api/skillhub`)。修了 "Cannot use 'in' operator to search for 'error' in <!DOCTYPE html>" 渲染崩溃 — 根因是 axios 拿到 SPA fallback HTML 当 JSON 解析。
+- RAG 上传链路:`/api/upload` → `/brain/rag/index_file` → `/brain/rag/stats`
+- 用户决策:整体走 Notion 风格,顶部齿轮一键进管理端
+
+### Round I2 — Chat 自动注入 RAG context (用户模式)
+
+`chat_engine._retrieve_rag_context` 默认开,验证已工作。无代码变化,纯测试确认。
+
+### Round I3 — Notion 风格管理端 chrome
+
+- `frontend/src/styles/global.css` token-only 重构:Notion 调色板 `#37352f` 文字 / `#2383e2` 蓝 / hairline borders / radii 4/6/8/10
+- Body 字体栈改 system-first + PingFang SC for CJK
+- 既有组件零改动自动继承新外观 (token 名保持)
+
+### Round I4 — Top-5 UI 打磨
+
+- #1 SVG 品牌标 (脑波线条 + 蓝→紫渐变) 替代 `●`
+- #2 UserHomePage 空状态 2×2 建议卡片 (解释/总结/写代码/头脑风暴)
+- #3 聊天列 `max-width: 860px` Notion-style prose width
+- #9 Sidebar 30 项扁平 → 5 个折叠分组 (核心/智能体/通道/系统/实验) + localStorage 记忆 + 活跃组自动展开
+- #18 AntD `ConfigProvider theme` 注入 Notion tokens — 终于 AntD 组件不再撞默认蓝
+
+### Round J1 — Sandbox 持久工作区 (架构升级)
+
+把 `DockerSandbox` 从一次性 `--rm` 模式升级为**有状态工作区运行时**。AI 终于能在一个可写、可装包、状态保留的 Linux 容器里干活。
+
+**新增 API**(向后兼容,旧的 `execute()` / `executePython()` 不变):
+- `ensureWorkspace(id, opts)` — 创建或复用长寿命容器,绑定 `~/.webrain/workspaces/<id>:/workspace`
+- `execInWorkspace(id, command, opts)` — `docker exec -i sh < stdin` 跑命令,stdin 走管道避免 host shell 注入
+- `removeWorkspace(id)` — 销毁容器,保留 host 目录文件
+- `listWorkspaces()` — 当前活跃工作区列表
+
+**HTTP 路由**:`GET/POST /sandbox/workspaces`、`POST /sandbox/workspaces/:id/exec`、`DELETE /sandbox/workspaces/:id`
+
+**安全**:
+- workspaceId 严格正则 `^[a-zA-Z0-9_-]{1,64}$`
+- command 走 stdin 不走 shell 参数 → 无注入面
+- 默认 `--network none`,需要 explicit opt-in 才放开
+- 资源限制 512m memory / 1 cpu / 30s exec 超时(可调)
+
+**前端**:`SandboxPage` 新「持久工作区」区块 — 列表 + 每工作区独立 shell 输入框 + popconfirm 删除 + 创建模态框
+
+### Round J2 — Ubuntu 工作区镜像
+
+`sub-brain/docker/workspace/Dockerfile` — `ubuntu:24.04` 基础 + 预装 git/python3/pip/node/npm/curl/wget/jq/build-essential/ffmpeg/imagemagick/sqlite3/sudo,非 root `agent` 用户 + 无密码 sudo。`scripts/build-workspace-image.sh` 一键构建 `webrain-workspace:latest`。
+
+`DockerSandbox.resolveDefaultWorkspaceImage()` 自动探测:首选 `webrain-workspace:latest`,缺失则回退 `node:20-alpine`。前端在创建工作区时显示"已就绪 / 需构建"提示。
+
+### Round J3 — Skill runtime sandbox executor
+
+`sub-brain/src/skills/runtime/run-sandbox-skill.ts` — 让 Python/JS 技能可以选择跑在持久 sandbox 工作区里,而不是 worker_threads / spawn。同 `SkillRunResult` 契约,调用方可以 mode-agnostic 切换。
+
+机制:host 写脚本+params 到 bind-mount → `docker exec` 跑 → 解析 `__WEBRAIN_SKILL_RESULT__:` marker → 清理临时文件 (try/finally 保证)。完全无 host shell 注入面。
+
+9 个单元测试覆盖契约:marker 解析、回退到 raw stdout、错误传播、timeout 标记、临时文件清理 (含异常路径)。
+
+### Round J4 — ADR-0001:不接 E2B / OpenHands
+
+`docs/adr/0001-sandbox-runtime.md` 决策记录。三个候选评估完(E2B SaaS / OpenHands runtime / Modal serverless),最终决定**继续自建 DockerSandbox**,核心理由:
+
+1. **信任边界**:WeBrain 是个人 AI 伴侣,用户文档/对话/记忆都在本地,把生成代码发去第三方执行违背产品定位
+2. **离线可用**:LAN-only 部署 = 主流场景
+3. **零外部依赖**:不需要账号/API key/计费/网络往返
+
+重新评估的触发条件也明确写了(多租户云化、computer-use 成核心、冷启动延迟变成痛点、出严重 CVE)。J5+ 路线图记在文档里。
+
+### 测试状态 (Round J4 结束,2026-05-21)
+
+| 层 | 数量 | 状态 |
+|---|---|---|
+| Sub-brain unit | **437 通过** / 2 skipped | ✅ (+20 vs Round H2 的 417,J1+J2+J3 各加测试) |
+| Frontend unit | **1216 通过** | ✅ |
+| Playwright e2e | **14 通过** | ✅ |
+| Main-brain unit | 397(预计) | 待 J 系列后重跑 |
+| 类型检查 | sub-brain + frontend 全干净 | ✅ |

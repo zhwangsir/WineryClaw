@@ -58,6 +58,15 @@ export interface WorkspaceConfig {
 
 const WORKSPACE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
+/**
+ * Image preference for workspaces (Round J2). Probed lazily on first use.
+ *  - First choice: webrain-workspace:latest (ubuntu + git/python/node/ffmpeg/curl...)
+ *  - Fallback:    SandboxConfig.image (default node:20-alpine for back-compat)
+ *
+ * If a caller explicitly passes an image in ensureWorkspace(), it wins.
+ */
+const PREFERRED_WORKSPACE_IMAGE = "webrain-workspace:latest";
+
 function workspaceContainerName(workspaceId: string): string {
   return `webrain-ws-${workspaceId}`;
 }
@@ -69,8 +78,37 @@ export class DockerSandbox {
   /** Per-workspace metadata. Keyed by workspaceId, NOT container name. */
   private workspaces = new Map<string, WorkspaceConfig>();
 
+  /** Cached result of "is webrain-workspace:latest pulled locally?" — probed once per process. */
+  private _preferredImageAvailable: boolean | null = null;
+
   constructor(config?: Partial<SandboxConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+  }
+
+  /**
+   * Resolve the workspace image to use when the caller didn't specify one.
+   * Prefers webrain-workspace:latest if locally available, otherwise the
+   * configured default (node:20-alpine).
+   */
+  resolveDefaultWorkspaceImage(): string {
+    if (this._preferredImageAvailable === null) {
+      this._preferredImageAvailable = this._imageExistsLocally(PREFERRED_WORKSPACE_IMAGE);
+    }
+    return this._preferredImageAvailable ? PREFERRED_WORKSPACE_IMAGE : this.config.image;
+  }
+
+  private _imageExistsLocally(image: string): boolean {
+    if (!this.isAvailable()) return false;
+    try {
+      const out = execSync(`docker image inspect ${image} --format ok`, {
+        stdio: ["pipe", "pipe", "pipe"],
+        encoding: "utf-8",
+        timeout: 5000,
+      });
+      return out.trim() === "ok";
+    } catch {
+      return false;
+    }
   }
 
   isAvailable(): boolean {
@@ -215,7 +253,9 @@ export class DockerSandbox {
 
     const cfg: WorkspaceConfig = {
       workspaceId,
-      image: opts?.image ?? this.config.image,
+      // Round J2: prefer webrain-workspace:latest (ubuntu) if locally
+      // pulled, fall back to config.image (node:20-alpine).
+      image: opts?.image ?? this.resolveDefaultWorkspaceImage(),
       memory: opts?.memory ?? this.config.memory,
       cpus: opts?.cpus ?? this.config.cpus,
       // Network defaults to false (--network none). Caller opts in.

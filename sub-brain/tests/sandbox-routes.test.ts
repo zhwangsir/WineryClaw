@@ -19,6 +19,8 @@ function makeFakeDocker() {
     isAvailable: vi.fn(() => true),
     // J1 workspace surface
     listWorkspaces: vi.fn(() => [...workspaces.values()]),
+    // J2 image probe
+    resolveDefaultWorkspaceImage: vi.fn(() => "webrain-workspace:latest"),
     ensureWorkspace: vi.fn(async (workspaceId: string, opts?: { image?: string; memory?: string; cpus?: number; network?: boolean }) => {
       const cfg = {
         workspaceId,
@@ -209,10 +211,13 @@ describe("sandbox routes", () => {
 
   // ---- Workspace sandbox (Round J1) ----
 
-  it("GET /sandbox/workspaces returns empty list initially", async () => {
+  it("GET /sandbox/workspaces returns empty list + default image initially", async () => {
     const res = await app.inject({ method: "GET", url: "/sandbox/workspaces" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ workspaces: [] });
+    expect(res.json()).toEqual({
+      workspaces: [],
+      defaultImage: "webrain-workspace:latest",
+    });
   });
 
   it("POST /sandbox/workspaces creates a workspace", async () => {

@@ -9,6 +9,8 @@ interface SandboxState {
   loading: boolean;
   /** Round J1 — persistent workspace registry. */
   workspaces: SandboxWorkspace[];
+  /** Round J2 — resolved default image (webrain-workspace:latest if pulled, else fallback). */
+  defaultImage: string;
 
   fetchStatus: () => Promise<void>;
   fetchStats: () => Promise<void>;
@@ -29,6 +31,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   logs: [],
   loading: false,
   workspaces: [],
+  defaultImage: "",
 
   fetchStatus: async () => {
     try {
@@ -82,8 +85,8 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   // ── Round J1 — workspaces ─────────────────────────────────────────
   fetchWorkspaces: async () => {
     try {
-      const workspaces = await sandboxApi.listWorkspaces();
-      set({ workspaces });
+      const res = await sandboxApi.listWorkspaces();
+      set({ workspaces: res.workspaces, defaultImage: res.defaultImage });
     } catch (e: any) {
       message.error(e?.message || "获取工作区列表失败");
     }

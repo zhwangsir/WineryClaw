@@ -72,6 +72,9 @@ export function registerSandboxRoutes(app: FastifyInstance, deps: SandboxRouteDe
 
   app.get("/sandbox/workspaces", async () => ({
     workspaces: deps.dockerSandbox.listWorkspaces(),
+    // Round J2: surface the resolved default image so the UI can tell the
+    // user "you'll get ubuntu" vs "you'll get alpine — run build.sh first".
+    defaultImage: deps.dockerSandbox.resolveDefaultWorkspaceImage(),
   }));
 
   app.post("/sandbox/workspaces", async (request, reply) => {

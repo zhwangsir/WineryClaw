@@ -84,4 +84,18 @@ describe("DockerSandbox workspaces", () => {
     const r = await sandbox.removeWorkspace("bad id");
     expect(r.ok).toBe(false);
   });
+
+  // ── Round J2: default-image resolver ──────────────────────────────
+  it("resolveDefaultWorkspaceImage falls back to config.image when Docker unavailable", () => {
+    // With Docker unavailable, the image probe short-circuits and we
+    // get the configured fallback (node:20-alpine).
+    expect(sandbox.resolveDefaultWorkspaceImage()).toBe("node:20-alpine");
+  });
+
+  it("resolveDefaultWorkspaceImage honours a custom config.image", () => {
+    const custom = new DockerSandbox({ image: "python:3.12-slim" });
+    // @ts-expect-error — same private static; ensure docker treated as missing
+    DockerSandbox._cachedAvailability = false;
+    expect(custom.resolveDefaultWorkspaceImage()).toBe("python:3.12-slim");
+  });
 });
