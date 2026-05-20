@@ -51,6 +51,15 @@ const notionTheme = {
     },
     Modal: {
       borderRadiusLG: 10,
+      // Round Q1.1 fix — dark-mode modal body was indistinguishable
+      // from the page background (both ~#191919). Force a slightly
+      // elevated surface + visible border so users can see the panel.
+      contentBg: isDark ? "#262626" : "#ffffff",
+      headerBg: isDark ? "#262626" : "#ffffff",
+      footerBg: isDark ? "#262626" : "#ffffff",
+      // Mask was already semi-transparent; bump it a touch in dark mode
+      // so the visual hierarchy "page → mask → modal" reads clearly.
+      colorBgMask: isDark ? "rgba(0, 0, 0, 0.55)" : "rgba(0, 0, 0, 0.45)",
     },
   },
 };

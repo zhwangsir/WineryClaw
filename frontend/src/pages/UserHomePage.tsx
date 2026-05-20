@@ -728,8 +728,15 @@ export default function UserHomePage(): JSX.Element {
           )}
 
           <div className="user-home__doc-list">
+            {/* Q1.2 fix — when docs is empty AND the dragger is showing
+                above, suppress the redundant <Empty/> illustration. The
+                dragger's own "拖拽文件到这里上传" copy already conveys the
+                empty state. Only show the <Empty/> after the user has
+                manually expanded the dragger but still has 0 docs. */}
             {docs.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有索引文档" />
+              draggerExpanded ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有索引文档" />
+              ) : null
             ) : (
               docs.map((doc) => {
                 // Round N3 — derive phase + label from explicit phase field,
