@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round C6 — RAG index/query/remove smoke;第 2 个连续 clean-pass 轮次,backend smoke 的 wiring-bug 矿脉看起来挖空了）
+> **最后更新**：2026-05-20（Round D1 — re-rank impact benchmark:rerank=True 比 False 在所有指标都赢,MRR +29%。生产代码本来就默认 True,只是 benchmark/smoke 之前一直显式关掉)
 
 ---
 
@@ -1065,6 +1065,7 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 | 2026-05-19 | + consolidation | 0.425 | 0.625 | 0.383 | recall@10 略降 0.025,MRR +0.039 |
 | 2026-05-20 | + embedder 缓存 + FTS5 escape | 0.425 | 0.625 | 0.383 | 不变(修速度 / 崩溃,不动算法) |
 | 2026-05-20 | + blender 0.9/0.1 (Round B3) | 0.550 | 0.575 | 0.442 | grid search 结论:relevance 权重越高越好,recall@5 +0.125,MRR +0.059 |
+| 2026-05-20 | + rerank ON (Round D1, prod default) | 0.575 | 0.625 | 0.558 | use_rerank=True 是生产默认,但 benchmark/smoke 一直被显式关掉 — 真实生产基线比之前报告的更好 |
 
 ### Round B3 — Blender weight grid search (2026-05-20)
 
@@ -1090,8 +1091,24 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 
 **Env override**:`WEBRAIN_RELEVANCE_WEIGHT=0.9 WEBRAIN_IMPORTANCE_WEIGHT=0.1`(单设一个即可,另一个自动 1-x)
 
+### Round D1 — Re-rank impact (2026-05-20)
+
+`pytest -m benchmark -s tests/test_rerank_impact.py` 跑出:
+
+| setting       | recall@5 | recall@10 |  MRR  |
+|---------------|----------|-----------|-------|
+| use_rerank=F  | 0.500    | 0.575     | 0.432 |
+| use_rerank=T  | **0.575**| **0.625** | **0.558** |
+| Δ             | **+0.075 (+15%)** | **+0.050 (+8.7%)** | **+0.126 (+29%)** |
+
+**结论**:
+1. re-rank 在所有指标上都赢,MRR +29% 是最大跳跃 — cross-encoder 的本职就是把对的答案推到更前面
+2. **生产代码 `/memory/query` 默认 `use_rerank=True` 一直没变过** — 之前 benchmark/smoke 把它显式关掉只是为了避开 cold-load(~10s),但 embedder 缓存上线后 cold-load 一次性。所以真实生产基线一直比 §14 表格上半部分高
+3. 之前几轮 (B3 blender grid 等) 用 `use_rerank=False` 测的数据在"相对比较"上仍有意义(同样 off 的两组配置比较),但 absolute 数字偏低
+4. 个别 query 因 re-rank 损失(中文项目类查询),整体仍净赚
+
 下一次想动 baseline 的方向:
-- Re-rank 加回(实验里关掉了避免冷加载)
 - 真实对话 fixture 替换手工 fixture(20 query 噪声大)
 - L4 promotion 累积后重跑 grid search — 看 importance 边际是否回升
 - 加入 importance-disambiguating queries(同样 relevance 但有 importance 区分),验证 importance 在该场景的价值
+- 重跑 blender grid search 但 `use_rerank=True` — 看 rerank 是否改变了最优 blender 比例
