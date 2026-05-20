@@ -101,13 +101,37 @@ export default function SandboxPage() {
             />
           </Card>
         </Col>
-        {Object.entries(stats).map(([key, value]) => (
-          <Col xs={12} md={6} key={key}>
-            <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
-              <Statistic title={key} value={value} />
-            </Card>
-          </Col>
-        ))}
+        {Object.entries(stats).map(([key, value]) => {
+          // Round Q7.3 — translate raw API keys (totalPolicies, etc.) to
+          // readable Chinese labels. Falls back to title-cased key if a
+          // new field shows up that we haven't mapped yet.
+          const LABELS: Record<string, string> = {
+            totalPolicies: "策略总数",
+            activeSessions: "活跃会话",
+            totalAuditLogs: "审计日志",
+            blockedActions: "已阻止操作",
+            // Defensive aliases — backend has shipped both camelCase and
+            // lowercased variants over time; treat both the same.
+            TOTALPOLICIES: "策略总数",
+            ACTIVESESSIONS: "活跃会话",
+            TOTALAUDITLOGS: "审计日志",
+            BLOCKEDACTIONS: "已阻止操作",
+          };
+          const niceTitle =
+            LABELS[key] ??
+            // Title-case fallback: split camelCase / underscores into words
+            key
+              .replace(/([a-z])([A-Z])/g, "$1 $2")
+              .replace(/_/g, " ")
+              .replace(/\b\w/g, (c) => c.toUpperCase());
+          return (
+            <Col xs={12} md={6} key={key}>
+              <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+                <Statistic title={niceTitle} value={value} />
+              </Card>
+            </Col>
+          );
+        })}
       </Row>
 
       {/* Execution */}

@@ -101,8 +101,11 @@ describe("SandboxPage", () => {
         <SandboxPage />
       </BrowserRouter>
     );
-    expect(screen.getByText("cpu")).toBeInTheDocument();
-    expect(screen.getByText("memory")).toBeInTheDocument();
+    // Q7.3: stats keys are title-cased ("cpu" → "Cpu", "memory" → "Memory")
+    // unless they match a known mapping (totalPolicies → 策略总数, etc.).
+    // The test fixture uses generic keys so title-case fallback applies.
+    expect(screen.getByText("Cpu")).toBeInTheDocument();
+    expect(screen.getByText("Memory")).toBeInTheDocument();
   });
 
   it("renders audit logs table when logs exist", () => {
