@@ -189,6 +189,10 @@ export default function UserHomePage(): JSX.Element {
   // Round K6 — voice input (Web Speech API)
   const voice = useSpeechRecognition();
 
+  // Round L2 — collapse the big dragger after the first doc lands.
+  // User can re-expand via the "展开" link on the compact upload button.
+  const [draggerExpanded, setDraggerExpanded] = useState(false);
+
   // Round K4 — suggested follow-up questions for the last AI reply.
   const [followups, setFollowups] = useState<string[]>([]);
   const [followupsLoading, setFollowupsLoading] = useState(false);
@@ -637,13 +641,63 @@ export default function UserHomePage(): JSX.Element {
             </Tooltip>
           </div>
 
-          <Dragger {...uploadProps} className="user-home__dragger">
-            <p className="ant-upload-drag-icon">
-              <InboxOutlined />
-            </p>
-            <p className="ant-upload-text">拖拽文件到这里上传</p>
-            <p className="ant-upload-hint">支持 .txt .md .pdf .docx .json — 上传后自动索引</p>
-          </Dragger>
+          {/* Round L2 — collapse the big dragger to a compact button once
+              the user has at least one doc indexed, so the doc list gets
+              more vertical space. Click expands back. */}
+          {docs.length === 0 || draggerExpanded ? (
+            <Dragger {...uploadProps} className="user-home__dragger">
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined />
+              </p>
+              <p className="ant-upload-text">拖拽文件到这里上传</p>
+              <p className="ant-upload-hint">支持 .txt .md .pdf .docx .json — 上传后自动索引</p>
+            </Dragger>
+          ) : (
+            <Upload {...uploadProps} className="user-home__dragger-collapsed">
+              <Button
+                block
+                icon={<InboxOutlined />}
+                style={{
+                  height: 36,
+                  marginBottom: 12,
+                  borderStyle: "dashed",
+                  color: "var(--c-text-2)",
+                  fontSize: 13,
+                }}
+                onClick={(e) => {
+                  // Stop propagation so the Upload's own click handler still
+                  // fires the file picker — clicking the chevron should
+                  // re-expand the dragger instead.
+                  if ((e.target as HTMLElement).closest("[data-expand-trigger]")) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDraggerExpanded(true);
+                  }
+                }}
+              >
+                添加更多文档
+                <span
+                  data-expand-trigger="1"
+                  role="button"
+                  aria-label="展开拖拽区"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDraggerExpanded(true);
+                  }}
+                  style={{
+                    marginLeft: 8,
+                    fontSize: 11,
+                    color: "var(--c-text-3)",
+                    textDecoration: "underline",
+                    cursor: "pointer",
+                  }}
+                >
+                  展开
+                </span>
+              </Button>
+            </Upload>
+          )}
 
           <div className="user-home__doc-list">
             {docs.length === 0 ? (

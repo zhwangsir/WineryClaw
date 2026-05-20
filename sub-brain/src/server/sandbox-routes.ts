@@ -84,6 +84,7 @@ export function registerSandboxRoutes(app: FastifyInstance, deps: SandboxRouteDe
       memory?: string;
       cpus?: number;
       network?: boolean;
+      networkAllowlist?: string[];
     }) ?? {};
     if (!body.workspaceId) {
       reply.code(400);
@@ -94,6 +95,7 @@ export function registerSandboxRoutes(app: FastifyInstance, deps: SandboxRouteDe
       memory: body.memory,
       cpus: body.cpus,
       network: body.network,
+      networkAllowlist: body.networkAllowlist,
     });
     if (!result.ok) reply.code(400);
     return result;

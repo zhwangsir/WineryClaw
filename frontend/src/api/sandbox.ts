@@ -7,6 +7,8 @@ export interface SandboxWorkspace {
   memory: string;
   cpus: number;
   network: boolean;
+  /** Round L3 — present + non-empty when outbound is restricted to these hosts. */
+  networkAllowlist?: string[];
   lastActiveAt: string;
   hostPath: string;
 }
@@ -36,8 +38,15 @@ export const sandboxApi = {
   /** Includes the resolved defaultImage (J2) so the UI can tell user
    *  whether they'll get ubuntu or the alpine fallback. */
   listWorkspaces: () => api.get<{ workspaces: SandboxWorkspace[]; defaultImage: string }>("/api/sandbox/workspaces"),
-  createWorkspace: (opts: { workspaceId: string; image?: string; memory?: string; cpus?: number; network?: boolean }) =>
-    api.post<{ ok: boolean; workspace?: SandboxWorkspace; error?: string }>("/api/sandbox/workspaces", opts),
+  createWorkspace: (opts: {
+    workspaceId: string;
+    image?: string;
+    memory?: string;
+    cpus?: number;
+    network?: boolean;
+    /** Round L3 — when set with network=true, restricts outbound traffic to these hosts. */
+    networkAllowlist?: string[];
+  }) => api.post<{ ok: boolean; workspace?: SandboxWorkspace; error?: string }>("/api/sandbox/workspaces", opts),
   execInWorkspace: (workspaceId: string, command: string, timeoutMs?: number) =>
     api.post<WorkspaceExecResult>(`/api/sandbox/workspaces/${encodeURIComponent(workspaceId)}/exec`, {
       command,

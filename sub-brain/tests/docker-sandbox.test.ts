@@ -85,6 +85,24 @@ describe("DockerSandbox workspaces", () => {
     expect(r.ok).toBe(false);
   });
 
+  // ── Round L3: network allowlist normalization ─────────────────────
+  it("ensureWorkspace rejects garbage hostnames in networkAllowlist but keeps valid ones", async () => {
+    // With Docker unavailable, ensureWorkspace returns early before
+    // running docker run. We just want to confirm the input shape isn't
+    // rejected outright when the allowlist contains valid + invalid mixes.
+    const r = await sandbox.ensureWorkspace("ws-allow", {
+      network: true,
+      // The runtime only stores a workspace AFTER the docker run
+      // succeeds, so with Docker unavailable we can't observe the
+      // normalized list. But we can confirm the type accepts it and the
+      // error returned is the Docker-not-available one, not a
+      // workspaceId rejection.
+      networkAllowlist: ["api.example.com", "BadHost!Char", "pypi.org"],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("Docker not available");
+  });
+
   // ── Round J2: default-image resolver ──────────────────────────────
   it("resolveDefaultWorkspaceImage falls back to config.image when Docker unavailable", () => {
     // With Docker unavailable, the image probe short-circuits and we

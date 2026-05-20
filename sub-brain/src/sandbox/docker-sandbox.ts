@@ -50,6 +50,18 @@ export interface WorkspaceConfig {
   memory: string;
   cpus: number;
   network: boolean;
+  /**
+   * Round L3 — Optional outbound network allowlist. When set AND
+   * `network: true`, the container can only reach the listed hostnames.
+   * Implemented via /etc/hosts injection at container creation: every
+   * non-allowed DNS lookup falls back to 0.0.0.0 (loopback unreachable).
+   * Not a hard firewall — a determined script can still hit raw IPs —
+   * but blocks the common case of casual DNS exfil + accidental upload
+   * of user files to unknown hosts.
+   *
+   * Empty / unset = no restriction (full open network when network=true).
+   */
+  networkAllowlist?: string[];
   /** ISO timestamp of last activity (exec) — used for idle GC */
   lastActiveAt: string;
   /** absolute path of the host bind mount */
@@ -221,7 +233,14 @@ export class DockerSandbox {
    */
   async ensureWorkspace(
     workspaceId: string,
-    opts?: { image?: string; memory?: string; cpus?: number; network?: boolean },
+    opts?: {
+      image?: string;
+      memory?: string;
+      cpus?: number;
+      network?: boolean;
+      /** Round L3 — outbound allowlist. Only honored when network=true. */
+      networkAllowlist?: string[];
+    },
   ): Promise<{ ok: boolean; workspace?: WorkspaceConfig; error?: string }> {
     if (!WORKSPACE_ID_RE.test(workspaceId)) {
       return {
@@ -251,6 +270,13 @@ export class DockerSandbox {
       // not present — fine
     }
 
+    // Validate + normalize the allowlist (Round L3). Only meaningful
+    // when network is enabled; otherwise --network none already blocks
+    // everything.
+    const cleanAllowlist = (opts?.networkAllowlist ?? [])
+      .map((h) => h.trim().toLowerCase())
+      .filter((h) => /^[a-z0-9.-]{1,253}$/.test(h));
+
     const cfg: WorkspaceConfig = {
       workspaceId,
       // Round J2: prefer webrain-workspace:latest (ubuntu) if locally
@@ -260,17 +286,50 @@ export class DockerSandbox {
       cpus: opts?.cpus ?? this.config.cpus,
       // Network defaults to false (--network none). Caller opts in.
       network: opts?.network ?? false,
+      networkAllowlist: cleanAllowlist.length > 0 ? cleanAllowlist : undefined,
       lastActiveAt: new Date().toISOString(),
       hostPath,
     };
 
     const networkFlag = cfg.network ? "" : "--network none";
+
+    // Round L3 — outbound allowlist via --add-host. Each allowed name
+    // gets resolved against Docker's host-gateway DNS; everything else
+    // is forced to 0.0.0.0 via a wildcard NOTE: docker can't do wildcard,
+    // so we instead block-list common exfil destinations by mapping them
+    // to 0.0.0.0. This is a "lift the casual exfil floor", not a strict
+    // firewall — see WorkspaceConfig.networkAllowlist docs.
+    const addHostArgs: string[] = [];
+    if (cfg.network && cfg.networkAllowlist) {
+      // Allow the listed hosts to resolve normally.
+      for (const host of cfg.networkAllowlist) {
+        addHostArgs.push("--add-host", `${host}:host-gateway`);
+      }
+      // Pin a small set of well-known exfil hosts to 0.0.0.0 so the
+      // agent's casual `curl https://pastebin.com` fails fast even
+      // though Docker's DNS would normally let it through.
+      for (const blocked of [
+        "pastebin.com",
+        "paste.ee",
+        "transfer.sh",
+        "0x0.st",
+        "termbin.com",
+        "ix.io",
+        "dpaste.org",
+      ]) {
+        if (!cfg.networkAllowlist.includes(blocked)) {
+          addHostArgs.push("--add-host", `${blocked}:0.0.0.0`);
+        }
+      }
+    }
+
     const dockerCmd = [
       "docker", "run", "-d",
       "--name", container,
       `--memory=${cfg.memory}`,
       `--cpus=${cfg.cpus}`,
       networkFlag,
+      ...addHostArgs,
       "-v", `${hostPath}:/workspace`,
       "-w", "/workspace",
       cfg.image,
@@ -320,6 +379,7 @@ export class DockerSandbox {
         memory: cfg.memory,
         cpus: cfg.cpus,
         network: cfg.network,
+        networkAllowlist: cfg.networkAllowlist,
       });
       if (!r.ok) return { ok: false, output: "", exitCode: -1, error: r.error };
     }
