@@ -390,7 +390,7 @@ class MemoryManager:
         self._db_path = db_path or str(Path.home() / ".webrain" / "memory.db")
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self.llm_config = llm_config or {
-            "base_url": "http://192.168.71.100:1234/v1",
+            "base_url": "http://localhost:1234/v1",
             "model_id": "minimax/minimax-m2.7",
         }
         # Embedding providers: ordered by preference
@@ -1413,7 +1413,7 @@ class MemoryManager:
     async def _llm_call(self, messages: List[Dict], max_tokens: int = 1024) -> Dict[str, Any]:
         """Call LLM with multi-endpoint fallback support."""
         endpoints = self.llm_config.get("endpoints", [{
-            "base_url": self.llm_config.get("base_url", "http://192.168.71.100:1234/v1"),
+            "base_url": self.llm_config.get("base_url", "http://localhost:1234/v1"),
             "model_id": self.llm_config.get("model_id", "minimax/minimax-m2.7"),
             "api_key": self.llm_config.get("api_key"),
         }])

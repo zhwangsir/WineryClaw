@@ -23,14 +23,14 @@ class DreamingEngine:
     def __init__(self, memory_manager: Any, llm_config: Optional[Dict] = None):
         self.memory = memory_manager
         self.llm_config = llm_config or {
-            "base_url": "http://192.168.71.100:1234/v1",
+            "base_url": "http://localhost:1234/v1",
             "model_id": "minimax/minimax-m2.7",
         }
 
     async def _llm_call(self, messages: List[Dict], max_tokens: int = 1024) -> str:
         """Call LLM with multi-endpoint fallback."""
         endpoints = self.llm_config.get("endpoints", [{
-            "base_url": self.llm_config.get("base_url", "http://192.168.71.100:1234/v1"),
+            "base_url": self.llm_config.get("base_url", "http://localhost:1234/v1"),
             "model_id": self.llm_config.get("model_id", "minimax/minimax-m2.7"),
             "api_key": self.llm_config.get("api_key"),
         }])

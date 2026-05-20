@@ -23,7 +23,7 @@ class ReasoningEngine:
     def __init__(self, memory_manager: Any, llm_config: Optional[Dict[str, Any]] = None):
         self.memory = memory_manager
         self.llm_config = llm_config or {
-            "base_url": "http://192.168.71.100:1234/v1",
+            "base_url": "http://localhost:1234/v1",
             "model_id": "minimax/minimax-m2.7",
         }
 

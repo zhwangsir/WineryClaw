@@ -398,7 +398,7 @@ def smoke_rig() -> Iterator[SmokeRig]:
         # Allocate both ports up front so we can tell main-brain which
         # sub-brain port to query for /config/model. Without this, any
         # /config/reload falls back to defaults (LM Studio at
-        # 192.168.71.100), which breaks the chat-flow smoke completely.
+        # localhost), which breaks the chat-flow smoke completely.
         main_port = _find_free_port()
         sub_port = _find_free_port()
         main_brain = _spawn_main_brain(main_port, tmp_dir, main_log,

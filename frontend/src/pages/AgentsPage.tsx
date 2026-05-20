@@ -489,7 +489,7 @@ export default function AgentsPage() {
                 label="模型 Base URL"
                 name={["modelConfig", "baseUrl"]}
               >
-                <Input placeholder="留空使用全局配置，例如: http://192.168.71.100:1234/v1" />
+                <Input placeholder="留空使用全局配置，例如: http://localhost:1234/v1" />
               </Form.Item>
               <Form.Item
                 label="模型 ID"

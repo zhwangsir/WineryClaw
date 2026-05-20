@@ -90,7 +90,7 @@ async def _fetch_llm_config(sub_brain_url: str) -> Dict[str, Any]:
 
                 # Single endpoint fallback
                 return {
-                    "base_url": config.get("baseUrl", "http://192.168.71.100:1234/v1"),
+                    "base_url": config.get("baseUrl", "http://localhost:1234/v1"),
                     "model_id": config.get("modelId", "minimax/minimax-m2.7"),
                     "api_key": config.get("apiKey"),
                     "temperature": config.get("temperature", 0.7),
@@ -104,13 +104,13 @@ async def _fetch_llm_config(sub_brain_url: str) -> Dict[str, Any]:
         "endpoints": [
             {
                 "name": "lm-studio",
-                "base_url": "http://192.168.71.100:1234/v1",
+                "base_url": "http://localhost:1234/v1",
                 "model_id": "minimax/minimax-m2.7",
                 "priority": 10,
             },
             {
                 "name": "exo-cluster",
-                "base_url": "http://192.168.71.53:52415/v1",
+                "base_url": "http://localhost:52415/v1",
                 "model_id": "default",
                 "priority": 5,
             },

@@ -168,7 +168,7 @@ class LLMRouter:
             return
 
         # Single endpoint fallback
-        base_url = config.get("base_url", config.get("baseUrl", "http://192.168.71.100:1234/v1"))
+        base_url = config.get("base_url", config.get("baseUrl", "http://localhost:1234/v1"))
         model_id = config.get("model_id", config.get("modelId", "minimax/minimax-m2.7"))
         api_key = config.get("api_key", config.get("apiKey"))
         self.add_endpoint(LLMEndpoint(
