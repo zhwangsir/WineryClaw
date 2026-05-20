@@ -276,6 +276,33 @@ const PROTOCOL_REGISTRY: Record<string, ChannelProtocol> = {
   imessage: IMessageProtocol,
   email: EmailProtocol,
   webpush: WebPushProtocol,
+  // "memory" — no external transport. Outbound messages stay in the
+  // local SQLite messages table (where every protocol stores them
+  // anyway via storeMessage), so tests / admins can read them via
+  // GET /channels/:id/messages. Useful for:
+  //   - smoke tests (Round C5) that need to exercise auto-reply
+  //     without an actual Telegram/Slack/Discord account
+  //   - dev / demo environments that want to show the inbound→chat→
+  //     outbound pipeline without credentials
+  //   - replay debugging — admin can simulate inbound via
+  //     POST /channels/:id/inject-inbound to retry a flow that failed
+  //     during real-protocol polling
+  memory: {
+    async sendMessage(recipient, content) {
+      // Recipient + content are captured by storeMessage(...,"outbound")
+      // in send() — nothing else to do. Returning the args lets callers
+      // assert what they sent.
+      return { ok: true, recipient, content };
+    },
+    async connect() {
+      // Always succeeds — no credentials to validate.
+      return { ok: true };
+    },
+    async disconnect() {},
+    async health() {
+      return true;
+    },
+  },
 };
 
 export class ChannelManager {
@@ -292,6 +319,25 @@ export class ChannelManager {
   /** M5: register a handler invoked for every inbound message. */
   setInboundHandler(handler: InboundMessageHandler | null): void {
     this.inboundHandler = handler;
+  }
+
+  /** Inject an inbound message as if it had arrived via the channel's
+   * native transport. Used by:
+   *   - Smoke tests (Round C5) to exercise the inbound→auto-reply→
+   *     outbound pipeline without needing a real Telegram/Slack server
+   *   - Admin replay tooling — re-deliver a message that was missed
+   *     because the polling worker was down at the time
+   *
+   * Goes through the same storeMessage path real protocol receivers
+   * use, so the inbound handler (auto-reply) fires identically. Returns
+   * { ok: false } if the channel doesn't exist. */
+  simulateInbound(channelId: string, message: InboundMessage): { ok: boolean; error?: string } {
+    const channel = this.channels.get(channelId);
+    if (!channel) {
+      return { ok: false, error: `Channel not found: ${channelId}` };
+    }
+    this.storeMessage(channelId, message, "inbound");
+    return { ok: true };
   }
 
   async initialize(): Promise<void> {

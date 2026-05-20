@@ -13,6 +13,7 @@
  *   POST   /channels/:id/toggle           — toggle enabled flag
  *   POST   /channels/:id/auto-reply       — set auto-reply flag (M5)
  *   GET    /channels/:id/auto-reply       — query auto-reply flag (M5)
+ *   POST   /channels/:id/inject-inbound   — replay/inject an inbound message
  *   DELETE /channels/:id                  — remove channel config
  */
 
@@ -106,6 +107,33 @@ export function registerChannelsRoutes(app: FastifyInstance, deps: ChannelsRoute
   app.get("/channels/:id/auto-reply", async (request) => {
     const { id } = request.params as { id: string };
     return { ok: true, auto_reply: deps.channelManager.getAutoReply(id) };
+  });
+
+  // POST /channels/:id/inject-inbound — replay or simulate an inbound
+  // message. Used by smoke tests (Round C5) to exercise the
+  // inbound→auto-reply pipeline against a "memory" channel without
+  // needing real credentials. Also useful for admins to retry a message
+  // that was missed during a polling-worker outage.
+  app.post("/channels/:id/inject-inbound", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as {
+      sender?: string;
+      content?: string;
+      timestamp?: string;
+      reply_to?: string;
+    }) ?? {};
+    const sender = String(body.sender ?? "test-sender");
+    const content = String(body.content ?? "");
+    if (!content) {
+      return reply.code(400).send({ ok: false, error: "content is required" });
+    }
+    const message = {
+      sender,
+      content,
+      timestamp: body.timestamp ?? new Date().toISOString(),
+      reply_to: body.reply_to,
+    };
+    return deps.channelManager.simulateInbound(id, message);
   });
 
   app.delete("/channels/:id", async (request) => {
