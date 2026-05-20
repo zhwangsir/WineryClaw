@@ -76,8 +76,28 @@ export function registerBrainProxy(
       if (contentType) reply.header("Content-Type", contentType);
 
       if (isStream && response.data?.pipe) {
-        // SSE stream: pipe axios response stream directly to client
-        reply.code(response.status);
+        // SSE stream: pipe axios response stream directly to client.
+        //
+        // Round Q (2026-05-21) — the previous version forgot to call
+        // `reply.hijack()`. Without that, Fastify treats the response
+        // as still "owned" by the route, and when the handler returns
+        // it auto-completes by calling `reply.raw.end()`. That races
+        // with axios's pipe — Fastify's `end()` often won out, closing
+        // the response before any body bytes were flushed. The visible
+        // symptom: every chat-stream request from the frontend
+        // (which sets `Accept: text/event-stream`) closed in ~15 ms
+        // with status 200 but zero body bytes. Discovered by walking
+        // the live app via Chrome MCP and bisecting layers.
+        reply.hijack();
+        const rawCT = response.headers?.["content-type"];
+        const headerCT = typeof rawCT === "string" ? rawCT : "text/event-stream";
+        reply.raw.setHeader("Content-Type", headerCT);
+        reply.raw.setHeader("Cache-Control", "no-cache");
+        reply.raw.setHeader("Connection", "keep-alive");
+        // X-Accel-Buffering: no — prevents nginx-style intermediaries
+        // (and some browser caches) from buffering the stream.
+        reply.raw.setHeader("X-Accel-Buffering", "no");
+        reply.raw.writeHead(response.status);
         response.data.pipe(reply.raw);
         return;
       }

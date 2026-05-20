@@ -96,10 +96,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   sendStream: async (text, agentId = "agent-default") => {
     const { currentSessionId, toolEnabled } = get();
+    // [Q-debug] mark each call so duplicate fires are visible.
+    const dbgId = Math.random().toString(36).slice(2, 8);
+    // eslint-disable-next-line no-console
+    console.warn("[chatStore.sendStream]", dbgId, "called text=", text.slice(0, 40), "had-active=", !!activeSseClient);
     set({ streaming: true, hasNewMessage: false });
 
     // Abort any previous stream
     if (activeSseClient) {
+      // eslint-disable-next-line no-console
+      console.warn("[chatStore.sendStream]", dbgId, "aborting previous SSE client");
       activeSseClient.abort();
     }
 
