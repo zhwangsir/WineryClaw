@@ -7,10 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Don't duplicate.** `README.md` covers user-facing setup, ports, and the architecture diagram. `docs/PROJECT_STATE.md` is the canonical state-of-the-project doc — read it on a fresh session to sync the full history. This file documents non-obvious things that are easy to get wrong.
 
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
-> `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime.
+> `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-21, post J4):
-> 437 sub-brain unit + 1216 frontend unit + **402** main-brain unit + 53 backend smoke + 14 Playwright e2e + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-21, post L3):
+> **438** sub-brain unit + 1216 frontend unit + **402** main-brain unit + 53 backend smoke + 14 Playwright e2e + 5 benchmarks. **All green.**
 
 > **Sandbox runtime decision** — see `docs/adr/0001-sandbox-runtime.md`. We stay on the in-house `DockerSandbox` + workspace mode; do not refactor toward E2B / OpenHands without first re-reading that ADR's "Triggers for revisiting" list.
 
