@@ -111,4 +111,100 @@ skipIfNoPy("runPythonSkill", () => {
     expect(r.result).toBe("trailing");
     expect(String(r.result).endsWith("\n")).toBe(false);
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // Round C9: structured-result API. JS skills already supported
+  // `return value`; Python now mirrors that via `result = value` or
+  // explicit `set_result(value)`. Both emit a marker the runner
+  // parses, giving back the original Python value type (not a string).
+  // ─────────────────────────────────────────────────────────────────
+
+  it("Round C9: result = <int> returns the int, not the string '42'", async () => {
+    const r = await runPythonSkill({
+      code: "result = params['a'] * 6",
+      params: { a: 7 },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result).toBe(42); // number, not "42"
+  });
+
+  it("Round C9: result = <dict> round-trips as an object", async () => {
+    const r = await runPythonSkill({
+      code: "result = {'sum': params['a'] + params['b'], 'product': params['a'] * params['b']}",
+      params: { a: 3, b: 4 },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result).toEqual({ sum: 7, product: 12 });
+  });
+
+  it("Round C9: result = <list> round-trips as an array", async () => {
+    const r = await runPythonSkill({
+      code: "result = [x ** 2 for x in params['nums']]",
+      params: { nums: [1, 2, 3, 4] },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result).toEqual([1, 4, 9, 16]);
+  });
+
+  it("Round C9: set_result(value) takes precedence over the result variable", async () => {
+    const r = await runPythonSkill({
+      code: `result = 'wrong'
+set_result('right')`,
+      params: {},
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result).toBe("right");
+  });
+
+  it("Round C9: print() before set_result() is dropped — only structured result kept", async () => {
+    const r = await runPythonSkill({
+      code: `print('debug message')
+set_result({'final': True})`,
+      params: {},
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result).toEqual({ final: true });
+  });
+
+  it("Round C9: legacy print(value)-only skill still works (no marker → raw stdout)", async () => {
+    // Backwards-compat: skills that only print and never assign `result`
+    // or call set_result must still see the raw-string behaviour.
+    const r = await runPythonSkill({
+      code: "print('legacy contract')",
+      params: {},
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result).toBe("legacy contract");
+  });
+
+  it("Round C9: result = None doesn't emit a structured result", async () => {
+    // None is the sentinel for "user didn't actually set a result" —
+    // they could've meant to but the implicit emitter shouldn't fire.
+    const r = await runPythonSkill({
+      code: "result = None\nprint('shown instead')",
+      params: {},
+    });
+    expect(r.ok).toBe(true);
+    expect(r.result).toBe("shown instead");
+  });
+
+  it("Round C9: set() coerces via default=str — emits string representation, doesn't crash", async () => {
+    // json.dumps in set_result uses default=str, so unusual Python
+    // values that aren't strict JSON types (set, datetime, etc.)
+    // get coerced to their str() form rather than crashing the skill.
+    // Tradeoff: lose type fidelity, gain robustness. The string is
+    // still useful for debugging / display purposes.
+    const r = await runPythonSkill({
+      code: "result = {1, 2, 3}",
+      params: {},
+    });
+    expect(r.ok).toBe(true);
+    // Python's str({1,2,3}) on CPython 3.x — order is implementation-
+    // defined but the chars are {, 1, ,, ' ', 2, ,, ' ', 3, }. Just
+    // assert it's a string that contains the elements.
+    expect(typeof r.result).toBe("string");
+    expect(String(r.result)).toContain("1");
+    expect(String(r.result)).toContain("2");
+    expect(String(r.result)).toContain("3");
+  });
 });

@@ -141,11 +141,12 @@ def test_js_skill_throw_returns_structured_failure(smoke_rig):
 def test_python_skill_simple_compute_returns_result(smoke_rig):
     """Same as the JS test but for Python runtime.
 
-    The Python runner spawns `python3 -c <wrapper>` and feeds params
-    via stdin as JSON. The runner's contract is "result = whatever
-    you print to stdout". That's asymmetric with the JS runtime
-    (where `return value;` is the contract); flagged as a UX wart
-    to clean up later but the smoke test exercises the real contract.
+    Round C9 harmonized the Python runtime with JS — skills can now
+    use any of:
+        print(value)          # legacy, returns the string
+        result = value        # NEW: parity with JS `return value`
+        set_result(value)     # NEW: explicit, keeps the print path free
+    Each variant has its own dedicated test below.
     """
     sub_url = smoke_rig.sub_brain.base_url
     code = "print(params['x'] * 2 + params['y'])"
@@ -157,6 +158,45 @@ def test_python_skill_simple_compute_returns_result(smoke_rig):
         assert inner.get("success") is True, inner
         # Python stdout is a string — the manager doesn't JSON-parse it.
         assert inner.get("result") == "11", inner
+    finally:
+        _delete_skill(sub_url, skill["id"])
+
+
+def test_python_skill_result_variable_returns_typed_value(smoke_rig):
+    """Round C9: `result = value` returns the typed Python value
+    (number, dict, list — not a string)."""
+    sub_url = smoke_rig.sub_brain.base_url
+    code = "result = {'sum': params['a'] + params['b'], 'tag': 'C9'}"
+    skill = _create_skill(sub_url, f"py-result-{uuid.uuid4().hex[:6]}", code, "python")
+    try:
+        result = _invoke_skill(sub_url, skill["id"], {"a": 10, "b": 5})
+        assert result.get("ok") is True, result
+        inner = result.get("result", {})
+        assert inner.get("success") is True, inner
+        # Round-trips as a real dict, not a string
+        assert inner.get("result") == {"sum": 15, "tag": "C9"}, inner
+
+
+    finally:
+        _delete_skill(sub_url, skill["id"])
+
+
+def test_python_skill_set_result_api(smoke_rig):
+    """Round C9: explicit `set_result(value)` works alongside print() —
+    useful when the skill wants debug output AND a structured result."""
+    sub_url = smoke_rig.sub_brain.base_url
+    code = """print('progress: starting')
+print('progress: midpoint')
+set_result(['done', params['marker']])"""
+    skill = _create_skill(sub_url, f"py-setres-{uuid.uuid4().hex[:6]}", code, "python")
+    try:
+        result = _invoke_skill(sub_url, skill["id"], {"marker": "C9-smoke"})
+        assert result.get("ok") is True, result
+        inner = result.get("result", {})
+        assert inner.get("success") is True, inner
+        # Debug prints are dropped from the result envelope; only the
+        # structured set_result payload remains
+        assert inner.get("result") == ["done", "C9-smoke"], inner
     finally:
         _delete_skill(sub_url, skill["id"])
 
