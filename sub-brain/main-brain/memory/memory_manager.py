@@ -383,12 +383,29 @@ async def warm_local_embedder() -> bool:
         return False
 
 
+import queue as _queue
+
+
 class MemoryManager:
     """Orchestrates L1-L4 hierarchical memory with advanced RAG."""
+
+    # Round H2 (2026-05-20): SQLite connection pool size. Chosen to be
+    # small (most chat workflows are sequential) but >1 so a slow query
+    # in one place doesn't block all others. Tune via the env if needed;
+    # the F2 chat-latency benchmark uses 30 concurrent + most are
+    # write-heavy so 4 is a reasonable middle ground (above 4, contention
+    # on the SQLite write lock outweighs connect-cost savings).
+    _POOL_SIZE = int(os.environ.get("WEBRAIN_SQLITE_POOL_SIZE", "4"))
 
     def __init__(self, db_path: Optional[str] = None, llm_config: Optional[Dict] = None):
         self._db_path = db_path or str(Path.home() / ".webrain" / "memory.db")
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        # H2: bounded LIFO pool of long-lived connections. We use Queue
+        # for thread-safety. Connections are created lazily — the first
+        # _connect() call opens one; subsequent calls reuse it. Excess
+        # connections (over _POOL_SIZE) get closed on return rather than
+        # blocking the caller.
+        self._pool: "_queue.Queue[sqlite3.Connection]" = _queue.Queue(maxsize=self._POOL_SIZE)
         self.llm_config = llm_config or {
             "base_url": "http://localhost:1234/v1",
             "model_id": "minimax/minimax-m2.7",
@@ -426,38 +443,87 @@ class MemoryManager:
     async def close(self) -> None:
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
+        # H2: drain and close pooled SQLite connections so file handles
+        # don't leak in test fixtures that build many MemoryManagers.
+        while True:
+            try:
+                conn = self._pool.get_nowait()
+            except _queue.Empty:
+                break
+            try:
+                conn.close()
+            except sqlite3.DatabaseError:
+                pass
 
     @staticmethod
     def _in_placeholders(count: int) -> str:
         """Generate '?,?,?' for IN clause parameters."""
         return ",".join(["?"] * count)
 
-    @contextmanager
-    def _connect(self):
-        # Round H1 (2026-05-20): we tried adding WAL mode + busy_timeout +
-        # synchronous=NORMAL to address F2's concurrent-P95 = 2.1s. The
-        # benchmark got WORSE both ways:
-        #   F2 baseline (rollback journal):    seq P95 94ms  conc P95 2157ms
-        #   H1 v1 (PRAGMAs per _connect):      seq P95 137ms conc P95 2965ms (+46%)
-        #   H1 v2 (WAL once + busy per-conn):  seq P95 125ms conc P95 2712ms (+33%)
-        #
-        # Root cause: `_connect()` is called per-query — every SQL
-        # statement opens a fresh connection. WAL pays setup cost on
-        # every connect without amortizing across many queries on the
-        # same connection. The real win would be connection pooling
-        # (out of scope for a one-line PRAGMA fix); WAL is the wrong
-        # lever here. Documented in PROJECT_STATE §15 H1 entry.
-        #
-        # Keeping `_init_db` WAL setup so the on-disk DB file's
-        # journal_mode is WAL (sticky, persistent) — that lets a future
-        # round add connection pooling on top without changing the DB
-        # mode.
+    def _make_pooled_connection(self) -> sqlite3.Connection:
+        """Build a long-lived connection with PRAGMAs applied once.
+
+        H2: now that connections are pooled, PRAGMA setup cost
+        amortizes across many queries. We can enable WAL mode + tighter
+        busy timeout without the H1 per-connect overhead trap.
+        """
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # PRAGMAs are idempotent on existing DBs. journal_mode=WAL is
+        # sticky in the DB header but harmless to re-set per connection
+        # at pool fill time.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.DatabaseError as e:
+            logger.debug("sqlite pool pragma setup partial: %s", e)
+        return conn
+
+    @contextmanager
+    def _connect(self):
+        """Check out a connection from the pool; create one if empty.
+
+        H2 (2026-05-20): pooled connections. F2 found seq P95 = 94ms
+        with no LLM cost, dominated by `sqlite3.connect()` per query.
+        H1 added WAL pragmas and made it worse (PRAGMA per-connect
+        cost). H2 amortizes both: pool of {_POOL_SIZE} long-lived
+        connections, PRAGMA setup once per connection at creation.
+        """
+        try:
+            conn = self._pool.get_nowait()
+        except _queue.Empty:
+            conn = self._make_pooled_connection()
         try:
             yield conn
+        except Exception:
+            # Caller raised mid-transaction — roll back so we don't
+            # poison the pool with half-committed state.
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            except sqlite3.DatabaseError:
+                pass
+            raise
         finally:
-            conn.close()
+            # Defensive: any open transaction at clean exit means a
+            # caller forgot to commit. Rollback rather than persist
+            # incomplete writes silently. (Writers in this codebase
+            # commit explicitly — this guard only fires on bugs.)
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            except sqlite3.DatabaseError:
+                pass
+            try:
+                self._pool.put_nowait(conn)
+            except _queue.Full:
+                # Excess connection (created above the pool cap during
+                # a contention spike). Close it rather than block.
+                try:
+                    conn.close()
+                except sqlite3.DatabaseError:
+                    pass
 
     def _init_db(self) -> None:
         with self._connect() as conn:

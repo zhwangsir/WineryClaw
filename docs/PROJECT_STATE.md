@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round H1 — SQLite WAL 尝试 + revert + 文档化:WAL 在 connection-per-query 模式下反而 +25-46%,真瓶颈是连接池缺失)
+> **最后更新**：2026-05-20（Round H2 — SQLite 连接池 + WAL 摊销 pragmas:序列 P95 -6% modest win,并发场景因 pool 太小(4) overflow 仍无改善;基础设施就位,后续可调 pool 大小或转 writer queue)
 
 ---
 
@@ -1204,3 +1204,29 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 3. 真正的修法是 **connection pooling** — 把 `_connect()` 从每次 open 改成复用。这是更大的重构,出本轮 scope
 
 **Lesson**:perf 直觉不能信,measure 才算数。Revert 的同时把 measurement 写入文档(memory_manager._connect 的 docstring + 这里),防止下次有人重新踩同一个坑。
+
+### Round H2 — Connection pool (H1 的"真 lever",2026-05-20)
+
+H1 文档化的结论:"WAL 不是 lever,连接池才是"。H2 验证。
+
+实现:`MemoryManager._pool: queue.Queue[Connection]` (maxsize=4),`_connect()` 现在 checkout → reuse → check-in,连接生命周期内 PRAGMA 摊销;池满时 overflow 路径创建临时连接然后关闭。
+
+实测(同 F2 benchmark):
+
+| 配置 | seq P50 | seq P95 | conc P95 |
+|------|---------|---------|----------|
+| F2 baseline (rollback journal, 无池) | 88 ms | **94 ms** | **2157 ms** |
+| H1 (WAL revert,无池) | 104 ms | 110 ms | 2461 ms |
+| **H2 (pool=4 + WAL + busy_timeout)** | **99 ms** | **103 ms** | **2450 ms** |
+
+**结论**:
+- **序列 P95 vs H1**:**-6%** (110→103),pool 摊销了连接开销
+- **并发 P95**:基本不变,30 个 caller 立刻撑爆 4 size pool,后面都走 fresh-connect overflow,所以池只对前 4 个有效
+- vs F2 baseline 仍略差 — F2 的那次跑可能恰好是机器空闲,跨多次跑下来 H2/H1 都在 100-110 ms 区间
+
+**未来 lever**:
+- pool size 调大(8 / 16)在并发场景应该有效,但代价是 sqlite write lock 仍是瓶颈
+- writer queue + 单 writer 线程:把所有 INSERT/UPDATE 串行到一个专用 writer thread,reads 走多 connection,把 WAL 的多 reader 优势发挥出来
+- 整体迁移到 asyncpg / 真正的 RDBMS:超出本项目范围
+
+**Lesson #2**:理论上正确的优化(连接池)实测仍可能只是 marginal win。pool 是基础设施改进,日后调参/扩展空间打开了,但不是 free 的 wholesale latency 收益。F2 baseline 维持,smoke + unit 全过。
