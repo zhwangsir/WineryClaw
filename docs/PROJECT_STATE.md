@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round C3 + 测试隔离 — 冲突解决 smoke + 修复第 3 个真 bug:`_conflict_llm_caller` 闭包抓 stale llm_config;WEBRAIN_DATA_DIR env override 让 smoke 数据 tmpdir 隔离）
+> **最后更新**：2026-05-20（Round C4 — MCP write-tools smoke + 修复第 4、5 个真 bug:`/mcp/jsonrpc` 因 `request:Any` 被映射成 query 整个 HTTP 层不可达;sub-brain `/brain/*` 代理 strip Authorization header 让 bearer 永远到不了 main-brain）
 
 ---
 
@@ -867,7 +867,7 @@ main-brain 后台任务 _skill_evolution_scheduler（每 1h）
 
 ---
 
-## 7. 当前测试状态（Round C3 结束时验证 / 2026-05-20）
+## 7. 当前测试状态（Round C4 结束时验证 / 2026-05-20）
 
 ```
 sub-brain  pnpm exec tsc --noEmit       → 0 errors
@@ -875,7 +875,7 @@ sub-brain  pnpm exec vitest run         → 32 files / 353 pass / 2 skip / 0 fai
 frontend   pnpm exec tsc --noEmit       → 0 errors
 frontend   pnpm exec vitest run         → 116 files / 1174 pass / 0 fail
 main-brain python -m pytest tests/      → 397 pass / 0 fail
-main-brain python -m pytest -m smoke    → 20 pass / 0 fail (~5min, 8 boot + 4 chat + 4 dreaming + 4 conflict)
+main-brain python -m pytest -m smoke    → 27 pass / 0 fail (~5min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp)
 ```
 
 ### Round B/C 累计 (autonomous iteration 2026-05-20)
@@ -891,6 +891,10 @@ main-brain python -m pytest -m smoke    → 20 pass / 0 fail (~5min, 8 boot + 4 
   - `_conflict_llm_caller` 闭包捕获 lifespan llm_config — `/config/reload` 后冲突判断仍打老 endpoint
   - mock_llm 现在能识别 conflict-judge / dreaming-summary prompt 返回不同响应
 - **C3.5**: 测试隔离 — main-brain 加 WEBRAIN_DATA_DIR env override,smoke 用 tmpdir;之前 smoke 跑一次就在 dev DB 留 50+ 行垃圾
+- **C4**: 7 个 MCP write-tools smoke + **第 4、5 个真 bug 修复(production-breaking)**
+  - `/mcp/jsonrpc` 路由签名 `request: Any` 让 FastAPI 当 query param,HTTP 422,M4b 上线以来整个端点其实从来没被任何真客户端打通过
+  - sub-brain `/brain/*` 代理硬编码 outbound headers 不转发 Authorization,即便 token 对外部 MCP 客户端 write 也永远 401
+  - 5 个 wiring bug 都是单测 397 个全过照样漏的类型 — smoke layer 的价值已经被数据验证
 
 会话累计新增测试(F+G+H+I+J):
 - Sub-brain TS：plugin-hook-wiring(4)、proxy(7)、auth(10)、tool-executor-hooks(6)、skill-manager-selfimprove(14)、skill-hub-client(14)、skillhub-routes(18)
