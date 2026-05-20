@@ -231,9 +231,7 @@ export default function UserHomePage(): JSX.Element {
           <p style={{ marginTop: 0 }}>
             WeBrain 是你的本地 AI 伴侣 — 聊天 + 知识库 + 长期记忆 + Agent 工作区,全部跑在你这台机器上。
           </p>
-          <p>
-            最简单的开始方式:在底部输入框直接对话,或点击空白页上的建议卡片快速试一个。
-          </p>
+          <p>最简单的开始方式:在底部输入框直接对话,或点击空白页上的建议卡片快速试一个。</p>
         </div>
       ),
     },
@@ -245,7 +243,8 @@ export default function UserHomePage(): JSX.Element {
             右侧的「知识库」栏可以拖拽 <code>.txt / .md / .pdf / .docx / .json</code> 文件上传。
           </p>
           <p>
-            上传后会自动切片 + embedding 索引。之后你和 AI 对话时,相关片段会自动作为 RAG context 注入,AI 回答下面会显示参考 [1] [2] 标注。
+            上传后会自动切片 + embedding 索引。之后你和 AI 对话时,相关片段会自动作为 RAG context 注入,AI
+            回答下面会显示参考 [1] [2] 标注。
           </p>
         </div>
       ),
@@ -257,10 +256,10 @@ export default function UserHomePage(): JSX.Element {
           <p style={{ marginTop: 0 }}>
             点击右上角齿轮 ⚙️ 进入管理端,可以管理 Agent / 工具 / 插件 / 沙箱工作区 / 通道 / 定时任务 等等。
           </p>
-          <p>
-            左上角时钟图标随时打开历史会话列表,继续之前的对话。
+          <p>左上角时钟图标随时打开历史会话列表,继续之前的对话。</p>
+          <p style={{ color: "var(--c-text-3)", fontSize: 12 }}>
+            下次也想看到这个引导?清掉浏览器的 webrain.onboarding.seen localStorage 即可。
           </p>
-          <p style={{ color: "var(--c-text-3)", fontSize: 12 }}>下次也想看到这个引导?清掉浏览器的 webrain.onboarding.seen localStorage 即可。</p>
         </div>
       ),
     },
@@ -285,8 +284,8 @@ export default function UserHomePage(): JSX.Element {
         voice.error === "not-allowed"
           ? "麦克风权限被拒绝,请到浏览器设置允许"
           : voice.error === "no-speech"
-          ? "没听到声音,请重试"
-          : `语音识别错误:${voice.error}`;
+            ? "没听到声音,请重试"
+            : `语音识别错误:${voice.error}`;
       message.error(friendly);
     }
   }, [voice.error]);
@@ -318,9 +317,7 @@ export default function UserHomePage(): JSX.Element {
   const filteredSessions = useMemo(() => {
     const q = sessionQuery.trim().toLowerCase();
     if (!q) return sessions;
-    return sessions.filter(
-      (s) => s.title?.toLowerCase().includes(q) || s.id.toLowerCase().includes(q),
-    );
+    return sessions.filter((s) => s.title?.toLowerCase().includes(q) || s.id.toLowerCase().includes(q));
   }, [sessions, sessionQuery]);
 
   const handleSwitchSession = async (sessionId: string) => {
@@ -862,9 +859,7 @@ export default function UserHomePage(): JSX.Element {
               <span style={{ fontSize: 12, color: "var(--c-text-3)", marginRight: 6 }}>
                 {tourStep + 1} / {TOUR_STEPS.length}
               </span>
-              {tourStep > 0 && (
-                <Button onClick={() => setTourStep((s) => s - 1)}>上一步</Button>
-              )}
+              {tourStep > 0 && <Button onClick={() => setTourStep((s) => s - 1)}>上一步</Button>}
               {tourStep < TOUR_STEPS.length - 1 ? (
                 <Button type="primary" onClick={() => setTourStep((s) => s + 1)}>
                   下一步

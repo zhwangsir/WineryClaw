@@ -431,3 +431,144 @@ class TestSerialization:
         assert MAX_RETRIES > STRATEGY_SWITCH_AT
         assert MIN_OUTPUT_LEN > 0
         assert MAX_PRIOR_OUTPUT_CHARS >= 50
+
+
+# ---------------------------------------------------------------------------
+# Round M3 — replan on failure
+# ---------------------------------------------------------------------------
+
+
+class TestPlanExecutorReplan:
+    """Verifies that PlanExecutor calls replan_fn on persistent failure,
+    re-runs the new plan, and caps replan attempts at max_replans.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_replan_when_replan_fn_not_provided(self) -> None:
+        # Default behavior (legacy M2): no replan when fn is None.
+        execute = _RecordingExecutor([""] * (MAX_RETRIES * 2))  # always empty → fail
+        plan = _make_plan([_task("t1", "task that will fail")])
+        executor = PlanExecutor(execute)
+        result = await executor.run(plan, "sess-1")
+        assert result.overall_success is False
+        assert result.replan_count == 0
+        assert result.final_plan_id is None
+
+    @pytest.mark.asyncio
+    async def test_replan_called_on_failure_and_succeeds(self) -> None:
+        # First plan: all attempts return empty → fail. Replan gives us a
+        # fresh plan whose execute returns useful content → success.
+        outputs = [""] * MAX_RETRIES + ["this is a real answer that is long enough"]
+        execute = _RecordingExecutor(outputs)
+        plan_v1 = _make_plan([_task("t1", "original task")], plan_id="plan-v1")
+        plan_v2 = _make_plan([_task("t2", "retooled task")], plan_id="plan-v2")
+
+        called: List[Tuple[str, int]] = []
+
+        async def replan_fn(
+            failed_plan: Plan,
+            failures: List[Tuple[str, str, str, str]],
+            session_id: str,
+        ) -> Optional[Plan]:
+            called.append((failed_plan.plan_id, len(failures)))
+            return plan_v2
+
+        executor = PlanExecutor(execute, replan_fn=replan_fn)
+        result = await executor.run(plan_v1, "sess-1")
+        assert called == [("plan-v1", 1)]
+        assert result.replan_count == 1
+        assert result.overall_success is True
+        # plan_id stays as the ORIGINAL so callers can trace the trigger.
+        assert result.plan_id == "plan-v1"
+        # final_plan_id reveals which plan actually completed.
+        assert result.final_plan_id == "plan-v2"
+
+    @pytest.mark.asyncio
+    async def test_replan_capped_at_max_replans(self) -> None:
+        # Force every plan to fail; we should replan max_replans times
+        # then give up (overall_success=False, replan_count==max).
+        execute = _RecordingExecutor([""] * (MAX_RETRIES * 5))
+        plan = _make_plan([_task("t1", "always fails")], plan_id="plan-0")
+
+        replan_calls = 0
+
+        async def replan_fn(
+            failed_plan: Plan,
+            failures: List[Tuple[str, str, str, str]],
+            session_id: str,
+        ) -> Optional[Plan]:
+            nonlocal replan_calls
+            replan_calls += 1
+            return _make_plan(
+                [_task(f"task-r{replan_calls}", "still fails")],
+                plan_id=f"plan-r{replan_calls}",
+            )
+
+        executor = PlanExecutor(execute, replan_fn=replan_fn, max_replans=2)
+        result = await executor.run(plan, "sess-1")
+        assert replan_calls == 2
+        assert result.replan_count == 2
+        assert result.overall_success is False
+        assert result.plan_id == "plan-0"
+        assert result.final_plan_id == "plan-r2"
+
+    @pytest.mark.asyncio
+    async def test_replan_none_returned_bails_with_partial(self) -> None:
+        # If replan_fn returns None, the executor surfaces the partial
+        # result rather than spinning forever.
+        execute = _RecordingExecutor([""] * MAX_RETRIES)
+        plan = _make_plan([_task("t1", "fail")], plan_id="plan-0")
+
+        async def replan_fn(*args: Any, **kwargs: Any) -> Optional[Plan]:
+            return None
+
+        executor = PlanExecutor(execute, replan_fn=replan_fn)
+        result = await executor.run(plan, "sess-1")
+        assert result.overall_success is False
+        assert result.replan_count == 0
+
+    @pytest.mark.asyncio
+    async def test_replan_fn_exception_swallowed_and_partial_returned(self) -> None:
+        execute = _RecordingExecutor([""] * MAX_RETRIES)
+        plan = _make_plan([_task("t1", "fail")], plan_id="plan-0")
+
+        async def replan_fn(*args: Any, **kwargs: Any) -> Optional[Plan]:
+            raise RuntimeError("oops")
+
+        executor = PlanExecutor(execute, replan_fn=replan_fn)
+        result = await executor.run(plan, "sess-1")
+        # Exception in replan must not crash the executor; we surface the
+        # partial result.
+        assert result.overall_success is False
+        assert result.replan_count == 0
+
+    @pytest.mark.asyncio
+    async def test_replan_fn_receives_failure_summary(self) -> None:
+        # The contract: replan_fn gets a list of
+        # (task_id, description, final_output, reason) tuples.
+        execute = _RecordingExecutor([""] * MAX_RETRIES + ["good answer here"])
+        plan = _make_plan(
+            [_task("t-fail", "describe a thing"), _task("t-ok", "say hi")],
+            plan_id="plan-mix",
+        )
+
+        captured: List[Tuple[str, str, str, str]] = []
+
+        async def replan_fn(
+            failed_plan: Plan,
+            failures: List[Tuple[str, str, str, str]],
+            session_id: str,
+        ) -> Optional[Plan]:
+            captured.extend(failures)
+            return None  # bail so we don't loop into a new plan
+
+        # The "say hi" task succeeds on the first attempt (idx MAX_RETRIES);
+        # the "describe a thing" task fails MAX_RETRIES times. So we should
+        # see exactly one entry in failures.
+        executor = PlanExecutor(execute, replan_fn=replan_fn)
+        await executor.run(plan, "sess-1")
+        assert len(captured) == 1
+        task_id, desc, _output, reason = captured[0]
+        assert task_id == "t-fail"
+        assert desc == "describe a thing"
+        assert "Output is empty" in reason or "Output too short" in reason

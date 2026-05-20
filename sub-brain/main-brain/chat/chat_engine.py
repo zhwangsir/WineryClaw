@@ -324,6 +324,110 @@ class ChatEngine:
     # enabled rule × N rules); blocking the chat reply on it would be a
     # regression. So we hand it to the event loop and return immediately —
     # if extraction fails or hangs, the chat reply is unaffected.
+    def _fire_session_summarize_async(self, session_id: str) -> None:
+        """Round M2 — when a session crosses a turn threshold, summarize
+        the earliest L1 messages into one L2 entry so we never lose
+        context but stop bloating per-session storage / retrieval.
+
+        Background task — never blocks the chat reply. Errors are
+        logged at WARN, never re-raised.
+        """
+        if not session_id:
+            return
+        # Threshold + retain window are env-tunable so tests can drop
+        # them low without spending real LLM budget.
+        try:
+            threshold = int(os.environ.get("WEBRAIN_SESSION_SUMMARIZE_THRESHOLD", "30"))
+            retain = int(os.environ.get("WEBRAIN_SESSION_SUMMARIZE_RETAIN", "10"))
+        except ValueError:
+            threshold, retain = 30, 10
+        if threshold <= retain:
+            # nonsensical config — bail rather than infinite-loop
+            return
+
+        async def _run() -> None:
+            try:
+                # Pull a generous history; only need L1 rows for this session.
+                all_rows = await self.memory.get_session_memories(session_id, limit=500)
+                l1 = [r for r in all_rows if r.get("level") == "L1"]
+                if len(l1) < threshold:
+                    return
+                # Check if we already summarized recently — avoid re-running
+                # every turn once we cross the threshold.
+                summaries = [
+                    r for r in all_rows
+                    if r.get("level") == "L2"
+                    and isinstance(r.get("metadata"), str)
+                    and '"kind": "session-summary"' in r["metadata"]
+                ]
+                # Sort L1 oldest-first for chronological summary.
+                l1.sort(key=lambda r: r.get("created_at", ""))
+                # We only summarize messages OLDER than the most recent
+                # `retain` L1s. The retain window stays as raw L1 for
+                # nuance + replayability.
+                to_summarize = l1[:-retain]
+                if not to_summarize:
+                    return
+                # Skip if a summary already covers everything in to_summarize.
+                if summaries:
+                    latest_cover = max(s.get("metadata", "") for s in summaries)
+                    last_to_cover = to_summarize[-1].get("created_at", "")
+                    if last_to_cover and last_to_cover in latest_cover:
+                        return
+                # Build a compact prompt for the LLM. Truncate hard at 200
+                # messages so the prompt itself doesn't blow up.
+                chunk_text = "\n".join(
+                    f"- {r.get('source','?')}: {(r.get('content','') or '')[:280]}"
+                    for r in to_summarize[-200:]
+                )
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是会话摘要器。基于以下早期会话片段,写一段不超过 180 字的中文摘要,"
+                            "保留:用户身份/偏好/正在做的事/关键决定/未解决的问题。"
+                            "不要复述每条消息,提取核心。"
+                        ),
+                    },
+                    {"role": "user", "content": chunk_text},
+                ]
+                result = await self._chat_completion(messages, max_tokens=512, temperature=0.3)
+                choices = result.get("choices") or []
+                content = ""
+                if choices:
+                    msg = choices[0].get("message", {})
+                    content = (msg.get("content") or msg.get("reasoning_content") or "").strip()
+                    # Strip <think>...</think> for reasoning models.
+                    import re as _re
+                    content = _re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
+                if not content:
+                    logger.warning("session summarizer: empty content from LLM, skipping")
+                    return
+                covers_until = to_summarize[-1].get("created_at", "")
+                await self.memory.store({
+                    "level": "L2",
+                    "content": f"会话摘要 ({len(to_summarize)} 条):{content}",
+                    "session_id": session_id,
+                    "source": "summarizer",
+                    "metadata": json.dumps(
+                        {"kind": "session-summary", "covers_until": covers_until, "count": len(to_summarize)}
+                    ),
+                })
+                logger.info(
+                    "[session-summarize] session=%s covered=%d retained=%d summary_chars=%d",
+                    session_id, len(to_summarize), retain, len(content),
+                )
+            except Exception as exc:  # noqa: BLE001 — background must never crash chat
+                logger.warning("session summarizer failed (session=%s): %s", session_id, exc)
+
+        try:
+            task = asyncio.create_task(_run())
+        except RuntimeError:
+            logger.debug("no running loop for session summarizer; skipping")
+            return
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     def _fire_active_memory_async(self, session_id: str, user_input: str, reply: str) -> None:
         if not self.active_memory_enabled or self.active_memory is None:
             return
@@ -857,6 +961,11 @@ class ChatEngine:
                 # exchange when it queries memory, and BEFORE return so we
                 # don't lose the reference if the caller never awaits again.
                 self._fire_active_memory_async(session_id, user_input, reply)
+                # Round M2 — also opportunistically summarize long sessions.
+                # Both fire-and-forget tasks coexist (active_memory extracts
+                # patterns, summarizer compresses history); they query
+                # memory independently.
+                self._fire_session_summarize_async(session_id)
                 return {
                     "reply": reply,
                     "tool_calls": all_tool_calls,
@@ -983,6 +1092,7 @@ class ChatEngine:
                     # No tool calls needed — done
                     await self.memory.store({"level": "L1", "content": f"Assistant: {full_content}", "session_id": session_id, "source": "assistant"})
                     self._fire_active_memory_async(session_id, user_input, full_content)
+                    self._fire_session_summarize_async(session_id)
                     yield {"type": "done", "data": full_content}
                     return
 
@@ -999,6 +1109,7 @@ class ChatEngine:
                 reply = msg.get("content", "")
                 await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", "session_id": session_id, "source": "assistant"})
                 self._fire_active_memory_async(session_id, user_input, reply)
+                self._fire_session_summarize_async(session_id)
                 yield {"type": "content", "data": reply}
                 yield {"type": "done", "data": reply}
                 return

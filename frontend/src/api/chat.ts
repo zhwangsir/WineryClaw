@@ -22,7 +22,12 @@ export const chatApi = {
         plan: r.plan ?? undefined,
       })),
   stream: (text: string, sessionId: string, agentId: string, toolsEnabled = true) =>
-    api.stream("/brain/chat/stream", { message: text, session_id: sessionId, agent_id: agentId, tools_enabled: toolsEnabled }),
+    api.stream("/brain/chat/stream", {
+      message: text,
+      session_id: sessionId,
+      agent_id: agentId,
+      tools_enabled: toolsEnabled,
+    }),
   getHistory: (sessionId: string) =>
     api.get<{ messages: ChatMessage[] }>(`/brain/chat/history?session_id=${sessionId}`).then((r) => r.messages || []),
   getSessions: () =>

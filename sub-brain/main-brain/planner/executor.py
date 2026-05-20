@@ -43,6 +43,10 @@ MAX_RETRIES = 5
 STRATEGY_SWITCH_AT = 3  # attempts 1..3 = default, 4..5 = augmented
 MIN_OUTPUT_LEN = 5  # for presence_verifier
 MAX_PRIOR_OUTPUT_CHARS = 200  # truncation when threading prior outputs into prompt
+# Round M3 — cap how many times we'll regenerate the plan after a fail.
+# Even with a smart re-planner, three full plans is plenty before we give
+# up and surface the partial result.
+MAX_REPLANS = 2
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +98,13 @@ class ExecutionResult:
     total_attempts: int
     overall_success: bool
     failed_task_ids: List[str]
+    # Round M3 — number of times the executor regenerated the plan after
+    # exhausting per-task retries. 0 = the original plan completed (or
+    # failed without replanning).
+    replan_count: int = 0
+    # When replanning produced a new plan, this holds the new plan_id
+    # for traceability. None if no replan happened.
+    final_plan_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -102,6 +113,8 @@ class ExecutionResult:
             "total_attempts": self.total_attempts,
             "overall_success": self.overall_success,
             "failed_task_ids": self.failed_task_ids,
+            "replan_count": self.replan_count,
+            "final_plan_id": self.final_plan_id,
         }
 
 
@@ -109,6 +122,13 @@ class ExecutionResult:
 VerifierFn = Callable[[PlanTask, str], Awaitable[Tuple[bool, str]]]
 # Executor interface: async (user_input, session_id, agent_id, context) -> reply text
 ExecuteFn = Callable[[str, str, str, Optional[Dict[str, Any]]], Awaitable[str]]
+# Round M3 — Replanner interface: async (failed_plan, failures, session_id) -> new Plan | None
+# `failures` is a list of (task_id, description, final_output, reason) tuples
+# summarising why the prior attempt did not satisfy each failed task.
+ReplanFn = Callable[
+    [Plan, List[Tuple[str, str, str, str]], str],
+    Awaitable[Optional[Plan]],
+]
 
 
 # ---------------------------------------------------------------------------
@@ -188,11 +208,17 @@ class PlanExecutor:
         verifier: Optional[VerifierFn] = None,
         max_retries: int = MAX_RETRIES,
         strategy_switch_at: int = STRATEGY_SWITCH_AT,
+        replan_fn: Optional[ReplanFn] = None,
+        max_replans: int = MAX_REPLANS,
     ):
         self._execute = execute_fn
         self._verify = verifier or presence_verifier
         self._max_retries = max_retries
         self._strategy_switch_at = strategy_switch_at
+        # Round M3 — optional replanner. If None, behavior is unchanged
+        # from M2: per-task retries only, no plan regeneration.
+        self._replan_fn = replan_fn
+        self._max_replans = max(0, max_replans)
 
     async def run(self, plan: Plan, session_id: str, agent_id: str = "agent-default") -> ExecutionResult:
         """Execute every task in plan, return aggregated result.
@@ -200,26 +226,94 @@ class PlanExecutor:
         Tasks run sequentially. Successful task outputs are passed forward
         as context for subsequent tasks; failed tasks still run their
         successors so the user gets partial results rather than nothing.
+
+        Round M3 — if a replan_fn was wired AND the executor finishes with
+        at least one failure, ask the planner to regenerate a fresh plan
+        that factors in the failure reasons. Re-run that plan. Up to
+        `max_replans` retries before giving up and surfacing the partial
+        result. The original_plan_id is preserved on the ExecutionResult;
+        final_plan_id tracks which plan actually succeeded.
         """
-        results: List[TaskResult] = []
-        prior_outputs: List[Tuple[str, str]] = []  # [(description, output), ...]
+        original_plan_id = plan.plan_id
+        current_plan = plan
+        prior_results: List[TaskResult] = []
         total_attempts = 0
+        replan_count = 0
 
-        for task in plan.tasks:
-            r = await self._run_task(task, session_id, agent_id, prior_outputs)
-            results.append(r)
-            total_attempts += len(r.attempts)
-            if r.succeeded and r.final_output.strip():
-                prior_outputs.append((task.description, r.final_output))
+        while True:
+            results: List[TaskResult] = []
+            prior_outputs: List[Tuple[str, str]] = []  # [(description, output), ...]
 
-        failed_ids = [r.task_id for r in results if not r.succeeded]
-        return ExecutionResult(
-            plan_id=plan.plan_id,
-            results=results,
-            total_attempts=total_attempts,
-            overall_success=not failed_ids,
-            failed_task_ids=failed_ids,
-        )
+            for task in current_plan.tasks:
+                r = await self._run_task(task, session_id, agent_id, prior_outputs)
+                results.append(r)
+                total_attempts += len(r.attempts)
+                if r.succeeded and r.final_output.strip():
+                    prior_outputs.append((task.description, r.final_output))
+
+            failed_ids = [r.task_id for r in results if not r.succeeded]
+
+            # Happy path: every task passed verification.
+            if not failed_ids:
+                return ExecutionResult(
+                    plan_id=original_plan_id,
+                    results=results,
+                    total_attempts=total_attempts,
+                    overall_success=True,
+                    failed_task_ids=[],
+                    replan_count=replan_count,
+                    final_plan_id=current_plan.plan_id if replan_count else None,
+                )
+
+            # At least one task failed.
+            # If no replan_fn was wired OR we've burned our replan budget,
+            # surface the partial result (legacy M2 behavior).
+            if self._replan_fn is None or replan_count >= self._max_replans:
+                return ExecutionResult(
+                    plan_id=original_plan_id,
+                    results=results,
+                    total_attempts=total_attempts,
+                    overall_success=False,
+                    failed_task_ids=failed_ids,
+                    replan_count=replan_count,
+                    final_plan_id=current_plan.plan_id if replan_count else None,
+                )
+
+            # Round M3 — assemble the failure summary and ask for a new plan.
+            failures: List[Tuple[str, str, str, str]] = []
+            for r in results:
+                if not r.succeeded:
+                    last_reason = r.attempts[-1].verification_reason if r.attempts else "no attempts"
+                    failures.append((r.task_id, r.description, r.final_output or "", last_reason))
+            try:
+                new_plan = await self._replan_fn(current_plan, failures, session_id)
+            except Exception as exc:  # noqa: BLE001 — replan failure mustn't crash exec
+                logger.warning("replan_fn raised: %s — surfacing partial result", exc)
+                new_plan = None
+
+            if new_plan is None or not new_plan.tasks:
+                # Replanner couldn't produce something usable — bail with the
+                # partial result rather than spinning.
+                logger.info("replan returned None / empty — surfacing partial result")
+                return ExecutionResult(
+                    plan_id=original_plan_id,
+                    results=results,
+                    total_attempts=total_attempts,
+                    overall_success=False,
+                    failed_task_ids=failed_ids,
+                    replan_count=replan_count,
+                    final_plan_id=current_plan.plan_id if replan_count else None,
+                )
+
+            # Successful replan — record + loop with the new plan.
+            replan_count += 1
+            prior_results = results  # noqa: F841 — retained for potential future trace inspection
+            logger.info(
+                "replan #%d: %d failures → new plan %s with %d tasks",
+                replan_count, len(failures), new_plan.plan_id, len(new_plan.tasks),
+            )
+            current_plan = new_plan
+            # Loop continues with the new plan.
 
     async def _run_task(
         self,
