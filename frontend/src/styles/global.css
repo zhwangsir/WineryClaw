@@ -580,3 +580,21 @@ textarea:focus-visible,
 [data-theme="dark"] .ant-card-actions > li > span:hover {
   color: var(--c-accent);
 }
+
+/* ── Q14.1 — AntD Badge text inside a Tab in dark mode ─────────────
+ * MemoryPage 冲突 tab is `<Badge count><span>冲突</span></Badge>` and the
+ * inner span inherits AntD's hard-baked light colorText (#37352f), making
+ * it nearly invisible on the dark page bg. Reproduced via Chrome MCP:
+ * getComputedStyle returned color=rgb(55,53,47) even with our reactive
+ * ConfigProvider in dark mode — Badge's child color is set by AntD CSS-in-JS
+ * tokens that don't pick up our ConfigProvider override for this nesting.
+ * Force the badge child text to follow our dark tokens; match active/hover
+ * to the accent so it lines up with the tab indicator color.
+ */
+[data-theme="dark"] .ant-tabs-tab .ant-badge > span:not([class]) {
+  color: var(--c-text-2);
+}
+[data-theme="dark"] .ant-tabs-tab:hover .ant-badge > span:not([class]),
+[data-theme="dark"] .ant-tabs-tab.ant-tabs-tab-active .ant-badge > span:not([class]) {
+  color: var(--c-accent);
+}
