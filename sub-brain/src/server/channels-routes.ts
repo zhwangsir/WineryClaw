@@ -133,7 +133,17 @@ export function registerChannelsRoutes(app: FastifyInstance, deps: ChannelsRoute
       timestamp: body.timestamp ?? new Date().toISOString(),
       reply_to: body.reply_to,
     };
-    return deps.channelManager.simulateInbound(id, message);
+    const result = deps.channelManager.simulateInbound(id, message);
+    // Round E2: surface unknown-channel as HTTP 404 rather than
+    // 200+{ok:false}. Admin tooling (curl --fail, monitoring scripts,
+    // shell automation that branches on $? after HTTP status) needs
+    // the status code to reflect reality. The body still carries
+    // {ok:false, error:...} for callers that want the structured
+    // shape; only the HTTP code changes.
+    if (!result.ok && /not found/i.test(result.error ?? "")) {
+      return reply.code(404).send(result);
+    }
+    return result;
   });
 
   app.delete("/channels/:id", async (request) => {

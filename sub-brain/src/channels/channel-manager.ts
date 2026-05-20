@@ -30,7 +30,15 @@ export interface Channel {
 }
 
 export interface ChannelProtocol {
-  sendMessage: (recipient: string, content: string, config: ChannelConfig) => Promise<any>;
+  // Round E2: tightened to Promise<unknown> from Promise<any>. Each
+  // protocol returns a different provider-shaped payload (Telegram
+  // message id, Discord message object, the memory protocol's echo
+  // dict). Callers should narrow before reading specific fields.
+  sendMessage: (
+    recipient: string,
+    content: string,
+    config: ChannelConfig,
+  ) => Promise<unknown>;
   connect: (config: ChannelConfig) => Promise<{ ok: boolean; error?: string }>;
   disconnect: () => Promise<void>;
   health: () => Promise<boolean>;
@@ -332,6 +340,21 @@ export class ChannelManager {
    * use, so the inbound handler (auto-reply) fires identically. Returns
    * { ok: false } if the channel doesn't exist. */
   simulateInbound(channelId: string, message: InboundMessage): { ok: boolean; error?: string } {
+    // Round E2 harden: validate inputs at the public-method boundary.
+    // The HTTP route already validates, but this method is exported
+    // from the manager — admin tooling / scripts call it directly. A
+    // malformed message would otherwise land in the messages table
+    // with junk fields and break downstream queries that assume
+    // non-null content / valid timestamp.
+    if (typeof message?.content !== "string" || message.content.length === 0) {
+      return { ok: false, error: "InboundMessage.content must be a non-empty string" };
+    }
+    if (typeof message.sender !== "string" || message.sender.length === 0) {
+      return { ok: false, error: "InboundMessage.sender must be a non-empty string" };
+    }
+    if (typeof message.timestamp !== "string" || message.timestamp.length === 0) {
+      return { ok: false, error: "InboundMessage.timestamp must be a non-empty ISO string" };
+    }
     const channel = this.channels.get(channelId);
     if (!channel) {
       return { ok: false, error: `Channel not found: ${channelId}` };

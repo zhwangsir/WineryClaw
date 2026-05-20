@@ -203,8 +203,15 @@ def test_inbound_with_auto_reply_triggers_chat_and_outbound(chat_smoke_rig):
 
 
 def test_inject_inbound_404_for_unknown_channel(chat_smoke_rig):
-    """Inject against a non-existent channel returns a clear error
-    rather than a 500. Defends the API contract."""
+    """Inject against a non-existent channel returns HTTP 404.
+
+    Round E2 tightened the contract: previously this returned
+    200+{ok:false}, which would silently look like success to admin
+    tooling that checks `curl --fail` / shell `$?` after the request.
+    The endpoint is meant for admin replay (and smoke tests), so
+    proper HTTP semantics matter. Body still carries the structured
+    error for callers that prefer to read it that way.
+    """
     sub_url = chat_smoke_rig.sub_brain.base_url
     bogus_id = f"does-not-exist-{uuid.uuid4().hex}"
     r = httpx.post(
@@ -212,13 +219,13 @@ def test_inject_inbound_404_for_unknown_channel(chat_smoke_rig):
         json={"sender": "x", "content": "y"},
         timeout=5.0,
     )
-    # Either 200 with {ok: false, error: ...} OR 4xx — both are
-    # acceptable shapes. What's NOT acceptable is a 5xx crash.
-    assert r.status_code < 500, f"unknown channel injection 5xx'd: {r.text}"
+    assert r.status_code == 404, (
+        f"unknown channel must return 404 (Round E2 contract); "
+        f"got {r.status_code} body={r.text}"
+    )
     body = r.json()
-    # If 200, must signal failure in body
-    if r.status_code == 200:
-        assert body.get("ok") is False, body
+    assert body.get("ok") is False, body
+    assert "not found" in (body.get("error") or "").lower(), body
 
 
 def test_inject_inbound_rejects_empty_content(chat_smoke_rig):

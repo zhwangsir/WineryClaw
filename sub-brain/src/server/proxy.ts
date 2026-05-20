@@ -23,6 +23,24 @@ export function registerBrainProxy(
     //     proxy stripped the bearer token.
     //   - any incoming x-* header: distributed tracing / custom context
     //     that downstream might rely on.
+    //
+    // Round E2 harden: deny-list the x-forwarded-* / x-real-ip family.
+    // Sub-brain is the public entry point; if main-brain ever enables
+    // uvicorn's ProxyHeadersMiddleware or trusts these for IP
+    // allowlisting, an authenticated client could spoof
+    // `X-Forwarded-For: 127.0.0.1` and appear to come from localhost.
+    // Strip now to make that footgun unloadable.
+    const SPOOFABLE_PROXY_HEADERS = new Set([
+      "x-forwarded-for",
+      "x-forwarded-host",
+      "x-forwarded-proto",
+      "x-forwarded-port",
+      "x-forwarded-ssl",
+      "x-real-ip",
+      "x-original-host",
+      "x-original-uri",
+    ]);
+
     const forwardedHeaders: Record<string, string> = {
       "Content-Type": "application/json",
       "x-trace-id": traceId,
@@ -34,6 +52,7 @@ export function registerBrainProxy(
     for (const [key, value] of Object.entries(request.headers)) {
       if (!key.startsWith("x-")) continue;
       if (key === "x-trace-id") continue; // already set above with our value
+      if (SPOOFABLE_PROXY_HEADERS.has(key)) continue; // see Round E2 note
       if (typeof value === "string") {
         forwardedHeaders[key] = value;
       }
