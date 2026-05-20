@@ -735,6 +735,17 @@ async def reload_config():
         if engine is not None and hasattr(engine, "llm_config"):
             engine.llm_config = llm_config
 
+    # Round E1 fix: SkillReflector takes a PRE-BUILT llm_call callable
+    # (not a config dict), so setting its attribute doesn't help — the
+    # closure inside the callable still holds the old base_url/model_id.
+    # Rebuild the caller and swap it in.
+    reflector = _state.get("skill_reflector")
+    if reflector is not None and hasattr(reflector, "llm_call"):
+        try:
+            reflector.llm_call = make_llm_call_from_config(llm_config)
+        except Exception as exc:  # noqa: BLE001 — best-effort propagation
+            logger.warning("config reload: failed to rebuild skill_reflector caller: %s", exc)
+
     return {"ok": True, "config": llm_config}
 
 

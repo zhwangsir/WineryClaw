@@ -122,7 +122,13 @@ export async function runPythonSkill(opts: RunPythonSkillOptions): Promise<Skill
     child.on("error", (err) => {
       finish({ ok: false, error: `python spawn error: ${err.message}` });
     });
-    child.on("exit", (code) => {
+    // `close` fires AFTER both the child exits AND its stdio pipes are
+    // fully drained. Using `exit` here would race: stdout data events
+    // could still be in the Node event queue when exit fires, so the
+    // marker-parse below would read incomplete stdout and silently fall
+    // back to the legacy raw-stdout path with truncated content.
+    // Round E1 fix — caught by code-review.
+    child.on("close", (code) => {
       if (code === 0) {
         // Round C9: look for the structured-result marker. If present,
         // parse JSON after the LAST occurrence (latest set_result call

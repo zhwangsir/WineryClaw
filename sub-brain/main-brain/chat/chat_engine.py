@@ -277,6 +277,12 @@ class ChatEngine:
         # this wiring, ActiveMemory was an orphan endpoint that no one called.
         # Round B2 (2026-05-20) wires it in.
         self.active_memory = active_memory
+        # Round E1 fix: retain strong refs to background tasks so CPython's
+        # GC can't collect them mid-flight. asyncio.create_task returns a
+        # Task object that the event loop only weakly references; without
+        # a strong ref the task can be silently dropped before it gets
+        # scheduled. Pattern: add on create, discard on done.
+        self._background_tasks: set = set()
         self.router = LLMRouter()
         self.llm_config = llm_config or {}
         self._update_router()
@@ -340,11 +346,15 @@ class ChatEngine:
                 )
 
         try:
-            asyncio.create_task(_run())
+            task = asyncio.create_task(_run())
         except RuntimeError:
             # No running loop (rare — only happens if chat() is called from
             # a sync context). Skip silently; the chat reply still works.
             logger.debug("no running loop for active_memory fire-and-forget; skipping")
+            return
+        # Hold a strong ref until the task finishes — see __init__ note.
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     # ---- Tool definitions registry ----
     _TOOL_REGISTRY: Dict[str, Dict] = {

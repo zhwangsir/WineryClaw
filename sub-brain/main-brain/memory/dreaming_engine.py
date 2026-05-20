@@ -524,94 +524,14 @@ class DreamingEngine:
             "qualifying": len(qualifying),
         }
 
-    # ========== Legacy: skill generation (now in evolution_engine territory) ==========
-    async def consolidate_l3_to_l4(self, min_mentions: int = 3) -> Dict[str, Any]:
-        """Legacy: generate `skills` table entries from frequent entity patterns.
-
-        This was the original L3→L4 implementation but it doesn't match the
-        M-Memory-1 design ("L4 = elevated long-term L3 facts"). It writes to
-        the `skills` table, not L4 memory rows. Keeping it for backward
-        compatibility / manual triggering. Use `promote_l3_to_l4()` for the
-        real L4 promotion that creates L4 memory rows.
-        """
-        conn = self.memory._connect()
-        try:
-            # Find frequently mentioned entities
-            rows = conn.execute(
-                "SELECT name, type, description, mention_count FROM entities WHERE mention_count >= ?",
-                (min_mentions,),
-            ).fetchall()
-
-            # Get recent facts
-            fact_rows = conn.execute(
-                "SELECT predicate, object_value, COUNT(*) as cnt FROM facts GROUP BY predicate, object_value HAVING cnt >= ?",
-                (min_mentions,),
-            ).fetchall()
-        finally:
-            conn.close()
-
-        if not rows and not fact_rows:
-            return {"skills_created": 0, "message": "No patterns found for skill extraction"}
-
-        # Build context for skill generation
-        entity_text = "\n".join([f"- {r['name']} ({r['type']}): {r['description'] or 'N/A'} [mentions: {r['mention_count']}]" for r in rows[:20]])
-        fact_text = "\n".join([f"- {r['predicate']} → {r['object_value']} [occurrences: {r['cnt']}]" for r in fact_rows[:20]])
-
-        prompt = f"""Based on the following frequently occurring patterns, suggest reusable skills or procedures.
-A skill is a reusable pattern that can be applied to similar situations.
-
-Frequent Entities:
-{entity_text}
-
-Frequent Patterns:
-{fact_text}
-
-Generate skills in JSON format:
-{{"skills": [{{"name": "Skill Name", "description": "What it does", "trigger_pattern": "regex or keyword", "template": "step by step procedure"}}]}}"""
-
-        response = await self._llm_call([
-            {"role": "system", "content": "You are a pattern recognition expert. Identify reusable skills from frequent patterns."},
-            {"role": "user", "content": prompt},
-        ], max_tokens=1024)
-
-        skills_created = 0
-        if response:
-            try:
-                # Extract JSON
-                json_str = response
-                if "```json" in response:
-                    json_str = response.split("```json")[1].split("```")[0].strip()
-                elif "```" in response:
-                    json_str = response.split("```")[1].split("```")[0].strip()
-
-                parsed = json.loads(json_str)
-                skills = parsed.get("skills", [])
-
-                for skill in skills:
-                    conn = self.memory._connect()
-                    try:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO skills (id, name, description, trigger_pattern, template, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                            (
-                                f"skill-{datetime.now(timezone.utc).timestamp()}-{skills_created}",
-                                skill.get("name", "Unnamed"),
-                                skill.get("description", ""),
-                                skill.get("trigger_pattern", ""),
-                                skill.get("template", ""),
-                                datetime.now(timezone.utc).isoformat(),
-                            ),
-                        )
-                        conn.commit()
-                        skills_created += 1
-                    finally:
-                        conn.close()
-            except Exception as e:
-                logger.warning(f"Failed to parse skills from LLM: {e}")
-
-        logger.info(f"[Dreaming] L3→L4: {skills_created} skills created")
-        return {"skills_created": skills_created}
-
     # ========== Full Cycle ==========
+    # Note (Round E1, 2026-05-20): the legacy `consolidate_l3_to_l4` skill-
+    # generation method was REMOVED. It pre-dated M-Memory-1's L4 design,
+    # wrote to a `skills` table instead of L4 memory rows, AND had a
+    # latent bug (used the @contextmanager-decorated `_connect()` without
+    # `with`, so every call silently returned 0). Nothing in production
+    # called it. The current L3→L4 path is `promote_l3_to_l4` above,
+    # which creates real L4 memory rows with provenance.
     async def run_cycle(self, quiet_minutes: Optional[int] = None) -> Dict[str, Any]:
         """Run full dreaming consolidation cycle.
 
@@ -626,9 +546,9 @@ Generate skills in JSON format:
           - rem_sleep:   L2 summaries → L3 facts (consolidate_l2_to_l3)
           - deep_sleep:  L3 high-frequency → L4 promotion (promote_l3_to_l4)
 
-        Note: `consolidate_l3_to_l4` (legacy skill generation) is NOT
-        called here anymore. Trigger it explicitly via /dreaming/skills
-        if you want the old behaviour. The deep sleep phase now correctly
+        Note: the legacy `consolidate_l3_to_l4` skill-generation method
+        was removed in Round E1 (it was unreferenced + had a latent
+        @contextmanager misuse bug). The deep sleep phase now correctly
         elevates L3 facts to L4 per M-Memory-1 design.
         """
         logger.info("[Dreaming] Starting consolidation cycle...")

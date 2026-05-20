@@ -3,6 +3,7 @@ WeBrain Memory Manager — Phase 3 RAG Enhanced
 L1-L4 分层记忆 + Hybrid Search (BM25 + Vector) + Re-ranking + Chunking
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -160,22 +161,37 @@ def effective_importance(
     return importance * math.exp(-elapsed / half_life)
 
 # ---------------------------------------------------------------------------
-# Re-ranking model (lazy-loaded)
+# Re-ranking model (lazy-loaded with double-checked lock — same pattern as
+# the embedder. Code-review found this was unprotected: a cold-start race
+# could load the ~100 MB CrossEncoder twice and drop one instance, wasting
+# RAM and load time. Round E1 fix.)
 # ---------------------------------------------------------------------------
 _reranker = None
+_reranker_lock = None  # threading.Lock — initialized lazily to avoid import order issues
 
 
 def _get_reranker():
-    """Lazy-load cross-encoder re-ranker."""
-    global _reranker
-    if _reranker is None:
-        try:
-            from sentence_transformers import CrossEncoder
-            _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-            logger.info("[memory] Re-ranker loaded: ms-marco-MiniLM-L-6-v2")
-        except Exception as e:
-            logger.warning(f"[memory] Failed to load re-ranker: {e}")
-            _reranker = False
+    """Lazy-load cross-encoder re-ranker, thread-safe."""
+    global _reranker, _reranker_lock
+    # First check (no lock) — fast path once loaded.
+    if _reranker is not None:
+        return _reranker if _reranker is not False else None
+    # Initialize lock on first slow-path entry. Using the module's
+    # threading guard mirrors what _get_embedder does.
+    if _reranker_lock is None:
+        import threading as _threading
+        _reranker_lock = _threading.Lock()
+    with _reranker_lock:
+        # Second check inside the lock — another thread may have loaded
+        # it while we were waiting.
+        if _reranker is None:
+            try:
+                from sentence_transformers import CrossEncoder
+                _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+                logger.info("[memory] Re-ranker loaded: ms-marco-MiniLM-L-6-v2")
+            except Exception as e:
+                logger.warning(f"[memory] Failed to load re-ranker: {e}")
+                _reranker = False
     return _reranker if _reranker is not False else None
 
 
@@ -349,8 +365,10 @@ async def warm_local_embedder() -> bool:
     doesn't block startup completion. Returns True if the model loaded
     successfully (cache populated), False otherwise. Idempotent.
     """
-    import asyncio
-    loop = asyncio.get_event_loop()
+    # get_running_loop (not get_event_loop, which is deprecated in 3.10+
+    # for the no-running-loop path). This function is always called from
+    # inside a running loop via asyncio.create_task — Round E1 fix.
+    loop = asyncio.get_running_loop()
     model = await loop.run_in_executor(None, _get_embedder)
     if model is None:
         return False
@@ -1032,14 +1050,27 @@ class MemoryManager:
 
     # ========== Re-ranking ==========
     async def _rerank(self, query: str, candidates: List[Dict], limit: int = 10) -> List[Dict]:
-        """Cross-encoder re-ranking of candidates."""
-        reranker = _get_reranker()
+        """Cross-encoder re-ranking of candidates.
+
+        Round E1 fix: both `_get_reranker()` cold load (~10-30s for the
+        ~100 MB model) and `reranker.predict(pairs)` (CPU-bound torch
+        inference) used to run directly on the asyncio event loop,
+        blocking every other coroutine — including chat streams and
+        health pings — for their duration. Now both are off-loaded to
+        the default thread executor so the loop stays responsive.
+        """
+        loop = asyncio.get_running_loop()
+        # Off-load the (potentially cold) model load to a thread —
+        # _get_reranker is internally thread-safe via the double-checked
+        # lock above.
+        reranker = await loop.run_in_executor(None, _get_reranker)
         if reranker is None or len(candidates) == 0:
             return candidates[:limit]
 
         try:
             pairs = [(query, c.get("content", "")[:512]) for c in candidates]
-            scores = reranker.predict(pairs)
+            # Predict is the CPU-bound bit — off-load it too.
+            scores = await loop.run_in_executor(None, reranker.predict, pairs)
 
             scored = []
             for cand, score in zip(candidates, scores):
@@ -1337,12 +1368,12 @@ class MemoryManager:
         in the default executor so a sync CPU-bound encode doesn't block
         the FastAPI event loop.
         """
-        import asyncio
         model = _get_embedder()
         if model is None:
             return None
         try:
-            loop = asyncio.get_event_loop()
+            # Round E1: get_running_loop is the correct call in async ctx
+            loop = asyncio.get_running_loop()
             vec = await loop.run_in_executor(None, lambda: model.encode(text).tolist())
             return vec
         except Exception:
