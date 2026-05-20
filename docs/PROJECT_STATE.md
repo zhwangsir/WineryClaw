@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round C9 — Python skill API 与 JS 对齐:`result = value` 现在也能用,完整保留 `print()` 旧契约)
+> **最后更新**：2026-05-20（Round E1 — code-reviewer audit fix 7 个 issue:reranker lock、task GC race、SkillReflector closure、rerank 阻塞 event loop、get_event_loop deprecation、`child.on('exit')` 流未排空 race、legacy consolidate_l3_to_l4 死代码删除)
 
 ---
 
@@ -910,6 +910,11 @@ main-brain python -m pytest -m smoke    → 53 pass / 0 fail (~6min, 8 boot + 4 
 - **C9**: Python skill 运行时与 JS 对齐 — `result = value`/`set_result(value)` 都返回 typed value,旧 `print()` 契约保留
   - PRELUDE + POSTLUDE 包装,marker-based structured output parse;不破坏既有 skill
   - 加了 8 个单测 + 2 个 smoke,从 51 → 53 个 smoke,sub-brain 单测 400 → 417
+- **E1**: 用 typescript-reviewer + python-reviewer agent 对 B-C 改动做独立审查,发现 7 个 issue 全部当轮修复
+  - CRITICAL: `_get_reranker` 缺锁(同 embedder 那个 bug 类),create_task 引用未持有(GC 风险)
+  - HIGH: `_rerank` 阻塞 event loop(改 run_in_executor),`/config/reload` 漏掉 SkillReflector(closure capture 又一例),`child.on('exit')` stream 未排空 race
+  - 死代码删除:`consolidate_l3_to_l4` legacy + @contextmanager 误用 bug
+  - 5 个 reviewer 找到的 bug class 都和 smoke 早先找到的同源 — 系统性修复在 audit 层又复现
 
 会话累计新增测试(F+G+H+I+J):
 - Sub-brain TS：plugin-hook-wiring(4)、proxy(7)、auth(10)、tool-executor-hooks(6)、skill-manager-selfimprove(14)、skill-hub-client(14)、skillhub-routes(18)
