@@ -182,7 +182,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
           color: active ? "var(--c-accent)" : "var(--c-text-2)",
           fontSize: 13.5,
           fontWeight: active ? 600 : 400,
-          fontFamily: 'inherit',
+          fontFamily: "inherit",
           cursor: "pointer",
           transition: "color 150ms, background 150ms",
           marginBottom: 1,
@@ -345,7 +345,9 @@ export function Sidebar({ onNavigate }: SidebarProps) {
                 </span>
                 <span>{group.title}</span>
               </button>
-              {!collapsedNow && <div style={{ marginTop: 2 }}>{group.items.map((it) => renderLeaf(it, { indent: true }))}</div>}
+              {!collapsedNow && (
+                <div style={{ marginTop: 2 }}>{group.items.map((it) => renderLeaf(it, { indent: true }))}</div>
+              )}
             </div>
           );
         })}

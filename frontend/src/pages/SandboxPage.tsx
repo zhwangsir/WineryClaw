@@ -1,23 +1,73 @@
 import { useState, useEffect } from "react";
-import { Button, Card, Input, Tag, Empty, Table, Statistic, Row, Col } from "antd";
-import { SafetyOutlined, PlayCircleOutlined, CodeOutlined, ClearOutlined } from "@ant-design/icons";
+import { Button, Card, Input, Tag, Empty, Table, Statistic, Row, Col, Switch, Modal, Popconfirm } from "antd";
+import {
+  SafetyOutlined,
+  PlayCircleOutlined,
+  CodeOutlined,
+  ClearOutlined,
+  PlusOutlined,
+  DeleteOutlined,
+  GlobalOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useSandboxStore } from "../stores/sandboxStore";
 
 export default function SandboxPage() {
-  const { available, stats, logs, fetchStatus, fetchStats, fetchAudit, execute, executePython } =
-    useSandboxStore();
+  const {
+    available,
+    stats,
+    logs,
+    workspaces,
+    fetchStatus,
+    fetchStats,
+    fetchAudit,
+    fetchWorkspaces,
+    execute,
+    executePython,
+    createWorkspace,
+    execInWorkspace,
+    removeWorkspace,
+  } = useSandboxStore();
 
   const [command, setCommand] = useState("");
   const [pythonCode, setPythonCode] = useState("print('Hello from sandbox')");
   const [execResult, setExecResult] = useState<{ stdout: string; stderr: string; exitCode: number } | null>(null);
   const [execLoading, setExecLoading] = useState(false);
 
+  // Workspace UI state (Round J1)
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newWsId, setNewWsId] = useState("");
+  const [newWsNetwork, setNewWsNetwork] = useState(false);
+  const [wsCommand, setWsCommand] = useState<Record<string, string>>({});
+  const [wsResult, setWsResult] = useState<Record<string, { ok: boolean; output: string; exitCode: number; error?: string }>>({});
+  const [wsLoading, setWsLoading] = useState<Record<string, boolean>>({});
+
   useEffect(() => {
     fetchStatus();
     fetchStats();
     fetchAudit(undefined, 50);
-  }, [fetchStatus, fetchStats, fetchAudit]);
+    fetchWorkspaces();
+  }, [fetchStatus, fetchStats, fetchAudit, fetchWorkspaces]);
+
+  const handleCreateWorkspace = async () => {
+    const id = newWsId.trim();
+    if (!id) return;
+    const ok = await createWorkspace(id, { network: newWsNetwork });
+    if (ok) {
+      setCreateOpen(false);
+      setNewWsId("");
+      setNewWsNetwork(false);
+    }
+  };
+
+  const handleWorkspaceExec = async (workspaceId: string) => {
+    const cmd = (wsCommand[workspaceId] ?? "").trim();
+    if (!cmd) return;
+    setWsLoading((p) => ({ ...p, [workspaceId]: true }));
+    const res = await execInWorkspace(workspaceId, cmd);
+    setWsLoading((p) => ({ ...p, [workspaceId]: false }));
+    if (res) setWsResult((p) => ({ ...p, [workspaceId]: res }));
+  };
 
   const handleExecute = async () => {
     if (!command.trim()) return;
@@ -97,6 +147,157 @@ export default function SandboxPage() {
           </Button>
         </Card>
       </div>
+
+      {/* Workspaces (Round J1) — persistent stateful containers */}
+      <Card
+        title={
+          <span style={{ fontWeight: 600, color: "var(--c-text)" }}>
+            <SafetyOutlined style={{ marginRight: 8 }} />
+            持久工作区
+            <Tag style={{ marginLeft: 10, fontSize: 11, fontWeight: 400 }} color="processing">
+              J1
+            </Tag>
+          </span>
+        }
+        style={{ marginBottom: 32, borderRadius: 12, border: "1px solid var(--c-border)" }}
+        bodyStyle={{ padding: 24 }}
+        extra={
+          <Button
+            type="primary"
+            size="small"
+            icon={<PlusOutlined />}
+            onClick={() => setCreateOpen(true)}
+            disabled={!available}
+          >
+            新建工作区
+          </Button>
+        }
+      >
+        <p style={{ color: "var(--c-text-3)", fontSize: 12, marginTop: 0, marginBottom: 16 }}>
+          长寿命容器 + 持久挂载 (<code>~/.webrain/workspaces/&lt;id&gt;/</code>)。文件、`apt-get install`、`pip install`
+          会跨调用保留。可选放开网络。
+        </p>
+
+        {workspaces.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无工作区" />
+        ) : (
+          <div style={{ display: "grid", gap: 16 }}>
+            {workspaces.map((ws) => {
+              const result = wsResult[ws.workspaceId];
+              return (
+                <Card
+                  key={ws.workspaceId}
+                  size="small"
+                  style={{ background: "var(--c-card)", border: "1px solid var(--c-border-light)" }}
+                  bodyStyle={{ padding: 16 }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 600, fontFamily: "monospace" }}>{ws.workspaceId}</span>
+                      <Tag style={{ fontSize: 11 }}>{ws.image}</Tag>
+                      <Tag style={{ fontSize: 11 }}>
+                        {ws.memory} / {ws.cpus} CPU
+                      </Tag>
+                      {ws.network ? (
+                        <Tag color="warning" icon={<GlobalOutlined />} style={{ fontSize: 11 }}>
+                          联网
+                        </Tag>
+                      ) : (
+                        <Tag style={{ fontSize: 11 }}>无网络</Tag>
+                      )}
+                    </div>
+                    <Popconfirm
+                      title={`删除工作区 ${ws.workspaceId}?`}
+                      description="容器会被销毁,但 host 目录文件保留。"
+                      okText="删除"
+                      okType="danger"
+                      cancelText="取消"
+                      onConfirm={() => removeWorkspace(ws.workspaceId)}
+                    >
+                      <Button size="small" type="text" icon={<DeleteOutlined />} danger>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: result ? 12 : 0 }}>
+                    <Input
+                      placeholder="ls / pip install / apt update && apt install -y curl …"
+                      value={wsCommand[ws.workspaceId] ?? ""}
+                      onChange={(e) =>
+                        setWsCommand((p) => ({ ...p, [ws.workspaceId]: e.target.value }))
+                      }
+                      onPressEnter={() => handleWorkspaceExec(ws.workspaceId)}
+                      style={{ fontFamily: "monospace", fontSize: 13 }}
+                    />
+                    <Button
+                      type="primary"
+                      icon={<PlayCircleOutlined />}
+                      loading={wsLoading[ws.workspaceId]}
+                      onClick={() => handleWorkspaceExec(ws.workspaceId)}
+                    >
+                      执行
+                    </Button>
+                  </div>
+                  {result && (
+                    <pre
+                      style={{
+                        background: result.exitCode === 0 ? "var(--c-hover)" : "#fff1f0",
+                        color: result.exitCode === 0 ? "var(--c-text)" : "#cf1322",
+                        padding: 10,
+                        borderRadius: 6,
+                        fontSize: 12,
+                        margin: 0,
+                        overflow: "auto",
+                        maxHeight: 200,
+                      }}
+                    >
+                      {result.output || result.error || "(no output)"}
+                      {result.exitCode !== 0 ? `\n[exit ${result.exitCode}]` : ""}
+                    </pre>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* Create-workspace modal */}
+      <Modal
+        title="新建持久工作区"
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        onOk={handleCreateWorkspace}
+        okText="创建"
+        cancelText="取消"
+        okButtonProps={{ disabled: !newWsId.trim() }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 13, marginBottom: 6, color: "var(--c-text-2)" }}>工作区 ID</div>
+            <Input
+              autoFocus
+              placeholder="字母数字/-/_,最多 64 字符,例如 dev-001"
+              value={newWsId}
+              onChange={(e) => setNewWsId(e.target.value)}
+              maxLength={64}
+            />
+            <div style={{ fontSize: 11, color: "var(--c-text-3)", marginTop: 4 }}>
+              容器名将是 <code>webrain-ws-{newWsId || "&lt;id&gt;"}</code>,host 目录{" "}
+              <code>~/.webrain/workspaces/{newWsId || "&lt;id&gt;"}/</code>
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 13, color: "var(--c-text-2)" }}>允许访问网络</div>
+              <div style={{ fontSize: 11, color: "var(--c-text-3)" }}>
+                关闭 = <code>--network none</code> (推荐) · 开启 = 可 curl / apt-get
+              </div>
+            </div>
+            <Switch checked={newWsNetwork} onChange={setNewWsNetwork} />
+          </div>
+        </div>
+      </Modal>
 
       {/* Result */}
       {execResult && (

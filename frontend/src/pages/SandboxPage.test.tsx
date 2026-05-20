@@ -11,6 +11,11 @@ const fetchStats = vi.fn();
 const fetchAudit = vi.fn();
 const execute = vi.fn();
 const executePython = vi.fn();
+// Round J1 — workspace surface mocks
+const fetchWorkspaces = vi.fn();
+const createWorkspace = vi.fn();
+const execInWorkspace = vi.fn();
+const removeWorkspace = vi.fn();
 
 function createMockStore(overrides: Partial<Parameters<typeof useSandboxStore>[0]> = {}) {
   return {
@@ -19,11 +24,16 @@ function createMockStore(overrides: Partial<Parameters<typeof useSandboxStore>[0
     logs: [
       { agentId: "agent-1", action: "exec", timestamp: "2024-01-01T00:00:00Z" },
     ],
+    workspaces: [],
     fetchStatus,
     fetchStats,
     fetchAudit,
+    fetchWorkspaces,
     execute,
     executePython,
+    createWorkspace,
+    execInWorkspace,
+    removeWorkspace,
     ...overrides,
   };
 }
