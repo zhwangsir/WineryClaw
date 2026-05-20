@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round D2 — blender 0.9/0.1 → 0.7/0.3 revert,因 D1 发现 B3 在 rerank=False 条件下 measure 得出错误结论;rerank=True 时 importance 反而更有用,所以 revert）
+> **最后更新**：2026-05-20（Round C7 — plan executor smoke,3 连胜 clean-pass(C5/C6/C7) — backend wiring matrix 已稳)
 
 ---
 
@@ -875,7 +875,7 @@ sub-brain  pnpm exec vitest run         → 37 files / 400 pass / 2 skip / 0 fai
 frontend   pnpm exec tsc --noEmit       → 0 errors
 frontend   pnpm exec vitest run         → 116 files / 1174 pass / 0 fail
 main-brain python -m pytest tests/      → 397 pass / 0 fail
-main-brain python -m pytest -m smoke    → 38 pass / 0 fail (~6min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp + 5 channel + 6 rag)
+main-brain python -m pytest -m smoke    → 43 pass / 0 fail (~6min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp + 5 channel + 6 rag + 5 plan)
 ```
 
 ### Round B/C 累计 (autonomous iteration 2026-05-20)
@@ -901,6 +901,9 @@ main-brain python -m pytest -m smoke    → 38 pass / 0 fail (~6min, 8 boot + 4 
 - **C6**: 6 个 RAG index/query/remove smoke,首跑 clean-pass
   - 连续 2 轮 clean-pass(C5+C6)说明:常用 backend 接口的 wiring 矿脉差不多挖空了
   - C2-C4 找到 5 个 bug 都在"closure capture stale config"、"FastAPI Any→query"、"代理 strip header"等架构盲点,这几个修完后 Plan/Wiki/KG 等同结构端点大概率不会再出新 bug
+- **D1**: re-rank impact benchmark → use_rerank=True 在 recall@5/recall@10/MRR 上分别 +0.075/+0.050/+0.126,生产代码本来就默认 True
+- **D2**: blender weight grid 重跑 with rerank=True → revert 默认 0.9/0.1 → 0.7/0.3,因为 B3 用 rerank=False 测的是错的配置;rerank ON 时 importance 反而更有用(MRR +0.022)
+- **C7**: 5 个 plan executor smoke,首跑 clean-pass(只改一行测试 key 名),3 连胜 clean — backend wiring matrix 稳了
 
 会话累计新增测试(F+G+H+I+J):
 - Sub-brain TS：plugin-hook-wiring(4)、proxy(7)、auth(10)、tool-executor-hooks(6)、skill-manager-selfimprove(14)、skill-hub-client(14)、skillhub-routes(18)
