@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round C5 — channel inbound→reply smoke + memory protocol + inject-inbound endpoint;首个 clean-pass 的 smoke 轮次,说明 auto-reply pipeline wiring 是真好的）
+> **最后更新**：2026-05-20（Round C6 — RAG index/query/remove smoke;第 2 个连续 clean-pass 轮次,backend smoke 的 wiring-bug 矿脉看起来挖空了）
 
 ---
 
@@ -875,7 +875,7 @@ sub-brain  pnpm exec vitest run         → 37 files / 400 pass / 2 skip / 0 fai
 frontend   pnpm exec tsc --noEmit       → 0 errors
 frontend   pnpm exec vitest run         → 116 files / 1174 pass / 0 fail
 main-brain python -m pytest tests/      → 397 pass / 0 fail
-main-brain python -m pytest -m smoke    → 32 pass / 0 fail (~6min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp + 5 channel)
+main-brain python -m pytest -m smoke    → 38 pass / 0 fail (~6min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp + 5 channel + 6 rag)
 ```
 
 ### Round B/C 累计 (autonomous iteration 2026-05-20)
@@ -898,6 +898,9 @@ main-brain python -m pytest -m smoke    → 32 pass / 0 fail (~6min, 8 boot + 4 
 - **C5**: 5 个 channel inbound→reply smoke + 新增 `memory` channel protocol + `POST /channels/:id/inject-inbound` 端点
   - 第一个首跑 clean-pass 的 smoke 轮次(C2-C4 都首跑找到 bug),说明 auto-reply pipeline 真的 wiring 良好
   - memory channel + inject-inbound 端点也对 production 有用:dev/demo 无凭据演示;admin 回放遗失消息
+- **C6**: 6 个 RAG index/query/remove smoke,首跑 clean-pass
+  - 连续 2 轮 clean-pass(C5+C6)说明:常用 backend 接口的 wiring 矿脉差不多挖空了
+  - C2-C4 找到 5 个 bug 都在"closure capture stale config"、"FastAPI Any→query"、"代理 strip header"等架构盲点,这几个修完后 Plan/Wiki/KG 等同结构端点大概率不会再出新 bug
 
 会话累计新增测试(F+G+H+I+J):
 - Sub-brain TS：plugin-hook-wiring(4)、proxy(7)、auth(10)、tool-executor-hooks(6)、skill-manager-selfimprove(14)、skill-hub-client(14)、skillhub-routes(18)
