@@ -175,9 +175,15 @@ def _reciprocal_rank(
 
 async def _evaluate(
     mm: MemoryManager, fixture: Dict[str, Any], id_to_key: Dict[str, str],
-    levels: List[str], k_top: int = 10,
+    levels: List[str], k_top: int = 10, use_rerank: bool = False,
 ) -> Dict[str, float]:
-    """Run all queries from the fixture, return aggregated metrics."""
+    """Run all queries from the fixture, return aggregated metrics.
+
+    use_rerank: default False to preserve historical comparability of the
+    baseline benchmark (was effectively the only option when the rerank
+    model wasn't cached). Round D1 measured the prod-default impact and
+    Round D2 re-runs blender grid with rerank=True — both pass True here.
+    """
     r5_total = 0.0
     r10_total = 0.0
     mrr_total = 0.0
@@ -189,7 +195,7 @@ async def _evaluate(
             "query": q["query"],
             "levels": levels,
             "limit": k_top,
-            "use_rerank": False,  # rerank model download is heavy and not the point
+            "use_rerank": use_rerank,
         })
         returned_keys_per_rank = [_resolve_fixture_keys(r, id_to_key) for r in results]
         r5 = _recall_at_k(q["expects"], returned_keys_per_rank, 5)

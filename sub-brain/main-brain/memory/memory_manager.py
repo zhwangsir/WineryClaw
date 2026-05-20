@@ -54,20 +54,30 @@ RETRIEVAL_BOOST = 0.05
 # Query-time blending of textual relevance vs decayed importance.
 # final_score = relevance * RELEVANCE_WEIGHT + effective_importance * IMPORTANCE_WEIGHT
 #
-# Default 0.9 / 0.1 is the empirical sweet spot from the Round B3 grid
-# search (tests/test_blender_grid.py, 2026-05-20):
-#   rel=1.0 (pure relevance):    recall@5 0.550, recall@10 0.575, MRR 0.471
-#   rel=0.9 imp=0.1:             recall@5 0.550, recall@10 0.575, MRR 0.442   ← chosen
-#   rel=0.7 imp=0.3 (old default): recall@5 0.475, recall@10 0.575, MRR 0.420
-#   rel=0.0 (pure importance):   recall@5 0.000, recall@10 0.075, MRR 0.018
+# Default 0.7 / 0.3 chosen by Round D2 grid search (2026-05-20) which
+# re-ran the B3 grid with use_rerank=True (the production default).
+# This corrects an error in B3, which measured with rerank disabled and
+# incorrectly concluded "relevance should dominate". Under production
+# (rerank=True) conditions:
 #
-# Why not pure relevance? Importance still earns a small share as anchor for
-# the L3/L4 promotion path — a high-importance permanent fact should beat a
-# barely-relevant L1 noise hit when their relevance is close. On a 20-query
-# fixture pure relevance ties recall@10 with 0.9/0.1, but MRR is +0.029
-# higher (0.471 vs 0.442) — within the fixture's noise floor at n=20.
-# Keep a non-zero importance share so the system has somewhere to grow as
-# the L4 layer fills up over weeks of real use.
+#   rel=1.0 imp=0.0  recall@5 0.575  recall@10 0.675  MRR 0.562
+#   rel=0.9 imp=0.1  recall@5 0.625  recall@10 0.675  MRR 0.568  (B3 chose this)
+#   rel=0.7 imp=0.3  recall@5 0.625  recall@10 0.675  MRR 0.590  ← chosen
+#   rel=0.5 imp=0.5  recall@5 0.625  recall@10 0.675  MRR 0.590
+#   rel=0.0 imp=1.0  recall@5 0.000  recall@10 0.200  MRR 0.020  (sanity)
+#
+# Why 0.7 over 0.5 — both share the MRR peak at 0.590. 0.7 stays closer
+# to the rerank-driven ordering (rerank IS already a strong relevance
+# signal); 0.3 importance is enough to break near-ties when the
+# cross-encoder gives close scores. Pushing importance higher than 0.5
+# starts to degrade.
+#
+# Why importance matters MORE with rerank ON, not less: the cross-encoder
+# produces distinct, well-separated scores, so the candidate ranking is
+# mostly determined by rerank. The blender's only job becomes
+# "if rerank gives two candidates similar scores, prefer the one with
+# higher decayed importance" — exactly the use case importance is
+# designed for.
 #
 # Env-overridable so the grid-search benchmark can sweep weights without
 # monkey-patching, and so deployments can tune without code changes.
@@ -76,9 +86,9 @@ RETRIEVAL_BOOST = 0.05
 # pair is renormalized to sum==1.
 def _resolve_blender_weights() -> tuple:
     try:
-        rel = float(os.environ.get("WEBRAIN_RELEVANCE_WEIGHT", "0.9"))
+        rel = float(os.environ.get("WEBRAIN_RELEVANCE_WEIGHT", "0.7"))
     except ValueError:
-        rel = 0.9
+        rel = 0.7
     try:
         imp_env = os.environ.get("WEBRAIN_IMPORTANCE_WEIGHT")
         imp = float(imp_env) if imp_env is not None else (1.0 - rel)
@@ -89,7 +99,7 @@ def _resolve_blender_weights() -> tuple:
     total = rel + imp
     if total <= 1e-9:
         # Degenerate input — fall back to default split
-        return 0.9, 0.1
+        return 0.7, 0.3
     return rel / total, imp / total
 
 

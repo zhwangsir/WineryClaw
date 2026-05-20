@@ -85,17 +85,20 @@ async def _prepare_consolidated_mm(
     return mm, fixture, id_to_key
 
 
-@pytest.mark.benchmark
-@pytest.mark.asyncio
-async def test_blender_weight_grid_search(temp_dir, mock_llm_config, monkeypatch, capsys):
-    """Sweep RELEVANCE/IMPORTANCE weights and report metrics per cell."""
-    mm, fixture, id_to_key = await _prepare_consolidated_mm(temp_dir, mock_llm_config)
-
+async def _run_grid(
+    mm, fixture, id_to_key, monkeypatch, *, use_rerank: bool, label: str,
+    output_filename: str, temp_dir,
+) -> List[Dict[str, Any]]:
+    """Reusable grid runner. Returns the per-cell results list and prints
+    a markdown table plus winner analysis to stdout."""
     results: List[Dict[str, Any]] = []
     for rel, imp in GRID:
         monkeypatch.setenv("WEBRAIN_RELEVANCE_WEIGHT", str(rel))
         monkeypatch.setenv("WEBRAIN_IMPORTANCE_WEIGHT", str(imp))
-        metrics = await _evaluate(mm, fixture, id_to_key, levels=["L1", "L2", "L3"])
+        metrics = await _evaluate(
+            mm, fixture, id_to_key,
+            levels=["L1", "L2", "L3"], use_rerank=use_rerank,
+        )
         results.append({
             "relevance": rel,
             "importance": imp,
@@ -104,24 +107,23 @@ async def test_blender_weight_grid_search(temp_dir, mock_llm_config, monkeypatch
             "mrr": metrics["mrr"],
         })
 
-    # ----- Markdown table for docs paste-in -----
     print("\n" + "=" * 72)
-    print("BLENDER WEIGHT GRID SEARCH — Round B3")
+    print(f"BLENDER WEIGHT GRID SEARCH — {label}")
     print(f"Fixture: 20 queries, {len(fixture['l1'])} L1 rows, 7-day distribution")
+    print(f"use_rerank={use_rerank}")
     print(f"Run at: {datetime.now(timezone.utc).isoformat()}")
     print("=" * 72)
     print()
     print("| relevance | importance | recall@5 | recall@10 |  MRR  |")
     print("|-----------|------------|----------|-----------|-------|")
     for r in results:
-        marker = "  ← current" if (r["relevance"], r["importance"]) == (0.9, 0.1) else ""
+        marker = "  ← current" if (r["relevance"], r["importance"]) == (0.7, 0.3) else ""
         print(
             f"| {r['relevance']:9.1f} | {r['importance']:10.1f} "
             f"|  {r['recall@5']:.3f}  |   {r['recall@10']:.3f}  "
             f"| {r['mrr']:.3f}{marker} |"
         )
 
-    # ----- Winner analysis -----
     by_r10 = sorted(results, key=lambda x: x["recall@10"], reverse=True)
     by_mrr = sorted(results, key=lambda x: x["mrr"], reverse=True)
     print()
@@ -132,11 +134,37 @@ async def test_blender_weight_grid_search(temp_dir, mock_llm_config, monkeypatch
         by_mrr[0]["relevance"], by_mrr[0]["importance"], by_mrr[0]["mrr"]
     ))
 
+    out_path = Path(temp_dir) / output_filename
+    out_path.write_text(json.dumps({
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "use_rerank": use_rerank,
+        "fixture_size": len(fixture["l1"]),
+        "n_queries": len(fixture["queries"]),
+        "grid": results,
+    }, indent=2))
+    print(f"Results JSON: {out_path}")
+    return results
+
+
+@pytest.mark.benchmark
+@pytest.mark.asyncio
+async def test_blender_weight_grid_search(temp_dir, mock_llm_config, monkeypatch, capsys):
+    """Sweep RELEVANCE/IMPORTANCE weights with rerank OFF (Round B3 conditions).
+
+    Preserved as-is so the B3 grid stays comparable across runs.
+    """
+    mm, fixture, id_to_key = await _prepare_consolidated_mm(temp_dir, mock_llm_config)
+    results = await _run_grid(
+        mm, fixture, id_to_key, monkeypatch,
+        use_rerank=False, label="Round B3 (rerank OFF)",
+        output_filename="blender_grid_results.json", temp_dir=temp_dir,
+    )
+
     # ----- Soft sanity checks -----
     # Importance-only (0.0, 1.0) should be measurably WORSE than the
-    # default 0.7/0.3 — if not, our relevance signal is broken.
+    # default 0.9/0.1 — if not, our relevance signal is broken.
     importance_only = next(r for r in results if r["relevance"] == 0.0)
-    default = next(r for r in results if (r["relevance"], r["importance"]) == (0.9, 0.1))
+    default = next(r for r in results if (r["relevance"], r["importance"]) == (0.7, 0.3))
     assert default["recall@10"] >= importance_only["recall@10"], (
         f"Default blend ({default['recall@10']:.3f}) "
         f"should beat importance-only ({importance_only['recall@10']:.3f}) — "
@@ -153,13 +181,35 @@ async def test_blender_weight_grid_search(temp_dir, mock_llm_config, monkeypatch
         f"default={default['recall@10']:.3f}"
     )
 
-    # Capture results JSON for downstream tooling (optional consumer in
-    # PROJECT_STATE auto-updaters, future plot generators, etc.)
-    out_path = Path(temp_dir) / "blender_grid_results.json"
-    out_path.write_text(json.dumps({
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "fixture_size": len(fixture["l1"]),
-        "n_queries": len(fixture["queries"]),
-        "grid": results,
-    }, indent=2))
-    print(f"\nResults JSON: {out_path}")
+
+@pytest.mark.benchmark
+@pytest.mark.asyncio
+async def test_blender_weight_grid_search_with_rerank(
+    temp_dir, mock_llm_config, monkeypatch, capsys,
+):
+    """Round D2 — re-run the same grid with rerank ON.
+
+    Production /memory/query defaults to use_rerank=True. B3's optimal
+    (0.9/0.1) was measured with rerank OFF; D1 proved rerank itself is
+    a big win. This test answers: does the optimal blender ratio
+    SHIFT when rerank is doing the heavy lifting on candidate ordering?
+
+    Hypothesis: rerank gives distinct cross-encoder scores, so there are
+    fewer near-ties for importance to break — pure relevance (1.0/0.0)
+    or near-pure should dominate even more decisively.
+    """
+    mm, fixture, id_to_key = await _prepare_consolidated_mm(temp_dir, mock_llm_config)
+    results = await _run_grid(
+        mm, fixture, id_to_key, monkeypatch,
+        use_rerank=True, label="Round D2 (rerank ON)",
+        output_filename="blender_grid_results_rerank.json", temp_dir=temp_dir,
+    )
+
+    # Same sanity checks (the relationships should hold regardless of
+    # rerank, even if absolute numbers shift).
+    importance_only = next(r for r in results if r["relevance"] == 0.0)
+    default = next(r for r in results if (r["relevance"], r["importance"]) == (0.7, 0.3))
+    assert default["recall@10"] >= importance_only["recall@10"], (
+        f"With rerank ON, default still must beat importance-only: "
+        f"default={default['recall@10']:.3f} importance-only={importance_only['recall@10']:.3f}"
+    )

@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round D1 — re-rank impact benchmark:rerank=True 比 False 在所有指标都赢,MRR +29%。生产代码本来就默认 True,只是 benchmark/smoke 之前一直显式关掉)
+> **最后更新**：2026-05-20（Round D2 — blender 0.9/0.1 → 0.7/0.3 revert,因 D1 发现 B3 在 rerank=False 条件下 measure 得出错误结论;rerank=True 时 importance 反而更有用,所以 revert）
 
 ---
 
@@ -1066,6 +1066,7 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 | 2026-05-20 | + embedder 缓存 + FTS5 escape | 0.425 | 0.625 | 0.383 | 不变(修速度 / 崩溃,不动算法) |
 | 2026-05-20 | + blender 0.9/0.1 (Round B3) | 0.550 | 0.575 | 0.442 | grid search 结论:relevance 权重越高越好,recall@5 +0.125,MRR +0.059 |
 | 2026-05-20 | + rerank ON (Round D1, prod default) | 0.575 | 0.625 | 0.558 | use_rerank=True 是生产默认,但 benchmark/smoke 一直被显式关掉 — 真实生产基线比之前报告的更好 |
+| 2026-05-20 | + blender 0.7/0.3 (Round D2, revert B3) | 0.625 | 0.675 | 0.590 | D2 re-run B3 grid with rerank=True 后发现:rerank ON 反而让 importance 更有用,B3 把 default 从 0.7/0.3 改到 0.9/0.1 是 measure 错条件的结果,这一轮 revert 回 0.7/0.3 |
 
 ### Round B3 — Blender weight grid search (2026-05-20)
 
@@ -1111,4 +1112,28 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 - 真实对话 fixture 替换手工 fixture(20 query 噪声大)
 - L4 promotion 累积后重跑 grid search — 看 importance 边际是否回升
 - 加入 importance-disambiguating queries(同样 relevance 但有 importance 区分),验证 importance 在该场景的价值
-- 重跑 blender grid search 但 `use_rerank=True` — 看 rerank 是否改变了最优 blender 比例
+- ~~重跑 blender grid search 但 `use_rerank=True`~~ → 已做(Round D2),见下方
+
+### Round D2 — Blender grid with rerank=True (2026-05-20)
+
+跑 `pytest -m benchmark -s tests/test_blender_grid.py::test_blender_weight_grid_search_with_rerank`:
+
+| relevance | importance | recall@5 | recall@10 |  MRR  | 备注 |
+|-----------|------------|----------|-----------|-------|------|
+| 1.0       | 0.0        | 0.575    | 0.675     | 0.562 | 纯 relevance |
+| 0.9       | 0.1        | 0.625    | 0.675     | 0.568 | B3 错误默认 |
+| 0.8       | 0.2        | 0.625    | 0.675     | 0.565 | |
+| **0.7**   | **0.3**    | **0.625**| **0.675** | **0.590** | **新默认(原默认 revert)** |
+| 0.6       | 0.4        | 0.625    | 0.675     | 0.590 | |
+| 0.5       | 0.5        | 0.625    | 0.675     | 0.590 | |
+| 0.4       | 0.6        | 0.600    | 0.675     | 0.522 | |
+| 0.3       | 0.7        | 0.600    | 0.650     | 0.515 | |
+| 0.0       | 1.0        | 0.000    | 0.200     | 0.020 | 纯 importance |
+
+**结论**(覆盖 B3):
+1. recall@5 在 rel ≥ 0.4 时全部 0.625,recall@10 在 rel ≥ 0.4 时全部 0.675 — 召回侧极不敏感
+2. **MRR 在 rel=0.5–0.7 都是 0.590,在 rel=0.9 (B3 默认) 是 0.568** — 排名质量在中等 relevance 反而更好
+3. **rerank ON 让 importance 更有价值,不是更无价值**:cross-encoder 给的 score 差异大,blender 的工作变成"两个 rerank 接近的候选选哪个" → 这正是 importance 的设计场景
+4. B3 的错在 measure 时 rerank=False,得到"relevance 越高越好"的人为结论,改默认到 0.9/0.1 — 这一轮 revert 回 0.7/0.3
+
+**关键 lesson**:benchmark 一定要在生产配置下跑,否则结论可能反向
