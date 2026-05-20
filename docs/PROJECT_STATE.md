@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round C8 — skill execution smoke + shell-injection 防御验证,4 连胜 clean-pass)
+> **最后更新**：2026-05-20（Round C9 — Python skill API 与 JS 对齐:`result = value` 现在也能用,完整保留 `print()` 旧契约)
 
 ---
 
@@ -871,11 +871,11 @@ main-brain 后台任务 _skill_evolution_scheduler（每 1h）
 
 ```
 sub-brain  pnpm exec tsc --noEmit       → 0 errors
-sub-brain  pnpm exec vitest run         → 37 files / 400 pass / 2 skip / 0 fail
+sub-brain  pnpm exec vitest run         → 37 files / 408 pass / 2 skip / 0 fail
 frontend   pnpm exec tsc --noEmit       → 0 errors
 frontend   pnpm exec vitest run         → 116 files / 1174 pass / 0 fail
 main-brain python -m pytest tests/      → 397 pass / 0 fail
-main-brain python -m pytest -m smoke    → 51 pass / 0 fail (~6min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp + 5 channel + 6 rag + 5 plan + 8 skill)
+main-brain python -m pytest -m smoke    → 53 pass / 0 fail (~6min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp + 5 channel + 6 rag + 5 plan + 10 skill)
 ```
 
 ### Round B/C 累计 (autonomous iteration 2026-05-20)
@@ -906,7 +906,10 @@ main-brain python -m pytest -m smoke    → 51 pass / 0 fail (~6min, 8 boot + 4 
 - **C7**: 5 个 plan executor smoke,首跑 clean-pass(只改一行测试 key 名),3 连胜 clean — backend wiring matrix 稳了
 - **C8**: 8 个 skill execution smoke(JS worker_threads + Python spawn+stdin),4 连胜 clean
   - 关键的 shell-injection 防御测试:payload 含 `rm -rf /; $(cat /etc/passwd)` 直接经 structured clone 抵达 worker,原样回显 — M6a 隔离工作正常
-  - 发现 UX 不对称:JS skill 用 `return value;`,Python skill 必须 `print(value)` — 文档需要补
+  - 发现 UX 不对称:JS skill 用 `return value;`,Python skill 必须 `print(value)` — C9 修了
+- **C9**: Python skill 运行时与 JS 对齐 — `result = value`/`set_result(value)` 都返回 typed value,旧 `print()` 契约保留
+  - PRELUDE + POSTLUDE 包装,marker-based structured output parse;不破坏既有 skill
+  - 加了 8 个单测 + 2 个 smoke,从 51 → 53 个 smoke,sub-brain 单测 400 → 417
 
 会话累计新增测试(F+G+H+I+J):
 - Sub-brain TS：plugin-hook-wiring(4)、proxy(7)、auth(10)、tool-executor-hooks(6)、skill-manager-selfimprove(14)、skill-hub-client(14)、skillhub-routes(18)
