@@ -168,6 +168,12 @@ def _spawn_main_brain(
     # Redirect main-brain's data dir to the same tmp so memory.db,
     # vectors, RAG state, etc. all stay isolated per smoke run.
     env["WEBRAIN_DATA_DIR"] = str(tmp_data_dir / "main-brain-data")
+    # Pin the MCP bearer token to a known value so smoke tests can
+    # construct authenticated calls without having to read the
+    # auto-generated ~/.webrain/mcp_token file. Use a distinctive,
+    # obviously-test-only string so any production usage that
+    # accidentally inherited this env var would scream during code review.
+    env["WEBRAIN_MCP_TOKEN"] = "smoke-test-token-not-for-production-use"
     # Speed up boot — skip Tokenizers parallelism warnings
     env["TOKENIZERS_PARALLELISM"] = "false"
     if sub_brain_port is not None:

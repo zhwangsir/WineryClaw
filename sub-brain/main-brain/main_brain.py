@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import Body, FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from memory.memory_manager import MemoryManager
@@ -1034,7 +1034,7 @@ async def plan_execute(request: Dict[str, Any]):
 
 
 @app.post("/mcp/jsonrpc")
-async def mcp_jsonrpc(request: Any, http_request: Request):
+async def mcp_jsonrpc(http_request: Request, request: Any = Body(...)):
     """JSON-RPC 2.0 endpoint exposing webrain as an MCP server.
 
     Supports single requests and batches. Notifications (no `id` field)
@@ -1046,6 +1046,14 @@ async def mcp_jsonrpc(request: Any, http_request: Request):
 
     M4b.1: write-scope tools require `Authorization: Bearer <token>`.
     Read-scope tools remain open so existing integrations don't break.
+
+    NOTE: `request: Any = Body(...)` is mandatory here. Without the
+    explicit Body marker, FastAPI maps `Any` to a query parameter and
+    every MCP call returns 422 "Field required" in the query string.
+    Caught by Round C4 smoke 2026-05-20 — the MCP endpoint had been
+    silently broken at the HTTP layer because unit tests exercise
+    MCPServer.handle directly, never the route.
+    Batches are JSON arrays not dicts, so we can't use Dict[str, Any].
     """
     expected_token = _state.get("mcp_token")
     bearer = extract_bearer(http_request.headers.get("authorization"))
