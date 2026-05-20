@@ -1850,6 +1850,24 @@ def _extract_followups_from_text(text: str, max_count: int) -> list:
             pass
 
     # Tier 3: line-based scrape (bullets, numbered list, quoted)
+    # Round Q6 — reasoning models like Qwen-thinking emit a "thinking
+    # plan" before their answer, lines like:
+    #   **Analyze User Input:**
+    #   **Language:** Chinese
+    #   **Task:** Generate exactly 3 concise follow-up questions...
+    # The previous tier-3 scrape included these as valid candidates and
+    # the frontend rendered them as follow-up chips. Filter them out:
+    #   - lines starting with `**` (markdown bold headers used in plans)
+    #   - lines matching common meta-instruction patterns ("task:",
+    #     "language:", "analyze", "generate", "input:", etc.)
+    #   - lines that look like prompt restatements rather than questions
+    #     (must end in ? or ?, or at minimum NOT contain the colon-suffix
+    #     pattern typical of headers like "**Task:**")
+    META_PATTERNS = _re.compile(
+        r"^\s*(analyze|task|language|input|output|generate|step\s*\d+|note|warning)"
+        r"\b[:：]?",
+        _re.IGNORECASE,
+    )
     candidates: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
@@ -1859,8 +1877,33 @@ def _extract_followups_from_text(text: str, max_count: int) -> list:
         line = _re.sub(r"^[\-\*•]\s*", "", line)
         line = _re.sub(r"^\d+[\.\)]\s*", "", line)
         line = line.strip('"“”\'`')
-        if 2 < len(line) < 120 and not line.lower().startswith(("here", "sure", "okay")):
-            candidates.append(line)
+        if not (2 < len(line) < 120):
+            continue
+        if line.lower().startswith(("here", "sure", "okay", "implicit", "possible", "candidate", "candidates")):
+            continue
+        # Q6 filters
+        if line.startswith("**") or line.startswith("##"):
+            continue
+        if META_PATTERNS.match(line):
+            continue
+        # A real follow-up is ONE question. Lines containing multiple
+        # question marks (e.g., "How does it work? Why use it? Examples?")
+        # are the model summarizing topics, not a single follow-up.
+        if (line.count("?") + line.count("？")) > 1:
+            continue
+        # Heuristic: a real follow-up question almost always ends with
+        # `?` or `?` (Chinese full-width). If neither, only accept it
+        # when it's clearly a question phrasing (starts with 怎么/如何/
+        # 为什么/什么/can/how/why/what/should — common interrogatives).
+        if not (line.endswith("?") or line.endswith("？")):
+            QUESTION_STARTERS = _re.compile(
+                r"^(怎么|如何|为什么|什么|哪|是否|可以|"
+                r"can|could|how|why|what|should|does|do|is|are|will|would)\b",
+                _re.IGNORECASE,
+            )
+            if not QUESTION_STARTERS.match(line):
+                continue
+        candidates.append(line)
     # Dedup preserving order
     seen: set[str] = set()
     unique: list[str] = []
