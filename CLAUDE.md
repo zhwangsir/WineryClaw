@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > **Don't duplicate.** `README.md` covers user-facing setup, ports, and the architecture diagram. `docs/PROJECT_STATE.md` is the canonical state-of-the-project doc — read it on a fresh session to sync the full history. This file documents non-obvious things that are easy to get wrong.
 
+> **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
+> `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep.
+
+> **Current test totals** (2026-05-20):
+> 417 sub-brain unit + 1174 frontend unit + 397 main-brain unit + 53 backend smoke + 14 Playwright e2e + 5 benchmarks. **All green.**
+
 ---
 
 ## Commands
@@ -110,6 +116,29 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 
 ---
 
+## Environment variable cheat sheet
+
+| Var | Service | Default | Effect |
+|---|---|---|---|
+| `WEBRAIN_MAIN_BRAIN_UDS` | sub-brain | `/tmp/webrain-main.sock` | UDS path. Set this OR `WEBRAIN_MAIN_BRAIN_PORT`, not both. |
+| `WEBRAIN_MAIN_BRAIN_PORT` | sub-brain | `18790` | Forces TCP transport to main-brain. |
+| `WEBRAIN_SUB_BRAIN_URL` | main-brain | `http://127.0.0.1:3000` | Where main-brain fetches `/config/model` from. Smoke fixtures set this to the spawned sub-brain's port. |
+| `WEBRAIN_NO_MAIN_BRAIN` | sub-brain | unset | If `1`, sub-brain skips auto-spawning a main-brain child. Useful when running main-brain manually. |
+| `WEBRAIN_DATA_DIR` | main-brain | `<repo>/data/main-brain/` | Override data dir. Smoke uses a tmpdir so it doesn't pollute the dev DB. |
+| `WEBRAIN_MCP_TOKEN` | main-brain | auto-generated to `~/.webrain/mcp_token` | Bearer token for MCP write tools. Smoke fixtures pin it. |
+| `WEBRAIN_CONFLICT_LLM_TIMEOUT_S` | main-brain | `20` | Per-candidate timeout for the conflict-judge LLM call. Smoke sets `2` to avoid hangs against unreachable mock URLs. |
+| `WEBRAIN_LLM_HEALTH_DISABLED` | main-brain | unset | If `1`, skips the background LLM-endpoint health monitor. Smoke uses this. |
+| `WEBRAIN_RELEVANCE_WEIGHT` | main-brain | `0.7` | Blender weight (memory retrieval). Round D2 picked this with rerank=True. |
+| `WEBRAIN_IMPORTANCE_WEIGHT` | main-brain | `1 - RELEVANCE` | Auto-derived; set only if you want non-complementary weights. |
+| `WEBRAIN_ACTIVE_MEMORY_ENABLED` | main-brain | `1` | Set to `0` to disable fire-and-forget ActiveMemory pattern extraction from chat. |
+| `WEBRAIN_PLANNER_ENABLED` | main-brain | `1` | Set to `0` to skip the Planner phase even when a Planner is wired. |
+| `WEBRAIN_RAG_TOP_K` | main-brain | `3` | Top-K chunks injected into chat system prompt. |
+| `WEBRAIN_RAG_MIN_SCORE` | main-brain | `0.0` | Minimum cosine to include a RAG chunk. |
+| `WEBRAIN_PYTHON` | sub-brain spawn | (auto-pick from venv) | Override Python interpreter when sub-brain spawns main-brain. |
+| `WEBRAIN_EMBEDDED` | main-brain | unset | Set to `1` automatically by sub-brain when spawning main-brain as a child. |
+
+---
+
 ## Test layer cheat sheet
 
 There are four distinct test layers — pick the right one for what you're verifying:
@@ -175,7 +204,12 @@ These are the architectural traps the smoke + audit layers kept catching. When a
 ## Where to look for context
 
 - **`README.md`** — user-facing setup, ports, architecture diagram.
-- **`docs/PROJECT_STATE.md`** — full session-by-session history, test status, benchmark baselines. The single source of truth for "what's the state of the project right now."
-- **`docs/USER_TRIAL_2026-05-20.md`** — the user trial that started the smoke + audit work.
+- **`docs/PROJECT_STATE.md`** — the single source of truth for "what's the state of the project right now." Section anchors worth knowing:
+  - §1–13 — session-by-session development history
+  - §14 — Memory benchmark baselines (recall@5/10, MRR; blender grid results both with and without rerank)
+  - §15 — Chat latency baseline (sequential P50/P95/P99 + concurrent P95)
+- **`docs/USER_TRIAL_2026-05-20.md`** — the user trial that surfaced the bug classes the smoke layer now catches.
+- **`CONTRIBUTING.md`** — dev workflow, branch naming, commit-style conventions, test-layer expectations for PRs (bilingual zh-CN + English).
+- **`LICENSE`** — MIT.
 - **`~/WeBrain/CLAUDE.md`** — umbrella scope rules (the "only webrain-integration/" rule).
 - **`~/CLAUDE.md`** — global user preferences (response language, Karpathy rules, Superpowers pipeline).
