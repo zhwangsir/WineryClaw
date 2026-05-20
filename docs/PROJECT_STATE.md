@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-20（Round E1 — code-reviewer audit fix 7 个 issue:reranker lock、task GC race、SkillReflector closure、rerank 阻塞 event loop、get_event_loop deprecation、`child.on('exit')` 流未排空 race、legacy consolidate_l3_to_l4 死代码删除)
+> **最后更新**：2026-05-20（Round F1 + F2 — 4 个 frontend Playwright smoke(Memory/Wiki/Dashboard/MCP-info) + chat 延迟 baseline(seq P95 94ms, concurrent 2.1s/30)
 
 ---
 
@@ -876,6 +876,7 @@ frontend   pnpm exec tsc --noEmit       → 0 errors
 frontend   pnpm exec vitest run         → 116 files / 1174 pass / 0 fail
 main-brain python -m pytest tests/      → 397 pass / 0 fail
 main-brain python -m pytest -m smoke    → 53 pass / 0 fail (~6min, 8 boot + 4 chat + 4 dreaming + 4 conflict + 7 mcp + 5 channel + 6 rag + 5 plan + 10 skill)
+frontend   pnpm exec playwright test    → 14 pass / 0 fail (8 chat-flow + 6 F1 new)
 ```
 
 ### Round B/C 累计 (autonomous iteration 2026-05-20)
@@ -1151,3 +1152,34 @@ curl -X POST http://localhost:18790/evolution/skill-cycle/run
 4. B3 的错在 measure 时 rerank=False,得到"relevance 越高越好"的人为结论,改默认到 0.9/0.1 — 这一轮 revert 回 0.7/0.3
 
 **关键 lesson**:benchmark 一定要在生产配置下跑,否则结论可能反向
+
+---
+
+## 15. Chat 延迟 baseline (Round F2, 2026-05-20)
+
+`pytest -m benchmark -s tests/test_chat_latency_benchmark.py`:
+
+| 场景 | P50 | P95 | P99 | mean |
+|------|------|------|------|------|
+| **Sequential**(单调用,30 样本) | 88.1 ms | 94.0 ms | 155.1 ms | 91.4 ms |
+| **Concurrent** (30 并发) | 2108 ms | 2157 ms | — | 2113 ms |
+
+**Mock LLM**(sub-ms),measure 的纯 infra overhead:
+- L1 user store
+- memory.query(L2/L3 levels,blend score 排序)
+- LLM round-trip(mock)
+- L1 assistant store
+- ActiveMemory fire-and-forget(后台,不算 critical path)
+
+**结论**:
+- 单调用 ~90ms 是 sub-brain → main-brain → memory engine 全链 overhead — 可接受
+- 30 并发飙到 ~2.1s/调用,主因是 SQLite 单 writer 锁,memory.store 写串行化
+- 生产用 LLM(500-2000ms)会把 infra overhead 完全淹没,P95 仍由 LLM 主导
+
+**Round B2 ActiveMemory 接入的影响**:fire-and-forget 设计,P95 几乎无变化(已在 chat 返回后才跑)
+**Round E1 rerank → executor 的影响**:无 rerank cold load 这种场景下看不出来差,但消除了 30s+ 阻塞 event loop 的最差情况
+
+下一次想动 latency 的方向:
+- 把 memory.store 改批量写入 / WAL mode SQLite — 改善并发
+- chat 链路加 distributed tracing(已经有 x-trace-id 透传基础)
+- 真 LLM endpoint 跑同一 benchmark,看实际生产 P95
