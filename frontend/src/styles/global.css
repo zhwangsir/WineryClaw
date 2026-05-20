@@ -562,3 +562,21 @@ textarea:focus-visible,
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
 }
+
+/* ── Q12.1 — AntD Card actions footer in dark mode ─────────────────
+ * AntD `ul.ant-card-actions` defaults to colorBgContainer light even
+ * when the surrounding card uses dark surfaces, producing a bright
+ * white horizontal bar at the bottom of every Card-with-actions in
+ * dark mode (most visible on the Wiki page note cards).
+ * Force it to match our card surface so it reads as part of the panel.
+ */
+[data-theme="dark"] .ant-card-actions {
+  background: var(--c-card) !important;
+  border-top: 1px solid var(--c-border-light);
+}
+[data-theme="dark"] .ant-card-actions > li {
+  color: var(--c-text-2);
+}
+[data-theme="dark"] .ant-card-actions > li > span:hover {
+  color: var(--c-accent);
+}
