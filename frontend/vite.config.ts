@@ -9,8 +9,12 @@ const proxyConfig = {
   '/api': { target: proxyTarget, changeOrigin: true },
   '/brain': { target: proxyTarget, changeOrigin: true },
   '/uploads': { target: proxyTarget, changeOrigin: true },
-  '/tools': { target: proxyTarget, changeOrigin: true },
-  // NOTE: '/channels' and '/config' removed — they conflict with SPA routes
+  // Q14.5 (2026-05-21) — '/tools' removed for the same reason as
+  // '/channels' / '/config': both the SPA and the sub-brain expose
+  // it, and Vite's dev proxy matches first, so /tools loaded the raw
+  // JSON instead of the React shell. The ToolsPage code calls
+  // /api/tools (still proxied via the '/api' prefix), so removing the
+  // bare '/tools' entry has no functional effect on data fetching.
   '/health': { target: proxyTarget, changeOrigin: true },
 };
 
