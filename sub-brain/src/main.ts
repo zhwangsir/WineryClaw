@@ -128,6 +128,16 @@ app.addHook("onRequest", async (request, reply) => {
 // honors both env names and includes the path-canonicalization defense.
 
 // ===== /api prefix compat (frontend uses /api/channels, sub-brain serves /channels) =====
+//
+// ORDERING NOTE (Round P review): this hook MUST run AFTER registerAuth
+// (called above). Auth canonicalizes via `request.url` (unrewritten) and
+// strips `/api/` itself in its own canonicalPath helper, so the two are
+// consistent today. If you ever move registerAuth below this rewriter,
+// auth will see the already-rewritten path and its internal /api strip
+// becomes a no-op — the auth/routing path views will diverge and
+// /api/sandbox could become reachable without credentials when
+// auth is enabled. Keep registerAuth above; if you can't, also
+// remove the `/api/` strip from auth.ts canonicalPath.
 // Frontend api/*.ts wrappers consistently call `/api/<resource>` to avoid
 // SPA route collisions on `/channels` and `/config`. But sub-brain serves
 // those at `/channels` and `/config` directly (only skillhub uses the `/api`

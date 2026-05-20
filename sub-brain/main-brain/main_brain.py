@@ -1764,9 +1764,13 @@ async def chat_followups_endpoint(request: Dict[str, Any]):
         'Return ONLY a JSON array of strings, no prose, e.g. ["foo?", "bar?"].'
     )
     # Strip our delimiter tokens from the inputs so a caller can't close
-    # the tag and inject their own follow-up frame.
-    safe_user = user_msg.replace("<USER>", "").replace("</USER>", "")
-    safe_reply = assistant_reply.replace("<ASSISTANT>", "").replace("</ASSISTANT>", "")
+    # the tag and inject their own follow-up frame. Case-insensitive +
+    # tolerates whitespace inside the tag (caught by Round P review:
+    # `<user>` / `<USER >` would otherwise bypass an exact-case strip).
+    import re as _delim_re
+    _delim = _delim_re.compile(r"</?\s*(?:user|assistant)\s*>", _delim_re.IGNORECASE)
+    safe_user = _delim.sub("", user_msg)
+    safe_reply = _delim.sub("", assistant_reply)
     messages = [
         {"role": "system", "content": prompt},
         {
