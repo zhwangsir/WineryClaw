@@ -397,6 +397,46 @@ class TestSemanticDeduplication:
         dreaming_engine.memory.store.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_dedup_marks_l2_as_processed_via_provenance_refs(self, dreaming_engine):
+        """幂等性修复：去重 UPDATE 必须将 l2_id 写入 provenance_refs。
+
+        若全部事实被去重，该 L2 行不会产生新 L3 行，没有 provenance_refs 指向它。
+        下次 Dreaming 周期会将其误判为"未处理"并无限重复。
+        修复后：UPDATE 语句把 l2_id 追加到已有行的 provenance_refs 中。
+        """
+        similar = {
+            "id": "existing-1",
+            "content": "[fact] 旧内容",
+            "vector_score": 0.92,
+            "importance": 0.7,
+            # 注意：不含 provenance_refs 字段，代码应能安全降级为空列表
+        }
+        dreaming_engine._find_similar_l3 = AsyncMock(return_value=similar)
+        dreaming_engine._extract_l3_facts = AsyncMock(
+            return_value=[{"kind": "fact", "statement": "稍有不同的同类事实"}]
+        )
+        dreaming_engine.memory.store = AsyncMock()
+        dreaming_engine.memory._store_embedding = AsyncMock()
+        mock_conn = _make_db_conn_mock(
+            l2_rows=[{"id": "l2-99", "content": "会话摘要", "session_id": "s1", "created_at": "2024-01-01"}],
+        )
+        dreaming_engine.memory._connect = MagicMock(return_value=mock_conn)
+
+        await dreaming_engine.consolidate_l2_to_l3()
+
+        # UPDATE 语句必须包含 provenance_refs 参数且含有 l2-99
+        all_calls = mock_conn.execute.call_args_list
+        update_call = next((c for c in all_calls if "UPDATE memories" in str(c)), None)
+        assert update_call is not None, "应当触发 UPDATE memories"
+        sql = update_call[0][0]
+        assert "provenance_refs" in sql, "UPDATE SQL 必须包含 provenance_refs 列"
+        # args: (content, importance, last_accessed_at, updated_at, provenance_refs, id)
+        update_args = update_call[0][1]
+        import json
+        provenance = json.loads(update_args[4])
+        assert "l2-99" in provenance, f"l2-99 必须出现在 provenance_refs 中，实际: {provenance}"
+
+    @pytest.mark.asyncio
     async def test_consolidate_creates_new_when_no_similar(self, dreaming_engine):
         """无相似 L3 时：正常调用 store，facts_created=1，facts_deduplicated=0。"""
         dreaming_engine._find_similar_l3 = AsyncMock(return_value=None)
@@ -444,7 +484,8 @@ class TestSemanticDeduplication:
         all_calls = mock_conn.execute.call_args_list
         update_call = next((c for c in all_calls if "UPDATE memories" in str(c)), None)
         assert update_call is not None
-        update_args = update_call[0][1]  # positional args tuple: (content, importance, now, id)
+        # args: (content, importance, last_accessed_at, updated_at, provenance_refs, id)
+        update_args = update_call[0][1]
         assert update_args[0] == new_content  # merged = 新事实
         # 内容变更 → 重新嵌入
         dreaming_engine.memory._store_embedding.assert_awaited_once_with("existing-1", new_content)
@@ -476,6 +517,7 @@ class TestSemanticDeduplication:
         all_calls = mock_conn.execute.call_args_list
         update_call = next((c for c in all_calls if "UPDATE memories" in str(c)), None)
         assert update_call is not None
+        # args: (content, importance, last_accessed_at, updated_at, provenance_refs, id)
         update_args = update_call[0][1]
         assert update_args[0] == existing_content  # merged = 现有内容
         # 内容未变 → 无需重新嵌入

@@ -132,6 +132,51 @@ class TestUserProfileLoading:
         assert result == ""
 
     @pytest.mark.asyncio
+    async def test_error_path_suppresses_retry_storm(self, engine):
+        """错误路径将空结果写入缓存，TTL 内下次调用不再重试 DB。
+
+        修复前：error 时不更新缓存，每次对话都会重试失败的 DB 查询，
+        使 P95 延迟随并发数线性增长（retry storm）。
+        修复后：失败结果也进缓存，TTL 内只失败一次，其余命中缓存。
+        """
+        engine.user_profile_ttl = 60.0  # 足够长，确保缓存有效
+        engine.memory.query = AsyncMock(side_effect=RuntimeError("DB 不可用"))
+
+        # 第一次调用：出错，写入空缓存
+        first = await engine._load_user_profile()
+        assert first == ""
+        assert engine.memory.query.await_count == 1
+
+        # TTL 内第二次调用：应命中缓存，不再查 DB
+        second = await engine._load_user_profile()
+        assert second == ""
+        assert engine.memory.query.await_count == 1  # 仍为 1，未重试
+
+    @pytest.mark.asyncio
+    async def test_concurrent_requests_query_db_only_once(self, engine):
+        """高并发下多个协程同时发现缓存过期，只应查一次 DB（惊群防护）。"""
+        # 故意用 asyncio.sleep 模拟慢 DB，让并发协程都阻塞在 query 上
+        query_call_count = 0
+
+        async def slow_query(*args, **kwargs):
+            nonlocal query_call_count
+            query_call_count += 1
+            await asyncio.sleep(0.01)  # 模拟 10ms DB 延迟
+            return [{"content": "[preference] 用户喜欢简洁代码"}]
+
+        engine.memory.query = slow_query
+        engine._user_profile_cache = None
+        engine._user_profile_cached_at = 0.0
+
+        # 同时发起 5 个并发请求
+        results = await asyncio.gather(*[engine._load_user_profile() for _ in range(5)])
+
+        # 所有请求都应返回同一结果
+        assert all(r == results[0] for r in results)
+        # DB 只应被查一次（锁保护）
+        assert query_call_count == 1
+
+    @pytest.mark.asyncio
     async def test_profile_injected_into_system_prompt(self, engine):
         """user_profile_text 非空时，系统提示包含 '用户偏好与目标' 区块。"""
         profile_text = "- [preference] 用户喜欢简洁代码"

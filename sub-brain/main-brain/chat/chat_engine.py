@@ -352,6 +352,10 @@ class ChatEngine:
         self.user_profile_ttl: float = float(os.environ.get("WEBRAIN_USER_PROFILE_TTL", "60"))
         self._user_profile_cache: Optional[str] = None
         self._user_profile_cached_at: float = 0.0
+        # S8 并发锁：防止 TTL 到期时多个协程同时发出 DB 查询（惊群效应）。
+        # 注意：asyncio.Lock 必须在运行中的 event loop 内创建；此处设为 None，
+        # 在第一次 _load_user_profile 调用时（已在协程中）惰性初始化。
+        self._user_profile_lock: Optional[asyncio.Lock] = None
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -791,35 +795,50 @@ class ChatEngine:
         """S8: 持久化用户上下文 — 从 L3/L4 加载 [preference]/[goal] 事实注入系统提示。
 
         结果按 TTL 缓存，避免每轮对话都查 DB。失败时静默降级，返回空字符串。
+        锁防止 TTL 到期瞬间多个并发请求同时穿透缓存（惊群效应）。
         """
         if not self.user_profile_enabled:
             return ""
-        import time
         now = time.monotonic()
+        # 快路径：缓存有效，无需加锁
         if (
             self._user_profile_cache is not None
             and (now - self._user_profile_cached_at) < self.user_profile_ttl
         ):
             return self._user_profile_cache
-        try:
-            results = await self.memory.query({
-                "query": "[preference] [goal]",
-                "levels": ["L3", "L4"],
-                "limit": self.user_profile_top_k,
-                "use_rerank": False,  # profile 不需要 cross-encoder re-ranking
-            })
-            profile_facts = [
-                r["content"]
-                for r in results
-                if r.get("content", "").startswith(("[preference]", "[goal]"))
-            ]
-            profile_text = "\n".join([f"- {f}" for f in profile_facts]) if profile_facts else ""
-            self._user_profile_cache = profile_text
-            self._user_profile_cached_at = now
-            return profile_text
-        except Exception as e:
-            logger.debug("S8 用户画像加载失败（非致命）: %s", e)
-            return ""
+        # 慢路径：取锁后二次检查，防止多个协程同时穿透
+        # 惰性初始化：在第一次协程调用时创建，确保与运行中的 event loop 绑定
+        if self._user_profile_lock is None:
+            self._user_profile_lock = asyncio.Lock()
+        async with self._user_profile_lock:
+            now = time.monotonic()  # 重新采样：锁等待期间缓存可能已被另一协程填充
+            if (
+                self._user_profile_cache is not None
+                and (now - self._user_profile_cached_at) < self.user_profile_ttl
+            ):
+                return self._user_profile_cache
+            try:
+                results = await self.memory.query({
+                    "query": "[preference] [goal]",
+                    "levels": ["L3", "L4"],
+                    "limit": self.user_profile_top_k,
+                    "use_rerank": False,  # profile 不需要 cross-encoder re-ranking
+                })
+                profile_facts = [
+                    r["content"]
+                    for r in results
+                    if r.get("content", "").startswith(("[preference]", "[goal]"))
+                ]
+                profile_text = "\n".join([f"- {f}" for f in profile_facts]) if profile_facts else ""
+                self._user_profile_cache = profile_text
+                self._user_profile_cached_at = now
+                return profile_text
+            except Exception as e:
+                # 失败时将空结果写入缓存，防止短 TTL 内持续重试拖慢每轮对话
+                logger.warning("S8 用户画像加载失败（已降级为空，TTL 内不再重试）: %s", e)
+                self._user_profile_cache = ""
+                self._user_profile_cached_at = now
+                return ""
 
     async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "",
                                     plan_block: str = "", user_profile_text: str = "") -> str:

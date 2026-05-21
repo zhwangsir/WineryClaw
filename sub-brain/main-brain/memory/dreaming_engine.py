@@ -374,13 +374,20 @@ class DreamingEngine:
                     merged_content = content if len(content) > len(existing_content) else existing_content
                     new_importance = min(1.0, (similar.get("importance") or 0.7) + 0.05)
                     now_iso = datetime.now(timezone.utc).isoformat()
+                    # 幂等性修复：将此 l2_id 追加到已有行的 provenance_refs，
+                    # 使该 L2 在下次 consolidate_l2_to_l3 时被识别为"已处理"，
+                    # 防止全部被去重的 L2 行永远重新参与下一轮 Dreaming 循环。
+                    existing_refs = json.loads(similar.get("provenance_refs") or "[]")
+                    if l2_id not in existing_refs:
+                        existing_refs.append(l2_id)
                     with self.memory._connect() as conn:
                         conn.execute(
                             """UPDATE memories
-                               SET content=?, importance=?, last_accessed_at=?,
-                                   access_count=access_count+1
+                               SET content=?, importance=?, last_accessed_at=?, updated_at=?,
+                                   provenance_refs=?
                                WHERE id=?""",
-                            (merged_content, new_importance, now_iso, existing_id),
+                            (merged_content, new_importance, now_iso, now_iso,
+                             json.dumps(existing_refs), existing_id),
                         )
                         conn.commit()
                     # 内容变化时同步更新向量索引
