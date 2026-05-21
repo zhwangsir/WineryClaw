@@ -442,8 +442,17 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                       </div>
                     }
                   >
-                    <a
-                      href={`/wiki?file=${encodeURIComponent(s.doc_path)}`}
+                    <span
+                      // Q13.1 (2026-05-21) — previously rendered as <a
+                      // href="/wiki?file=…">, but /wiki has no concept of
+                      // an absolute file path on the RAG corpus, so the
+                      // click navigated away from the chat to a generic
+                      // wiki page that ignored the query. The Tooltip
+                      // already shows filename + chunk # + similarity
+                      // score on hover, which is the complete citation
+                      // context — no navigation needed.
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => e.stopPropagation()}
                       style={{
                         fontSize: 11,
@@ -460,10 +469,11 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                         textAlign: "center",
                         cursor: "help",
                         transition: "background 120ms, border-color 120ms",
+                        userSelect: "none",
                       }}
                     >
                       [{i + 1}]
-                    </a>
+                    </span>
                   </Tooltip>
                 );
               })}

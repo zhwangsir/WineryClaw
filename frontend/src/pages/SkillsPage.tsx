@@ -132,7 +132,7 @@ export default function SkillsPage() {
 
   const columns = [
     {
-      title: "Name",
+      title: "名称",
       dataIndex: "name",
       key: "name",
       render: (_: string, s: Skill) => (
@@ -143,25 +143,25 @@ export default function SkillsPage() {
       ),
     },
     {
-      title: "Language",
+      title: "语言",
       dataIndex: "language",
       key: "language",
       width: 100,
       render: (v: string) => <Tag>{v}</Tag>,
     },
     {
-      title: "Usage",
+      title: "使用",
       key: "usage",
       width: 120,
       render: (_: unknown, s: Skill) => (
         <div style={{ fontSize: 12 }}>
-          <div>{s.usageCount} invocations</div>
-          <div style={{ color: "var(--c-text-3)" }}>{(s.successRate * 100).toFixed(0)}% success</div>
+          <div>{s.usageCount} 次调用</div>
+          <div style={{ color: "var(--c-text-3)" }}>{(s.successRate * 100).toFixed(0)}% 成功</div>
         </div>
       ),
     },
     {
-      title: "Triggers",
+      title: "触发词",
       key: "triggers",
       render: (_: unknown, s: Skill) => {
         // Q14.4 (2026-05-21) — `__never-match__` is an internal sentinel
@@ -182,20 +182,20 @@ export default function SkillsPage() {
       },
     },
     {
-      title: "Actions",
+      title: "操作",
       key: "actions",
       width: 160,
       render: (_: unknown, s: Skill) => (
         <Space>
           <Button size="small" icon={<PlayCircleOutlined />} onClick={() => openInvoke(s)}>
-            Run
+            运行
           </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(s)}>
-            Edit
+            编辑
           </Button>
-          <Popconfirm title="Delete this skill?" onConfirm={() => handleDelete(s.id)}>
+          <Popconfirm title="确认删除此技能？" onConfirm={() => handleDelete(s.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>
-              Del
+              删除
             </Button>
           </Popconfirm>
         </Space>
@@ -209,31 +209,31 @@ export default function SkillsPage() {
         <div style={{ display: "flex", gap: 24 }}>
           {stats && (
             <>
-              <Statistic title="Total Skills" value={stats.totalSkills} />
-              <Statistic title="Invocations" value={stats.totalInvocations} />
-              <Statistic title="Success Rate" value={(stats.averageSuccessRate * 100).toFixed(0)} suffix="%" />
+              <Statistic title="技能总数" value={stats.totalSkills} />
+              <Statistic title="调用次数" value={stats.totalInvocations} />
+              <Statistic title="成功率" value={(stats.averageSuccessRate * 100).toFixed(0)} suffix="%" />
             </>
           )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
-            Refresh
+            刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New Skill
+            新建技能
           </Button>
         </div>
       </div>
 
       {skills.length === 0 && !loading ? (
-        <EmptyState description="No skills registered" />
+        <EmptyState description="暂无注册技能" />
       ) : (
         <Table dataSource={skills} columns={columns} rowKey="id" loading={loading} pagination={false} />
       )}
 
       {/* Create / Edit Drawer */}
       <Drawer
-        title={editingSkill ? "Edit Skill" : "Create Skill"}
+        title={editingSkill ? "编辑技能" : "创建新技能"}
         open={drawerOpen}
         onClose={() => {
           setDrawerOpen(false);
@@ -277,14 +277,14 @@ export default function SkillsPage() {
 
       {/* Invoke Drawer */}
       <Drawer
-        title="Invoke Skill"
+        title="调用技能"
         open={invokeModalOpen}
         onClose={() => setInvokeModalOpen(false)}
         width={480}
         destroyOnClose
       >
         <Form layout="vertical">
-          <Form.Item label="Parameters (JSON)">
+          <Form.Item label="参数 (JSON)">
             <TextArea
               rows={4}
               value={invokeParams}
@@ -293,7 +293,7 @@ export default function SkillsPage() {
             />
           </Form.Item>
           <Button type="primary" onClick={handleInvoke} loading={invokeLoading}>
-            Run
+            立即执行
           </Button>
           {invokeResult && (
             <pre style={{ marginTop: 16, padding: 12, background: "var(--c-hover)", borderRadius: 8, fontSize: 12 }}>

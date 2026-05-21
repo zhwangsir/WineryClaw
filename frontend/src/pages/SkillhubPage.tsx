@@ -104,7 +104,7 @@ export default function SkillhubPage() {
             key: "marketplace",
             label: (
               <span>
-                <AppstoreAddOutlined /> Marketplace
+                <AppstoreAddOutlined /> 市场
               </span>
             ),
             children: (
@@ -127,7 +127,7 @@ export default function SkillhubPage() {
             key: "installed",
             label: (
               <span>
-                <CheckOutlined /> Installed <Tag style={{ marginLeft: 4 }}>{installed.length}</Tag>
+                <CheckOutlined /> 已安装 <Tag style={{ marginLeft: 4 }}>{installed.length}</Tag>
               </span>
             ),
             children: (
@@ -143,7 +143,7 @@ export default function SkillhubPage() {
             key: "improvements",
             label: (
               <span>
-                <ThunderboltOutlined /> Improvements{" "}
+                <ThunderboltOutlined /> 改进{" "}
                 <Tag style={{ marginLeft: 4 }} color={candidates.length > 0 ? "orange" : undefined}>
                   {candidates.length}
                 </Tag>
@@ -169,7 +169,7 @@ export default function SkillhubPage() {
             key: "drafts",
             label: (
               <span>
-                <FileTextOutlined /> Drafts{" "}
+                <FileTextOutlined /> 草稿{" "}
                 <Tag style={{ marginLeft: 4 }} color={drafts.length > 0 ? "blue" : undefined}>
                   {drafts.length}
                 </Tag>

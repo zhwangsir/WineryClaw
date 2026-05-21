@@ -47,9 +47,9 @@ describe("SkillsPage", () => {
   it("renders stats", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    expect(screen.getByText("Total Skills")).toBeInTheDocument();
-    expect(screen.getByText("Invocations")).toBeInTheDocument();
-    expect(screen.getByText("Success Rate")).toBeInTheDocument();
+    expect(screen.getByText("技能总数")).toBeInTheDocument();
+    expect(screen.getByText("调用次数")).toBeInTheDocument();
+    expect(screen.getByText("成功率")).toBeInTheDocument();
   });
 
   it("shows empty state when no skills", async () => {
@@ -57,21 +57,23 @@ describe("SkillsPage", () => {
     vi.mocked(skillsApi.stats).mockResolvedValue({ totalSkills: 0, totalInvocations: 0, averageSuccessRate: 0 });
     render(<SkillsPage />);
     await waitFor(() => {
-      expect(screen.getByText("No skills registered")).toBeInTheDocument();
+      expect(screen.getByText("暂无注册技能")).toBeInTheDocument();
     });
   });
 
   it("opens create drawer", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("New Skill"));
-    expect(screen.getByText("Create Skill")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("新建技能"));
+    // Drawer title is distinct from button label so this asserts the
+    // drawer actually opened (vs just finding the button itself).
+    expect(screen.getByText("创建新技能")).toBeInTheDocument();
   });
 
   it("submits create form", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("New Skill"));
+    fireEvent.click(screen.getByText("新建技能"));
 
     const nameInput = document.querySelector('input[placeholder*="summarize_text"]') as HTMLInputElement;
     if (nameInput) fireEvent.change(nameInput, { target: { value: "NewSkill" } });
@@ -93,8 +95,8 @@ describe("SkillsPage", () => {
   it("opens edit drawer with prefilled form", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("Edit"));
-    expect(screen.getByText("Edit Skill")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("编辑"));
+    expect(screen.getByText("编辑技能")).toBeInTheDocument();
 
     const nameInput = document.querySelector('input[value="Summarize"]') as HTMLInputElement;
     expect(nameInput).toBeInTheDocument();
@@ -103,7 +105,7 @@ describe("SkillsPage", () => {
   it("submits edit form", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(screen.getByText("编辑"));
 
     const submitBtn = screen.getByRole("button", { name: /Update/i });
     fireEvent.click(submitBtn);
@@ -116,7 +118,7 @@ describe("SkillsPage", () => {
   it("deletes a skill", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    const deleteBtn = screen.getByRole("button", { name: /Del/i });
+    const deleteBtn = screen.getByRole("button", { name: /删除/i });
     fireEvent.click(deleteBtn);
     await waitFor(() => {
       expect(skillsApi.delete).toHaveBeenCalledWith("sk1");
@@ -126,16 +128,16 @@ describe("SkillsPage", () => {
   it("opens invoke drawer", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("Run"));
-    expect(screen.getByText("Invoke Skill")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("运行"));
+    expect(screen.getByText("调用技能")).toBeInTheDocument();
   });
 
   it("invokes skill with result", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("Run"));
+    fireEvent.click(screen.getByText("运行"));
 
-    const runBtn = screen.getByRole("button", { name: /^Run$/i });
+    const runBtn = screen.getByRole("button", { name: "立即执行" });
     fireEvent.click(runBtn);
 
     await waitFor(() => {
@@ -147,12 +149,12 @@ describe("SkillsPage", () => {
   it("invokes skill with invalid JSON params", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("Run"));
+    fireEvent.click(screen.getByText("运行"));
 
     const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
     if (textarea) fireEvent.change(textarea, { target: { value: "not json" } });
 
-    const runBtn = screen.getByRole("button", { name: /^Run$/i });
+    const runBtn = screen.getByRole("button", { name: "立即执行" });
     fireEvent.click(runBtn);
 
     await waitFor(() => {
@@ -171,7 +173,7 @@ describe("SkillsPage", () => {
   it("refreshes data", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("Refresh"));
+    fireEvent.click(screen.getByText("刷新"));
     expect(skillsApi.list).toHaveBeenCalledTimes(2);
   });
 
@@ -179,7 +181,7 @@ describe("SkillsPage", () => {
     vi.mocked(skillsApi.create).mockRejectedValue(new Error("create failed"));
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("New Skill"));
+    fireEvent.click(screen.getByText("新建技能"));
 
     const inputs = document.querySelectorAll("input");
     const nameInput = Array.from(inputs).find(i => i.placeholder?.includes("summarize_text")) as HTMLInputElement;
@@ -203,7 +205,7 @@ describe("SkillsPage", () => {
     vi.mocked(skillsApi.delete).mockRejectedValue(new Error("delete failed"));
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    const deleteBtn = screen.getByRole("button", { name: /Del/i });
+    const deleteBtn = screen.getByRole("button", { name: /删除/i });
     fireEvent.click(deleteBtn);
     await waitFor(() => {
       expect(skillsApi.delete).toHaveBeenCalledWith("sk1");
@@ -214,9 +216,9 @@ describe("SkillsPage", () => {
     vi.mocked(skillsApi.invoke).mockRejectedValue(new Error("invoke failed"));
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    fireEvent.click(screen.getByText("Run"));
+    fireEvent.click(screen.getByText("运行"));
 
-    const runBtn = screen.getByRole("button", { name: /^Run$/i });
+    const runBtn = screen.getByRole("button", { name: "立即执行" });
     fireEvent.click(runBtn);
 
     await waitFor(() => {
