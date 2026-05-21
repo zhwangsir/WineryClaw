@@ -137,7 +137,7 @@ class TestContextCompression:
 
     @pytest.mark.asyncio
     async def test_structure_preserved_after_compression(self, engine):
-        """压缩后的列表结构：[sys, user, summary_user, summary_assistant, *recent]"""
+        """压缩后的列表结构：[sys, user, system(summary), *recent]"""
         engine._chat_completion = AsyncMock(
             return_value=_make_llm_response("压缩摘要")
         )
@@ -148,10 +148,9 @@ class TestContextCompression:
         result = await engine._compress_messages(messages)
         assert result[0]["role"] == "system"
         assert result[1]["role"] == "user"
-        # 压缩占位
-        assert result[2]["role"] == "user"
+        # 压缩摘要以 system 角色注入（避免 user→user 角色交替错误）
+        assert result[2]["role"] == "system"
         assert "工具调用历史摘要" in result[2]["content"]
-        assert result[3]["role"] == "assistant"
 
 
 # ---------------------------------------------------------------------------

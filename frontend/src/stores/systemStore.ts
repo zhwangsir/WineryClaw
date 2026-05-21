@@ -106,7 +106,7 @@ export const useSystemStore = create<SystemState>((set, get) => ({
           .map((i) => ({
             id: i.id,
             type: (i.type as Notification["type"]) ?? "info",
-            title: `💡 ${i.title}`,
+            title: i.title,
             message: i.content,
             read: false,
             createdAt: i.createdAt,
@@ -120,11 +120,11 @@ export const useSystemStore = create<SystemState>((set, get) => ({
   },
 
   startInsightPolling: () => {
-    const { _insightPollTimer, fetchProactiveInsights } = get();
-    if (_insightPollTimer) return; // 已在运行
+    if (get()._insightPollTimer) return; // 已在运行
     // 立即拉一次，然后按间隔轮询
-    fetchProactiveInsights();
-    const timer = setInterval(fetchProactiveInsights, INSIGHT_POLL_MS);
+    get().fetchProactiveInsights();
+    // 使用 () => get().fetchProactiveInsights() 避免捕获旧引用（防御性模式）
+    const timer = setInterval(() => get().fetchProactiveInsights(), INSIGHT_POLL_MS);
     set({ _insightPollTimer: timer });
   },
 

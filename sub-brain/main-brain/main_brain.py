@@ -1441,13 +1441,17 @@ async def proactive_insights():
 
 @app.delete("/proactive/insights/{insight_id}")
 async def mark_proactive_insight_read(insight_id: str):
-    """将指定洞察标记为已读（前端 UI 使用）。"""
+    """将指定洞察标记为已读（前端 UI 使用）。
+
+    直接修改 deque 内部 dict 的 "read" 字段。asyncio 单线程保证此操作无数据竞争
+    （所有并发请求在同一事件循环中串行调度）。若未来引入线程执行器，需加 Lock。
+    """
     dreaming = _state.get("dreaming")
     if not dreaming:
         return {"ok": False, "error": "Dreaming not available"}
     for item in dreaming._insight_buffer:
         if item.get("id") == insight_id:
-            item["read"] = True
+            item["read"] = True   # asyncio-safe: 单事件循环，无并发写竞争
             return {"ok": True}
     return {"ok": False, "error": "Insight not found"}
 

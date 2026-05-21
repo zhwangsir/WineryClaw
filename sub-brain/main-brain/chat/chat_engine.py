@@ -1182,7 +1182,8 @@ class ChatEngine:
         if not self.context_compress_enabled:
             return messages
         keep = self.context_compress_keep_recent
-        if len(messages) <= self.context_compress_threshold:
+        # 长度不足 2 时无法正常索引 [0]/[1]，直接返回原列表（防御性检查）
+        if len(messages) < 2 or len(messages) <= self.context_compress_threshold:
             return messages
 
         system_msg = messages[0]
@@ -1210,11 +1211,11 @@ class ChatEngine:
             summary = result["choices"][0]["message"].get("content", "").strip()
             if not summary:
                 return messages
+            # 注意：摘要以 system 角色注入，避免连续 user→user 引发部分模型的角色交替错误
             compressed = [
                 system_msg,
                 user_msg,
-                {"role": "user", "content": f"[工具调用历史摘要]\n{summary}"},
-                {"role": "assistant", "content": "已了解工具调用历史，继续处理。"},
+                {"role": "system", "content": f"[工具调用历史摘要]\n{summary}"},
             ] + recent
             logger.debug(
                 "S5 上下文压缩: %d 条消息 → %d 条", len(messages), len(compressed)
