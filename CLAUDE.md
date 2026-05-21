@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-21, post functional-deep):
-> **450** sub-brain unit + 1216 frontend unit + **408** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-21, post Round S S5+S6):
+> **450** sub-brain unit + 1216 frontend unit + **421** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
