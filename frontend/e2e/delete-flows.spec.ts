@@ -140,7 +140,7 @@ test.describe("Delete flows", () => {
         contentType: "application/json",
         body: JSON.stringify({
           workspaces: [
-            { id: "ws-e2e-1", name: "E2E Workspace", description: "Test workspace", createdAt: "2024-01-01T00:00:00Z" },
+            { workspaceId: "ws-e2e-1", name: "E2E Workspace", description: "Test workspace", createdAt: "2024-01-01T00:00:00Z" },
           ],
         }),
       });
