@@ -47,20 +47,22 @@ export default function ConfigPage() {
           >
             <Table
               dataSource={workspaces}
-              rowKey="id"
+              rowKey="workspaceId"
               loading={loading}
               pagination={false}
               columns={[
-                { title: "ID", dataIndex: "id", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span> },
-                { title: "名称", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-                { title: "描述", dataIndex: "description", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span> },
-                { title: "创建时间", dataIndex: "createdAt", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span> },
+                // Q14.8 — guard `v` against undefined; the backend MAY omit
+                // optional fields. Same defensive pattern below for createdAt.
+                { title: "ID", dataIndex: "workspaceId", render: (v?: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v ? `${v.slice(0, 12)}...` : "—"}</span> },
+                { title: "名称", dataIndex: "name", render: (v?: string) => <span style={{ fontWeight: 500 }}>{v || "—"}</span> },
+                { title: "描述", dataIndex: "description", render: (v?: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span> },
+                { title: "创建时间", dataIndex: "createdAt", render: (v?: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v ? new Date(v).toLocaleString("zh-CN") : "—"}</span> },
                 {
                   title: "操作",
                   key: "action",
-                  render: (_: unknown, record: { id: string; name: string }) => (
+                  render: (_: unknown, record: { workspaceId: string; name: string }) => (
                     <div style={{ display: "flex", gap: 8 }}>
-                      <Button size="small" onClick={() => openAgents(record.id)}>查看代理</Button>
+                      <Button size="small" onClick={() => openAgents(record.workspaceId)}>查看代理</Button>
                       <Button
                         type="text"
                         size="small"
@@ -74,7 +76,7 @@ export default function ConfigPage() {
                             okText: "删除",
                             okType: "danger",
                             cancelText: "取消",
-                            onOk: () => deleteWorkspace(record.id),
+                            onOk: () => deleteWorkspace(record.workspaceId),
                           });
                         }}
                       >
@@ -95,13 +97,13 @@ export default function ConfigPage() {
             >
               <Table
                 dataSource={agents}
-                rowKey="id"
+                rowKey="agentId"
                 size="small"
                 pagination={false}
                 columns={[
-                  { title: "ID", dataIndex: "id", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span> },
-                  { title: "名称", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-                  { title: "工作空间", dataIndex: "workspaceId", render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag> },
+                  { title: "ID", dataIndex: "agentId", render: (v?: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v ? `${v.slice(0, 12)}...` : "—"}</span> },
+                  { title: "名称", dataIndex: "name", render: (v?: string) => <span style={{ fontWeight: 500 }}>{v || "—"}</span> },
+                  { title: "工作空间", dataIndex: "workspaceId", render: (v?: string) => <Tag style={{ fontSize: 11 }}>{v || "—"}</Tag> },
                 ]}
               />
             </Card>

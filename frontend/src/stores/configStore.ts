@@ -139,6 +139,6 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set,
     "workspaces",
     configApi.deleteWorkspace,
-    { successMsg: "工作空间已删除", errorMsg: "删除工作空间失败" }
+    { successMsg: "工作空间已删除", errorMsg: "删除工作空间失败", idKey: "workspaceId" }
   ),
 }));

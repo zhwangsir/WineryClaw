@@ -1,15 +1,20 @@
 import { api } from "./client";
 import type { ModelConfig, GlobalConfig } from "./types";
 
+// Q14.8 (2026-05-21) — types realigned to what sub-brain actually returns
+// from /api/config/workspaces (see sub-brain/src/config/layered-config.ts:
+// WorkspaceConfig.workspaceId / AgentConfig.agentId). The previous shape
+// (`id`, `createdAt`) was aspirational and never matched runtime, which
+// caused ConfigPage's `v.slice(0, 12)` to crash on undefined.
 export interface Workspace {
-  id: string;
+  workspaceId: string;
   name: string;
   description?: string;
-  createdAt: string;
+  createdAt?: string; // optional — sub-brain doesn't currently populate it
 }
 
 export interface AgentConfig {
-  id: string;
+  agentId: string;
   name: string;
   workspaceId: string;
   modelConfig?: Record<string, unknown>;
