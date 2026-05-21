@@ -43,7 +43,7 @@ export default function IdentityPage() {
       {users.length === 0 ? (
         <Empty description="暂无用户" />
       ) : (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={users}
             rowKey="id"

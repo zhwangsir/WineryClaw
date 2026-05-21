@@ -48,7 +48,7 @@ export default function DokobotPage() {
         <Card
           title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}><GlobalOutlined style={{ marginRight: 8 }} />浏览网页</span>}
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-          bodyStyle={{ padding: 24 }}
+          styles={{ body: { padding: 24 } }}
         >
           <Input placeholder="URL" value={url} onChange={(e) => setUrl(e.target.value)} style={{ marginBottom: 12 }} />
           <Button type="primary" icon={<GlobalOutlined />} onClick={handleBrowse} disabled={!available}>浏览</Button>
@@ -57,7 +57,7 @@ export default function DokobotPage() {
         <Card
           title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}><SearchOutlined style={{ marginRight: 8 }} />搜索</span>}
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-          bodyStyle={{ padding: 24 }}
+          styles={{ body: { padding: 24 } }}
         >
           <Input placeholder="搜索关键词" value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginBottom: 12 }} />
           <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch} disabled={!available}>搜索</Button>
@@ -66,7 +66,7 @@ export default function DokobotPage() {
         <Card
           title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}><CameraOutlined style={{ marginRight: 8 }} />截图</span>}
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-          bodyStyle={{ padding: 24 }}
+          styles={{ body: { padding: 24 } }}
         >
           <Input placeholder="URL" value={url} onChange={(e) => setUrl(e.target.value)} style={{ marginBottom: 12 }} />
           <Button icon={<CameraOutlined />} onClick={handleScreenshot} disabled={!available}>截图</Button>
@@ -74,7 +74,7 @@ export default function DokobotPage() {
       </div>
 
       {screenshotUrl && (
-        <Card style={{ marginBottom: 32, borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ marginBottom: 32, borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Image src={screenshotUrl} alt="screenshot" style={{ borderRadius: 8, maxWidth: "100%" }} />
         </Card>
       )}
@@ -83,7 +83,7 @@ export default function DokobotPage() {
         <Card
           title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>结果</span>}
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-          bodyStyle={{ padding: 24 }}
+          styles={{ body: { padding: 24 } }}
         >
           <pre style={{ background: "var(--c-hover)", padding: 16, borderRadius: 8, fontSize: 12, overflow: "auto", maxHeight: 400 }}>
             {JSON.stringify(result, null, 2)}

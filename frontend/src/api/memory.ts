@@ -29,6 +29,9 @@ export const memoryApi = {
     ),
   /** Fetch a memory with one-level provenance lineage. */
   lineage: (id: string) => api.get<MemoryLineage>(`/brain/memory/${id}`),
-  /** Manually trigger the dreaming consolidation cycle. */
-  runDreaming: () => api.post<{ phases: unknown; timestamp: string }>("/brain/dreaming/run", {}),
+  /** Manually trigger the dreaming consolidation cycle.
+   *  Uses a 120s per-request timeout: LLM calls on L2 memories can exceed the
+   *  global 60s default when many rows need consolidation. */
+  runDreaming: () =>
+    api.post<{ phases: unknown; timestamp: string }>("/brain/dreaming/run", {}, { timeout: 120000 }),
 };

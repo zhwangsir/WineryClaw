@@ -42,7 +42,7 @@ export default function BrowserPage() {
           <Card
             title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>会话</span>}
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", marginBottom: 24 }}
-            bodyStyle={{ padding: 20 }}
+            styles={{ body: { padding: 20 } }}
             extra={
               <Button size="small" icon={<PlusOutlined />} onClick={() => newPage()}>新页面</Button>
             }
@@ -70,7 +70,7 @@ export default function BrowserPage() {
             <Card
               title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>控制: {session.id.slice(0, 12)}...</span>}
               style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-              bodyStyle={{ padding: 20 }}
+              styles={{ body: { padding: 20 } }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <div style={{ display: "flex", gap: 8 }}>
@@ -96,7 +96,7 @@ export default function BrowserPage() {
           <Card
             title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>截图</span>}
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", height: "100%" }}
-            bodyStyle={{ padding: 20 }}
+            styles={{ body: { padding: 20 } }}
           >
             {screenshotUrl ? (
               <Image src={screenshotUrl} alt="screenshot" style={{ borderRadius: 8, width: "100%" }} />

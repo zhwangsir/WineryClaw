@@ -137,17 +137,17 @@ export default function ChannelsPage() {
             <List.Item>
               <Card
                 style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-                bodyStyle={{ padding: 32 }}
+                styles={{ body: { padding: 32 }, header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" } }}
                 title={
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <StatusBadge status={ch.connected ? "connected" : "disconnected"} />
                     <span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{ch.name}</span>
                   </div>
                 }
-                headStyle={{ padding: "20px 24px", borderBottom: "1px solid var(--c-border)" }}
                 actions={[
                   ch.connected ? (
                     <Button
+                      key="toggle"
                       type="text"
                       size="small"
                       icon={<DisconnectOutlined />}
@@ -158,6 +158,7 @@ export default function ChannelsPage() {
                     </Button>
                   ) : (
                     <Button
+                      key="toggle"
                       type="text"
                       size="small"
                       icon={<LinkOutlined />}
@@ -168,6 +169,7 @@ export default function ChannelsPage() {
                     </Button>
                   ),
                   <Button
+                    key="messages"
                     type="text"
                     size="small"
                     icon={<MessageOutlined />}
@@ -177,6 +179,7 @@ export default function ChannelsPage() {
                     消息
                   </Button>,
                   <Button
+                    key="delete"
                     type="text"
                     size="small"
                     danger

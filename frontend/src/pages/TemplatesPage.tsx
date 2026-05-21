@@ -77,16 +77,15 @@ export default function TemplatesPage() {
             <Card
               key={t.id}
               style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-              bodyStyle={{ padding: 24 }}
+              styles={{ body: { padding: 24 }, header: { padding: "16px 20px", borderBottom: "1px solid var(--c-border)" } }}
               title={
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <FolderOutlined style={{ color: "var(--c-text-2)" }} />
                   <span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{t.name}</span>
                 </div>
               }
-              headStyle={{ padding: "16px 20px", borderBottom: "1px solid var(--c-border)" }}
               actions={[
-                <Tooltip title="实例化">
+                <Tooltip key="instantiate" title="实例化">
                   <Button
                     type="text"
                     size="small"
@@ -97,7 +96,7 @@ export default function TemplatesPage() {
                     实例化
                   </Button>
                 </Tooltip>,
-                <Popconfirm title="确认删除" description={`删除模板 "${t.name}"？`} onConfirm={() => deleteTemplate(t.id)} okText="删除" cancelText="取消">
+                <Popconfirm key="delete" title="确认删除" description={`删除模板 "${t.name}"？`} onConfirm={() => deleteTemplate(t.id)} okText="删除" cancelText="取消">
                   <Button type="text" size="small" danger icon={<DeleteOutlined />}>删除</Button>
                 </Popconfirm>,
               ]}

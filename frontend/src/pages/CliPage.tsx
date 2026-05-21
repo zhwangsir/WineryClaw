@@ -43,7 +43,7 @@ export default function CliPage() {
     >
       <Card
         style={{ borderRadius: 12, border: "1px solid var(--c-border)", height: "calc(100vh - 240px)", display: "flex", flexDirection: "column" }}
-        bodyStyle={{ padding: 0, display: "flex", flexDirection: "column", height: "100%" }}
+        styles={{ body: { padding: 0, display: "flex", flexDirection: "column", height: "100%" } }}
       >
         {/* Messages */}
         <div

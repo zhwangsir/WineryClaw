@@ -55,7 +55,7 @@ export default function ConfigPage() {
               </span>
             }
             style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-            bodyStyle={{ padding: 24 }}
+            styles={{ body: { padding: 24 } }}
           >
             <Table
               dataSource={workspaces}
@@ -129,7 +129,7 @@ export default function ConfigPage() {
             <Card
               title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>代理配置</span>}
               style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-              bodyStyle={{ padding: 24 }}
+              styles={{ body: { padding: 24 } }}
             >
               <Table
                 dataSource={agents}

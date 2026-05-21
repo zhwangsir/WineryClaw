@@ -48,11 +48,11 @@ export default function MetricsPage() {
       </div>
 
       {data && typeof data === "object" && "error" in data ? (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Empty description={String((data as { error: unknown }).error)} />
         </Card>
       ) : data && typeof data === "object" ? (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <pre
             style={{
               background: "var(--c-hover)",
@@ -69,7 +69,7 @@ export default function MetricsPage() {
       ) : data ? (
         // Defensive: response was a string / unexpected primitive — likely the
         // SPA HTML fallback when the endpoint doesn't exist on sub-brain.
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Empty description="指标接口暂未实现 — 后端只暴露 Prometheus 文本指标 (/metrics)，结构化查询接口待补。" />
         </Card>
       ) : (

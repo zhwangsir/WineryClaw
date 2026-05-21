@@ -40,7 +40,13 @@ describe("PluginsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(pluginsApi.list).mockResolvedValue([
-      { id: "plugin-1", name: "Test Plugin", version: "1.0.0", enabled: true, manifest: { permissions: ["read", "write"] } },
+      {
+        id: "plugin-1",
+        name: "Test Plugin",
+        version: "1.0.0",
+        enabled: true,
+        manifest: { permissions: ["read", "write"] },
+      },
       { id: "plugin-2", name: "Other Plugin", version: "2.0.0", enabled: false, manifest: { permissions: [] } },
     ]);
   });
@@ -114,19 +120,11 @@ describe("PluginsPage", () => {
     }
   });
 
-  // Skipped post-Q14 i18n polish: the visible label changed from "Unload"
-  // → "卸载". After the change, neither getByRole({name}) nor
-  // getAllByText("卸载") nor textContent.trim() match in jsdom — even
-  // though `grep` confirms the string IS rendered. Suspect AntD's
-  // <Button> wraps text in a span with surrounding zero-width chars that
-  // jsdom's text matcher doesn't normalise the same way as a real
-  // browser. The unload flow itself is browser-verified during the Q14
-  // sweep. Re-enable when we either upgrade AntD or add data-testid hooks.
-  it.skip("unloads a plugin", async () => {
+  it("unloads a plugin", async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("Test Plugin")).toBeInTheDocument());
-    const unloadBtn = screen.getAllByRole("button").find((b) => b.textContent?.includes("卸载"));
-    if (unloadBtn) fireEvent.click(unloadBtn);
+    const unloadBtn = screen.getByTestId("unload-plugin-1");
+    fireEvent.click(unloadBtn);
     await waitFor(() => {
       expect(pluginsApi.unload).toHaveBeenCalledWith("plugin-1");
     });
@@ -164,13 +162,12 @@ describe("PluginsPage", () => {
     }
   });
 
-  // Skipped — same jsdom matcher quirk as "unloads a plugin" above.
-  it.skip("shows error when unload fails", async () => {
+  it("shows error when unload fails", async () => {
     vi.mocked(pluginsApi.unload).mockRejectedValue(new Error("unload failed"));
     renderPage();
     await waitFor(() => expect(screen.getByText("Test Plugin")).toBeInTheDocument());
-    const unloadBtn = screen.getAllByRole("button").find((b) => b.textContent?.includes("卸载"));
-    if (unloadBtn) fireEvent.click(unloadBtn);
+    const unloadBtn = screen.getByTestId("unload-plugin-1");
+    fireEvent.click(unloadBtn);
     await waitFor(() => {
       expect(pluginsApi.unload).toHaveBeenCalledWith("plugin-1");
     });

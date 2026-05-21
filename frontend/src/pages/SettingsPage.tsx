@@ -13,7 +13,7 @@ export default function SettingsPage() {
     <PageShell title="设置" subtitle="系统配置与偏好管理" icon={<SettingOutlined />}>
       <Card
         style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-        bodyStyle={{ padding: "32px 32px 24px" }}
+        styles={{ body: { padding: "32px 32px 24px" } }}
       >
         <Tabs
           items={[

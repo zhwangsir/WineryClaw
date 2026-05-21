@@ -92,6 +92,6 @@ describe("memory API", () => {
   it("runDreaming posts to /dreaming/run", async () => {
     vi.mocked(api.post).mockResolvedValue({});
     await memoryApi.runDreaming();
-    expect(api.post).toHaveBeenCalledWith("/brain/dreaming/run", {});
+    expect(api.post).toHaveBeenCalledWith("/brain/dreaming/run", {}, { timeout: 120000 });
   });
 });

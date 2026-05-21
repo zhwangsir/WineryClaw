@@ -58,7 +58,7 @@ export default function ProposalsPage() {
       {proposals.length === 0 ? (
         <Empty description="暂无提案" />
       ) : (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={proposals}
             rowKey="id"

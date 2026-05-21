@@ -21,7 +21,7 @@ export default function UploadsPage() {
     >
       <Card
         style={{ borderRadius: 12, border: "1px solid var(--c-border)", maxWidth: 600 }}
-        bodyStyle={{ padding: 32 }}
+        styles={{ body: { padding: 32 } }}
       >
         <Upload
           fileList={fileList}

@@ -93,7 +93,7 @@ export default function PluginsPage() {
       width: 120,
       render: (_: unknown, p: Plugin) => (
         <div style={{ display: "flex", gap: 8 }}>
-          <Button danger onClick={() => handleUnload(p)}>
+          <Button danger data-testid={`unload-${p.id}`} onClick={() => handleUnload(p)}>
             卸载
           </Button>
           <Button

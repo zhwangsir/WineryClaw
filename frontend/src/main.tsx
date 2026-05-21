@@ -27,57 +27,57 @@ import "./i18n";
  */
 function buildNotionTheme(isDark: boolean) {
   return {
-  algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-  token: {
-    colorPrimary: isDark ? "#5b8def" : "#2383e2",
-    colorInfo: isDark ? "#5b8def" : "#2383e2",
-    colorText: isDark ? "#e6e6e3" : "#37352f",
-    colorTextSecondary: isDark ? "rgba(255, 255, 255, 0.7)" : "rgba(55, 53, 47, 0.65)",
-    colorBorder: isDark ? "rgba(255, 255, 255, 0.16)" : "rgba(55, 53, 47, 0.16)",
-    colorBorderSecondary: isDark ? "rgba(255, 255, 255, 0.09)" : "rgba(55, 53, 47, 0.09)",
-    colorBgContainer: isDark ? "#191919" : "#ffffff",
-    colorBgElevated: isDark ? "#202020" : "#ffffff",
-    colorBgLayout: isDark ? "#191919" : "#ffffff",
-    borderRadius: 6,
-    borderRadiusLG: 8,
-    borderRadiusSM: 4,
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif',
-    fontSize: 14,
-    controlHeight: 32,
-    wireframe: false,
-  },
-  components: {
-    Button: {
-      controlHeight: 32,
-      paddingContentHorizontal: 12,
-    },
-    Tag: {
+    algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+    token: {
+      colorPrimary: isDark ? "#5b8def" : "#2383e2",
+      colorInfo: isDark ? "#5b8def" : "#2383e2",
+      colorText: isDark ? "#e6e6e3" : "#37352f",
+      colorTextSecondary: isDark ? "rgba(255, 255, 255, 0.7)" : "rgba(55, 53, 47, 0.65)",
+      colorBorder: isDark ? "rgba(255, 255, 255, 0.16)" : "rgba(55, 53, 47, 0.16)",
+      colorBorderSecondary: isDark ? "rgba(255, 255, 255, 0.09)" : "rgba(55, 53, 47, 0.09)",
+      colorBgContainer: isDark ? "#191919" : "#ffffff",
+      colorBgElevated: isDark ? "#202020" : "#ffffff",
+      colorBgLayout: isDark ? "#191919" : "#ffffff",
+      borderRadius: 6,
+      borderRadiusLG: 8,
       borderRadiusSM: 4,
+      fontFamily:
+        '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif',
+      fontSize: 14,
+      controlHeight: 32,
+      wireframe: false,
     },
-    Modal: {
-      borderRadiusLG: 10,
-      // Round Q1.1 fix — dark-mode modal body was indistinguishable
-      // from the page background (both ~#191919). Force a slightly
-      // elevated surface + visible border so users can see the panel.
-      contentBg: isDark ? "#262626" : "#ffffff",
-      headerBg: isDark ? "#262626" : "#ffffff",
-      footerBg: isDark ? "#262626" : "#ffffff",
-      // Mask was already semi-transparent; bump it a touch in dark mode
-      // so the visual hierarchy "page → mask → modal" reads clearly.
-      colorBgMask: isDark ? "rgba(0, 0, 0, 0.55)" : "rgba(0, 0, 0, 0.45)",
+    components: {
+      Button: {
+        controlHeight: 32,
+        paddingContentHorizontal: 12,
+      },
+      Tag: {
+        borderRadiusSM: 4,
+      },
+      Modal: {
+        borderRadiusLG: 10,
+        // Round Q1.1 fix — dark-mode modal body was indistinguishable
+        // from the page background (both ~#191919). Force a slightly
+        // elevated surface + visible border so users can see the panel.
+        contentBg: isDark ? "#262626" : "#ffffff",
+        headerBg: isDark ? "#262626" : "#ffffff",
+        footerBg: isDark ? "#262626" : "#ffffff",
+        // Mask was already semi-transparent; bump it a touch in dark mode
+        // so the visual hierarchy "page → mask → modal" reads clearly.
+        colorBgMask: isDark ? "rgba(0, 0, 0, 0.55)" : "rgba(0, 0, 0, 0.45)",
+      },
+      Drawer: {
+        // Round Q9.1 — same dark-mode contrast issue Modal had: the
+        // session-history drawer rendered with bg ~#202020 against page
+        // ~#191919, so the panel was visually nearly invisible. AntD v5
+        // Drawer uses `colorBgElevated` for the content panel BUT the
+        // global `colorBgContainer` token also bleeds in for header/body.
+        // Set both to be safe.
+        colorBgElevated: isDark ? "#2a2a2a" : "#ffffff",
+        colorBgMask: isDark ? "rgba(0, 0, 0, 0.55)" : "rgba(0, 0, 0, 0.45)",
+      },
     },
-    Drawer: {
-      // Round Q9.1 — same dark-mode contrast issue Modal had: the
-      // session-history drawer rendered with bg ~#202020 against page
-      // ~#191919, so the panel was visually nearly invisible. AntD v5
-      // Drawer uses `colorBgElevated` for the content panel BUT the
-      // global `colorBgContainer` token also bleeds in for header/body.
-      // Set both to be safe.
-      colorBgElevated: isDark ? "#2a2a2a" : "#ffffff",
-      colorBgMask: isDark ? "rgba(0, 0, 0, 0.55)" : "rgba(0, 0, 0, 0.45)",
-    },
-  },
   } as const;
 }
 

@@ -179,7 +179,7 @@ export default function CronPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="任务数"
@@ -191,7 +191,7 @@ export default function CronPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="启用中"
@@ -203,7 +203,7 @@ export default function CronPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="总运行次数"

@@ -240,7 +240,7 @@ export default function SkillsPage() {
           setEditingSkill(null);
         }}
         width={520}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
@@ -281,7 +281,7 @@ export default function SkillsPage() {
         open={invokeModalOpen}
         onClose={() => setInvokeModalOpen(false)}
         width={480}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form layout="vertical">
           <Form.Item label="参数 (JSON)">

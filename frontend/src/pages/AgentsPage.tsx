@@ -15,7 +15,6 @@ import { EmptyState } from "../components/common/EmptyState";
 import type { Agent, AgentToolConfig } from "../api/types";
 
 const { TextArea } = Input;
-const { TabPane } = Tabs;
 
 const ALL_TOOLS: AgentToolConfig[] = [
   { name: "execute_shell", enabled: true, description: "执行本地 shell 命令" },
@@ -373,7 +372,7 @@ export default function AgentsPage() {
         width={600}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        destroyOnClose
+        destroyOnHidden
         footer={
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
             <Button onClick={() => setDrawerOpen(false)}>取消</Button>
@@ -383,58 +382,43 @@ export default function AgentsPage() {
           </div>
         }
       >
-        <Tabs activeKey={activeTab} onChange={setActiveTab}>
-          <TabPane tab={<span><RobotOutlined /> 基本信息</span>} key="basic">
-            <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
-              <Form.Item
-                label="名称"
-                name="name"
-                rules={[{ required: true, message: "请输入智能体名称" }]}
-              >
-                <Input placeholder="例如: 代码助手" />
-              </Form.Item>
-
-              <Form.Item
-                label="描述"
-                name="description"
-              >
-                <TextArea rows={2} placeholder="描述智能体的功能和特点..." />
-              </Form.Item>
-
-              <Form.Item
-                label="角色"
-                name="role"
-                rules={[{ required: true }]}
-              >
-                <Select options={ROLE_OPTIONS} placeholder="选择角色类型" />
-              </Form.Item>
-
-              <Form.Item
-                label="能力"
-                name="capabilities"
-              >
-                <Checkbox.Group options={CAPABILITY_OPTIONS} />
-              </Form.Item>
-
-              <Form.Item
-                label="启用"
-                name="enabled"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Form>
-          </TabPane>
-
-          <TabPane tab={<span><FileTextOutlined /> 系统提示词</span>} key="prompt">
-            <div style={{ marginBottom: 12, fontSize: 13, color: "var(--c-text-2)" }}>
-              支持模板变量：{"{{tools}}"}、{"{{memory}}"}、{"{{agent_name}}"}、{"{{agent_role}}"}
-            </div>
-            <TextArea
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              rows={20}
-              placeholder={`# 角色定义
+        <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
+          {
+            key: "basic",
+            label: <span><RobotOutlined /> 基本信息</span>,
+            children: (
+              <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+                <Form.Item label="名称" name="name" rules={[{ required: true, message: "请输入智能体名称" }]}>
+                  <Input placeholder="例如: 代码助手" />
+                </Form.Item>
+                <Form.Item label="描述" name="description">
+                  <TextArea rows={2} placeholder="描述智能体的功能和特点..." />
+                </Form.Item>
+                <Form.Item label="角色" name="role" rules={[{ required: true }]}>
+                  <Select options={ROLE_OPTIONS} placeholder="选择角色类型" />
+                </Form.Item>
+                <Form.Item label="能力" name="capabilities">
+                  <Checkbox.Group options={CAPABILITY_OPTIONS} />
+                </Form.Item>
+                <Form.Item label="启用" name="enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Form>
+            ),
+          },
+          {
+            key: "prompt",
+            label: <span><FileTextOutlined /> 系统提示词</span>,
+            children: (
+              <>
+                <div style={{ marginBottom: 12, fontSize: 13, color: "var(--c-text-2)" }}>
+                  支持模板变量：{"{{tools}}"}、{"{{memory}}"}、{"{{agent_name}}"}、{"{{agent_role}}"}
+                </div>
+                <TextArea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  rows={20}
+                  placeholder={`# 角色定义
 
 你是 {{agent_name}}，一个专业的 AI 助手。
 
@@ -444,83 +428,81 @@ export default function AgentsPage() {
 ## 相关记忆
 {{memory}}
 `}
-              style={{ fontFamily: "monospace", fontSize: 13 }}
-            />
-          </TabPane>
-
-          <TabPane tab={<span><ToolOutlined /> 工具配置</span>} key="tools">
-            <div style={{ marginBottom: 12, fontSize: 13, color: "var(--c-text-2)" }}>
-              选择该智能体可以使用的工具
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {tools.map((tool, idx) => (
-                <div
-                  key={tool.name}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    padding: "10px 12px",
-                    borderRadius: 8,
-                    border: "1px solid var(--c-border)",
-                    background: tool.enabled ? "var(--c-primary-soft)" : "transparent",
-                  }}
-                >
-                  <Checkbox
-                    checked={tool.enabled}
-                    onChange={(e) => {
-                      const next = [...tools];
-                      next[idx].enabled = e.target.checked;
-                      setTools(next);
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 500, fontSize: 14 }}>{tool.name}</div>
-                    <div style={{ fontSize: 12, color: "var(--c-text-2)" }}>{tool.description}</div>
-                  </div>
+                  style={{ fontFamily: "monospace", fontSize: 13 }}
+                />
+              </>
+            ),
+          },
+          {
+            key: "tools",
+            label: <span><ToolOutlined /> 工具配置</span>,
+            children: (
+              <>
+                <div style={{ marginBottom: 12, fontSize: 13, color: "var(--c-text-2)" }}>
+                  选择该智能体可以使用的工具
                 </div>
-              ))}
-            </div>
-          </TabPane>
-
-          <TabPane tab={<span><SettingOutlined /> 模型配置</span>} key="model">
-            <Form form={form} layout="vertical">
-              <Form.Item
-                label="模型 Base URL"
-                name={["modelConfig", "baseUrl"]}
-              >
-                <Input placeholder="留空使用全局配置，例如: http://localhost:1234/v1" />
-              </Form.Item>
-              <Form.Item
-                label="模型 ID"
-                name={["modelConfig", "modelId"]}
-              >
-                <Input placeholder="留空使用全局配置，例如: unsloth/qwen3.5-397b-a17b" />
-              </Form.Item>
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Form.Item
-                    label="温度 (Temperature)"
-                    name={["modelConfig", "temperature"]}
-                  >
-                    <Input type="number" min={0} max={2} step={0.1} placeholder="0.7" />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item
-                    label="最大 Token"
-                    name={["modelConfig", "maxTokens"]}
-                  >
-                    <Input type="number" min={256} max={32768} step={256} placeholder="4096" />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <div style={{ fontSize: 12, color: "var(--c-text-3)", marginTop: 8 }}>
-                留空以上所有字段将使用全局模型配置
-              </div>
-            </Form>
-          </TabPane>
-        </Tabs>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {tools.map((tool, idx) => (
+                    <div
+                      key={tool.name}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        border: "1px solid var(--c-border)",
+                        background: tool.enabled ? "var(--c-primary-soft)" : "transparent",
+                      }}
+                    >
+                      <Checkbox
+                        checked={tool.enabled}
+                        onChange={(e) => {
+                          const next = [...tools];
+                          next[idx].enabled = e.target.checked;
+                          setTools(next);
+                        }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 500, fontSize: 14 }}>{tool.name}</div>
+                        <div style={{ fontSize: 12, color: "var(--c-text-2)" }}>{tool.description}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ),
+          },
+          {
+            key: "model",
+            label: <span><SettingOutlined /> 模型配置</span>,
+            children: (
+              <Form form={form} layout="vertical">
+                <Form.Item label="模型 Base URL" name={["modelConfig", "baseUrl"]}>
+                  <Input placeholder="留空使用全局配置，例如: http://localhost:1234/v1" />
+                </Form.Item>
+                <Form.Item label="模型 ID" name={["modelConfig", "modelId"]}>
+                  <Input placeholder="留空使用全局配置，例如: unsloth/qwen3.5-397b-a17b" />
+                </Form.Item>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item label="温度 (Temperature)" name={["modelConfig", "temperature"]}>
+                      <Input type="number" min={0} max={2} step={0.1} placeholder="0.7" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item label="最大 Token" name={["modelConfig", "maxTokens"]}>
+                      <Input type="number" min={256} max={32768} step={256} placeholder="4096" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <div style={{ fontSize: 12, color: "var(--c-text-3)", marginTop: 8 }}>
+                  留空以上所有字段将使用全局模型配置
+                </div>
+              </Form>
+            ),
+          },
+        ]} />
       </Drawer>
 
       {/* Run Agent Drawer */}

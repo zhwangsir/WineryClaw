@@ -116,7 +116,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
       };
       return r;
     },
-    [Ctor],
+    [Ctor]
   );
 
   const start = useCallback(
@@ -132,7 +132,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionResult {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [supported, isRecording, ensureRecognizer],
+    [supported, isRecording, ensureRecognizer]
   );
 
   const stop = useCallback(() => {

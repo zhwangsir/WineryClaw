@@ -20,9 +20,7 @@ vi.mock("antd", async () => {
   const actual = await vi.importActual<typeof import("antd")>("antd");
   return {
     ...actual,
-    Popconfirm: ({ children, onConfirm }: any) => (
-      <span onClick={onConfirm}>{children}</span>
-    ),
+    Popconfirm: ({ children, onConfirm }: any) => <span onClick={onConfirm}>{children}</span>,
   };
 });
 
@@ -30,7 +28,17 @@ describe("SkillsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(skillsApi.list).mockResolvedValue([
-      { id: "sk1", name: "Summarize", description: "Summarize text", language: "python", usageCount: 5, successRate: 0.9, triggerPatterns: ["summarize"], tags: ["text"], code: "def run(p): return p" },
+      {
+        id: "sk1",
+        name: "Summarize",
+        description: "Summarize text",
+        language: "python",
+        usageCount: 5,
+        successRate: 0.9,
+        triggerPatterns: ["summarize"],
+        tags: ["text"],
+        code: "def run(p): return p",
+      },
     ]);
     vi.mocked(skillsApi.stats).mockResolvedValue({ totalSkills: 1, totalInvocations: 5, averageSuccessRate: 0.9 });
     vi.mocked(skillsApi.create).mockResolvedValue(undefined);
@@ -184,10 +192,10 @@ describe("SkillsPage", () => {
     fireEvent.click(screen.getByText("新建技能"));
 
     const inputs = document.querySelectorAll("input");
-    const nameInput = Array.from(inputs).find(i => i.placeholder?.includes("summarize_text")) as HTMLInputElement;
+    const nameInput = Array.from(inputs).find((i) => i.placeholder?.includes("summarize_text")) as HTMLInputElement;
     if (nameInput) fireEvent.change(nameInput, { target: { value: "FailSkill" } });
 
-    const descInput = Array.from(inputs).find(i => i.placeholder?.includes("What does")) as HTMLInputElement;
+    const descInput = Array.from(inputs).find((i) => i.placeholder?.includes("What does")) as HTMLInputElement;
     if (descInput) fireEvent.change(descInput, { target: { value: "desc" } });
 
     const codeArea = document.querySelector("textarea") as HTMLTextAreaElement;

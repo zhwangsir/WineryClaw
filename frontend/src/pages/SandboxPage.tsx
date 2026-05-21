@@ -93,7 +93,7 @@ export default function SandboxPage() {
       {/* Status */}
       <Row gutter={[24, 24]} style={{ marginBottom: 32 }}>
         <Col xs={12} md={6}>
-          <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+          <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
             <Statistic
               title="沙箱状态"
               value={available ? "可用" : "不可用"}
@@ -126,7 +126,7 @@ export default function SandboxPage() {
               .replace(/\b\w/g, (c) => c.toUpperCase());
           return (
             <Col xs={12} md={6} key={key}>
-              <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+              <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
                 <Statistic title={niceTitle} value={value} />
               </Card>
             </Col>
@@ -151,7 +151,7 @@ export default function SandboxPage() {
             </span>
           }
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-          bodyStyle={{ padding: 24 }}
+          styles={{ body: { padding: 24 } }}
         >
           <Input.TextArea
             rows={3}
@@ -179,7 +179,7 @@ export default function SandboxPage() {
             </span>
           }
           style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-          bodyStyle={{ padding: 24 }}
+          styles={{ body: { padding: 24 } }}
         >
           <Input.TextArea
             rows={3}
@@ -212,7 +212,7 @@ export default function SandboxPage() {
           </span>
         }
         style={{ marginBottom: 32, borderRadius: 12, border: "1px solid var(--c-border)" }}
-        bodyStyle={{ padding: 24 }}
+        styles={{ body: { padding: 24 } }}
         extra={
           <Button
             type="primary"
@@ -260,7 +260,7 @@ export default function SandboxPage() {
                   key={ws.workspaceId}
                   size="small"
                   style={{ background: "var(--c-card)", border: "1px solid var(--c-border-light)" }}
-                  bodyStyle={{ padding: 16 }}
+                  styles={{ body: { padding: 16 } }}
                 >
                   <div
                     style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}
@@ -374,7 +374,7 @@ export default function SandboxPage() {
       {execResult && (
         <Card
           style={{ marginBottom: 32, borderRadius: 12, border: "1px solid var(--c-border)" }}
-          bodyStyle={{ padding: 24 }}
+          styles={{ body: { padding: 24 } }}
           title={
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontWeight: 600, color: "var(--c-text)" }}>执行结果</span>
@@ -419,7 +419,7 @@ export default function SandboxPage() {
       <Card
         title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>审计日志</span>}
         style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-        bodyStyle={{ padding: 24 }}
+        styles={{ body: { padding: 24 } }}
         extra={
           <Button size="small" icon={<ClearOutlined />} onClick={() => fetchAudit(undefined, 50)}>
             刷新
@@ -431,7 +431,7 @@ export default function SandboxPage() {
         ) : (
           <Table
             dataSource={logs}
-            rowKey={(r, i) => `${r.agentId}-${r.timestamp}-${i}`}
+            rowKey={(r) => `${r.agentId}-${r.timestamp}`}
             size="small"
             pagination={{ pageSize: 10 }}
             columns={[

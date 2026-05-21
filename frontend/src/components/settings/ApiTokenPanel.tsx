@@ -43,15 +43,16 @@ export default function ApiTokenPanel() {
     try {
       // Read localStorage fresh (don't rely on captured `stored`) so
       // re-probes after save() see the new value without a state lag.
-      const token = tokenOverride !== undefined
-        ? tokenOverride
-        : (() => {
-            try {
-              return localStorage.getItem(STORAGE_KEY) || "";
-            } catch {
-              return "";
-            }
-          })();
+      const token =
+        tokenOverride !== undefined
+          ? tokenOverride
+          : (() => {
+              try {
+                return localStorage.getItem(STORAGE_KEY) || "";
+              } catch {
+                return "";
+              }
+            })();
       const resp = await fetch("/api/sandbox/status", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -99,7 +100,7 @@ export default function ApiTokenPanel() {
         </span>
       }
       style={{ marginTop: 16, borderRadius: 12, border: "1px solid var(--c-border)" }}
-      bodyStyle={{ padding: 24 }}
+      styles={{ body: { padding: 24 } }}
     >
       <Alert
         type={probeResult === "denied" ? "error" : probeResult === "ok" ? "success" : "info"}
@@ -115,12 +116,7 @@ export default function ApiTokenPanel() {
               : "正在探测 sub-brain 鉴权状态…"
         }
         action={
-          <Button
-            size="small"
-            icon={<ReloadOutlined spin={probing} />}
-            onClick={() => probe()}
-            disabled={probing}
-          >
+          <Button size="small" icon={<ReloadOutlined spin={probing} />} onClick={() => probe()} disabled={probing}>
             重测
           </Button>
         }

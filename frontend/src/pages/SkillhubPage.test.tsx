@@ -87,14 +87,12 @@ describe("SkillhubPage", () => {
     expect(install).toHaveBeenCalledWith("s1");
   });
 
-  // Skipped post-Q14 i18n polish — the "已安装" string now appears both
-  // as the tab label and the row install-state button label, and the
-  // AntD <Button disabled> jsdom matcher doesn't resolve a clean
-  // accessible name. Browser-verified during Q100 (starter registry
-  // install walkthrough).
-  it.skip("installed skill shows 已安装 and disabled button", () => {
+  it("installed skill shows 已安装 and disabled button", () => {
     render(<SkillhubPage />);
-    expect(screen.getByText("已安装")).toBeInTheDocument();
+    // s2 has installed:true — use data-testid to disambiguate from the tab label
+    const btn = screen.getByTestId("skill-installed-s2");
+    expect(btn).toBeInTheDocument();
+    expect(btn).toBeDisabled();
   });
 
   it("search input + Enter triggers search()", () => {
@@ -131,7 +129,7 @@ describe("SkillhubPage", () => {
     vi.mocked(useSkillhubStore).mockReturnValue(
       createMockStore({
         registries: [{ name: "test-hub", url: "file:///path", enabled: true, priority: 100 }],
-      }),
+      })
     );
     render(<SkillhubPage />);
     expect(screen.getByText(/test-hub/)).toBeInTheDocument();
@@ -183,7 +181,7 @@ describe("SkillhubPage", () => {
             hubRegistry: "test-hub",
           },
         ],
-      }),
+      })
     );
     render(<SkillhubPage />);
     fireEvent.click(screen.getByRole("tab", { name: /已安装/ }));
@@ -198,12 +196,26 @@ describe("SkillhubPage", () => {
       createMockStore({
         candidates: [
           {
-            skill: { id: "s1", name: "Failing", code: "x", language: "javascript", version: 1, usageCount: 20, successRate: 0.3, tags: [], description: "", triggerPatterns: [], createdBy: "", createdAt: "", updatedAt: "" },
+            skill: {
+              id: "s1",
+              name: "Failing",
+              code: "x",
+              language: "javascript",
+              version: 1,
+              usageCount: 20,
+              successRate: 0.3,
+              tags: [],
+              description: "",
+              triggerPatterns: [],
+              createdBy: "",
+              createdAt: "",
+              updatedAt: "",
+            },
             primaryFailureMode: { signature: "TypeError", count: 7, lastSeen: "2026-05-19", examples: [] },
             reason: "70% failure rate",
           },
         ],
-      }),
+      })
     );
     render(<SkillhubPage />);
     // The candidate count tag is visible in the tab header
@@ -238,7 +250,7 @@ describe("SkillhubPage", () => {
             tags: [],
           },
         ],
-      }),
+      })
     );
     render(<SkillhubPage />);
     fireEvent.click(screen.getByRole("tab", { name: /草稿/ }));

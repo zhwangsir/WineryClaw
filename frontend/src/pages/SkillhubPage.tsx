@@ -276,7 +276,7 @@ function MarketplaceTab({
       {skills.length === 0 && !loading ? (
         <Empty description="无技能 — 添加一个 registry 后刷新试试" />
       ) : (
-        <Card style={{ borderRadius: 12, marginTop: 16 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, marginTop: 16 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={skills}
             rowKey="slug"
@@ -316,6 +316,7 @@ function MarketplaceTab({
                     icon={<DownloadOutlined />}
                     disabled={record.installed}
                     onClick={() => onInstall(record.slug)}
+                    data-testid={record.installed ? `skill-installed-${record.slug}` : `skill-install-${record.slug}`}
                   >
                     {record.installed ? "已安装" : "安装"}
                   </Button>
@@ -411,7 +412,7 @@ function InstalledTab({
       {installed.length === 0 && !loading ? (
         <Empty description="没有从 hub 安装的技能" />
       ) : (
-        <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={installed}
             rowKey="id"
@@ -497,7 +498,7 @@ function ImprovementsTab({
       {candidates.length === 0 && !loading ? (
         <Empty description="目前没有改进候选 — 累积调用后失败率达 15%、用量 ≥10 次会自动入列" />
       ) : (
-        <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={candidates}
             rowKey={(c) => c.skill.id}
@@ -574,7 +575,7 @@ function DraftsTab({
       {drafts.length === 0 && !loading ? (
         <Empty description="没有待审核草稿" />
       ) : (
-        <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={drafts}
             rowKey="id"

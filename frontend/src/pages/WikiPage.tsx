@@ -117,7 +117,7 @@ export default function WikiPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="笔记数"
@@ -129,7 +129,7 @@ export default function WikiPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="标签数"
@@ -141,7 +141,7 @@ export default function WikiPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="链接数"
@@ -153,7 +153,7 @@ export default function WikiPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic title="总字数" value={stats?.total_words || 0} />
           </Card>
@@ -209,17 +209,17 @@ export default function WikiPage() {
               <Card
                 style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
                 title={<span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{note.title}</span>}
-                headStyle={{ padding: "20px 24px", borderBottom: "1px solid var(--c-border)" }}
-                bodyStyle={{ padding: 24 }}
+                styles={{ header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" }, body: { padding: 24 } }}
                 actions={[
                   <Button
+                    key="edit"
                     type="text"
                     size="small"
                     icon={<EditOutlined />}
                     onClick={() => openEdit(note)}
                     style={{ color: "var(--c-text-2)" }}
                   />,
-                  <Popconfirm title="确认删除此笔记？" onConfirm={() => deleteNote(note.id)}>
+                  <Popconfirm key="delete" title="确认删除此笔记？" onConfirm={() => deleteNote(note.id)}>
                     <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: "var(--c-text-3)" }} />
                   </Popconfirm>,
                 ]}
@@ -275,7 +275,7 @@ export default function WikiPage() {
         onOk={handleSave}
         okText="保存"
         width={800}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item label="标题" name="title" rules={[{ required: true, message: "请输入标题" }]}>

@@ -13,12 +13,10 @@ interface MarkdownRendererProps {
 }
 
 function CodeBlock({
-  inline,
   className,
   children,
   ...props
 }: {
-  inline?: boolean;
   className?: string;
   children?: React.ReactNode;
 }) {
@@ -39,7 +37,9 @@ function CodeBlock({
     }
   };
 
-  if (inline) {
+  // react-markdown v10 no longer passes inline prop — detect by language class presence.
+  // Code without a language-* className (inline backtick) renders as <code>, not <div>.
+  if (!match) {
     return (
       <code
         className={className}

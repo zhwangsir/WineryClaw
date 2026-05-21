@@ -41,7 +41,7 @@ export default function A2aPage() {
       {tasks.length === 0 ? (
         <Empty description="暂无 A2A 任务" />
       ) : (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={tasks}
             rowKey="taskId"

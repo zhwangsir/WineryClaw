@@ -35,21 +35,13 @@ import { planApi } from "../../api/plan";
 
 describe("MessageBubble", () => {
   it("renders user message", () => {
-    render(
-      <MessageBubble
-        msg={{ id: "1", role: "user", content: "Hello", timestamp: Date.now() }}
-        isDark={false}
-      />
-    );
+    render(<MessageBubble msg={{ id: "1", role: "user", content: "Hello", timestamp: Date.now() }} isDark={false} />);
     expect(screen.getByText("Hello")).toBeInTheDocument();
   });
 
   it("renders assistant message with markdown", () => {
     render(
-      <MessageBubble
-        msg={{ id: "1", role: "assistant", content: "**bold**", timestamp: Date.now() }}
-        isDark={false}
-      />
+      <MessageBubble msg={{ id: "1", role: "assistant", content: "**bold**", timestamp: Date.now() }} isDark={false} />
     );
     expect(screen.getByTestId("markdown")).toBeInTheDocument();
   });
@@ -107,10 +99,7 @@ describe("MessageBubble", () => {
 
   it("copies message content when copy button is clicked", async () => {
     render(
-      <MessageBubble
-        msg={{ id: "1", role: "assistant", content: "Copy me", timestamp: Date.now() }}
-        isDark={false}
-      />
+      <MessageBubble msg={{ id: "1", role: "assistant", content: "Copy me", timestamp: Date.now() }} isDark={false} />
     );
     const copyBtn = screen.getByRole("button");
     await fireEvent.click(copyBtn);
@@ -119,12 +108,7 @@ describe("MessageBubble", () => {
 
   it("renders timestamp when provided", () => {
     const ts = new Date("2024-01-15T10:30:00").getTime();
-    render(
-      <MessageBubble
-        msg={{ id: "1", role: "assistant", content: "Hi", timestamp: ts }}
-        isDark={false}
-      />
-    );
+    render(<MessageBubble msg={{ id: "1", role: "assistant", content: "Hi", timestamp: ts }} isDark={false} />);
     expect(screen.getByText(/1月15日/i)).toBeInTheDocument();
   });
 
@@ -153,12 +137,7 @@ describe("MessageBubble", () => {
   });
 
   it("omits RAG label when no ragSources present", () => {
-    render(
-      <MessageBubble
-        msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }}
-        isDark={false}
-      />
-    );
+    render(<MessageBubble msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }} isDark={false} />);
     expect(screen.queryByText("来源")).not.toBeInTheDocument();
     expect(screen.queryByText(/^\[\d+\]$/)).not.toBeInTheDocument();
   });
@@ -194,10 +173,7 @@ describe("MessageBubble", () => {
 
   it("omits plan block when plan is absent or empty", () => {
     const { rerender } = render(
-      <MessageBubble
-        msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }}
-        isDark={false}
-      />
+      <MessageBubble msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }} isDark={false} />
     );
     expect(screen.queryByText(/规划 \d+ 步任务/)).not.toBeInTheDocument();
 
@@ -280,10 +256,7 @@ describe("MessageBubble", () => {
     };
 
     render(
-      <MessageBubble
-        msg={{ id: "1", role: "assistant", content: "Hi", plan, timestamp: Date.now() }}
-        isDark={false}
-      />
+      <MessageBubble msg={{ id: "1", role: "assistant", content: "Hi", plan, timestamp: Date.now() }} isDark={false} />
     );
 
     const button = screen.getByText("执行计划");

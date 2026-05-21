@@ -238,7 +238,7 @@ export default function ModelConfigPanel() {
         onCancel={() => setEpModalOpen(false)}
         onOk={handleSaveEp}
         okText="保存"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={epForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item label="名称" name="name" rules={[{ required: true }]}>

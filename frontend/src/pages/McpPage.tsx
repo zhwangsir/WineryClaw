@@ -45,7 +45,7 @@ export default function McpPage() {
               key={s.name}
               size="small"
               style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-              bodyStyle={{ padding: 20 }}
+              styles={{ body: { padding: 20 } }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                 <span style={{ fontWeight: 600, fontSize: 14, color: "var(--c-text)" }}>{s.name}</span>

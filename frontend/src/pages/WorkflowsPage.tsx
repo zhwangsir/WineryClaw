@@ -80,16 +80,15 @@ export default function WorkflowsPage() {
             <Card
               key={w.id}
               style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-              bodyStyle={{ padding: 24 }}
+              styles={{ body: { padding: 24 }, header: { padding: "16px 20px", borderBottom: "1px solid var(--c-border)" } }}
               title={
                 <span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{w.name}</span>
               }
-              headStyle={{ padding: "16px 20px", borderBottom: "1px solid var(--c-border)" }}
               actions={[
-                <Button type="text" size="small" icon={<PlayCircleOutlined />} style={{ color: "var(--c-accent)" }} onClick={() => openRun(w)}>
+                <Button key="run" type="text" size="small" icon={<PlayCircleOutlined />} style={{ color: "var(--c-accent)" }} onClick={() => openRun(w)}>
                   运行
                 </Button>,
-                <Popconfirm title="确认删除" description={`删除工作流 "${w.name}"？`} onConfirm={() => deleteWorkflow(w.id)} okText="删除" cancelText="取消">
+                <Popconfirm key="delete" title="确认删除" description={`删除工作流 "${w.name}"？`} onConfirm={() => deleteWorkflow(w.id)} okText="删除" cancelText="取消">
                   <Button type="text" size="small" danger icon={<DeleteOutlined />}>删除</Button>
                 </Popconfirm>,
               ]}

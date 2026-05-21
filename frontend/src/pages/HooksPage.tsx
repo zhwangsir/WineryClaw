@@ -37,7 +37,7 @@ export default function HooksPage() {
               key={h}
               size="small"
               style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-              bodyStyle={{ padding: 20 }}
+              styles={{ body: { padding: 20 } }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                 <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>{h}</Tag>
