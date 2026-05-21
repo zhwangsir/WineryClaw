@@ -89,7 +89,9 @@ export const useSystemStore = create<SystemState>((set, get) => ({
       notifications: s.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)),
     }));
     // 同步通知到后端（S6 洞察）
-    systemApi.markInsightRead(id).catch(() => {/* 非关键，静默失败 */});
+    systemApi.markInsightRead(id).catch(() => {
+      /* 非关键，静默失败 */
+    });
   },
 
   // S6: 主动洞察轮询 — 从 Dreaming 引擎获取新洞察并推入 notifications

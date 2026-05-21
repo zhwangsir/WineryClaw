@@ -14,8 +14,6 @@ export interface ProactiveInsight {
 export const systemApi = {
   health: () => api.get<SystemHealth>("/api/health"),
   metrics: () => api.get<Record<string, any>>("/brain/metrics"),
-  proactiveInsights: () =>
-    api.get<{ insights: ProactiveInsight[] }>("/brain/proactive/insights"),
-  markInsightRead: (id: string) =>
-    api.delete<{ ok: boolean }>(`/brain/proactive/insights/${id}`),
+  proactiveInsights: () => api.get<{ insights: ProactiveInsight[] }>("/brain/proactive/insights"),
+  markInsightRead: (id: string) => api.delete<{ ok: boolean }>(`/brain/proactive/insights/${id}`),
 };

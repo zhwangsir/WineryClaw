@@ -39,7 +39,7 @@ from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
 from chat.llm_health_monitor import LLMHealthMonitor
-from mcp import MCPServer, TOOL_REGISTRY, extract_bearer, resolve_token
+from mcp import MCPServer, TOOL_REGISTRY, extract_bearer, resolve_token, verify
 from planner import Planner
 from wiki.wiki_engine import WikiEngine
 from memory.dreaming_engine import DreamingEngine
@@ -1417,14 +1417,17 @@ async def procedural_skills(limit: int = 50):
 
 # ========== Insights ==========
 @app.get("/insights")
-async def insights(days: int = 7):
+async def insights(http_request: Request, days: int = 7):
+    bearer = extract_bearer(http_request.headers.get("authorization"))
+    if not verify(bearer, _state.get("mcp_token", "")):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
     result = await _state["memory"].get_insights(days)
     return result
 
 
 # ========== S6: Proactive Insights (主动洞察) ==========
 @app.get("/proactive/insights")
-async def proactive_insights():
+async def proactive_insights(http_request: Request):
     """返回 Dreaming 周期检测到的主动洞察列表。
 
     洞察由 DreamingEngine.detect_proactive_insights() 在每次 run_cycle() 后生成，
@@ -1434,6 +1437,9 @@ async def proactive_insights():
         {"insights": [...]}  每条 insight 含 id, title, content, category,
                              type, read, createdAt 字段。
     """
+    bearer = extract_bearer(http_request.headers.get("authorization"))
+    if not verify(bearer, _state.get("mcp_token", "")):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
     dreaming = _state.get("dreaming")
     if not dreaming:
         return {"insights": []}
@@ -1441,12 +1447,15 @@ async def proactive_insights():
 
 
 @app.delete("/proactive/insights/{insight_id}")
-async def mark_proactive_insight_read(insight_id: str):
+async def mark_proactive_insight_read(insight_id: str, http_request: Request):
     """将指定洞察标记为已读（前端 UI 使用）。
 
     直接修改 deque 内部 dict 的 "read" 字段。asyncio 单线程保证此操作无数据竞争
     （所有并发请求在同一事件循环中串行调度）。若未来引入线程执行器，需加 Lock。
     """
+    bearer = extract_bearer(http_request.headers.get("authorization"))
+    if not verify(bearer, _state.get("mcp_token", "")):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
     dreaming = _state.get("dreaming")
     if not dreaming:
         return {"ok": False, "error": "Dreaming not available"}

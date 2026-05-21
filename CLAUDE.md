@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-22, post Round S S5–S13):
-> **450** sub-brain unit + 1216 frontend unit + **518** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S17):
+> **450** sub-brain unit + 1216 frontend unit + **571** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -166,6 +166,12 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_MEM_TIERED_ENABLED` | main-brain | `1` | Round S12: 分层记忆展示。将 memory_text 中的记忆条目按 importance 阈值分为"已验证事实"（L3/L4）和"近期对话片段"（L1/L2）两个区块，帮助 AI 在事实层面区分高置信来源。与 S11 共用 WEBRAIN_MEM_CONFIDENCE_THRESHOLD 阈值。设为 `0` 退回扁平格式。 |
 | `WEBRAIN_L4_ANCHOR_ENABLED` | main-brain | `1` | Round S13: L4 身份锚点强制注入。每次对话前额外查询 importance 最高的 K 条 L4 记忆，去重后前置追加到 relevant 列表，确保用户核心身份事实（工作风格、长期偏好等）始终进入上下文，不依赖语义相似性。单次 SQLite 排序查询，延迟 <1ms。设为 `0` 禁用。 |
 | `WEBRAIN_L4_ANCHOR_TOP_K` | main-brain | `2` | S13 每次前置追加的最大 L4 记忆条数。 |
+| `WEBRAIN_TEMPORAL_CONTEXT_ENABLED` | main-brain | `1` | Round S14: 时态上下文注入。每次对话系统提示前置追加 `[当前时间: YYYY-MM-DD 周X HH:MM]`，使 AI 具备时态感知能力，能正确回答"今天几号"、"帮我规划这周"等时态查询。零成本（单次 datetime.now() 调用）。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_FRESHNESS_ENABLED` | main-brain | `1` | Round S15: 记忆时效信号。计算 relevant 记忆的平均年龄（基于 created_at），在 memory_text 末尾追加 `[记忆时效: 高/中/低（平均 N 天前）]`，与 S11 置信度互补（S11=固化程度，S15=时间新鲜度）。帮助 AI 对陈旧记忆保持适当谨慎。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_FRESHNESS_FRESH_DAYS` | main-brain | `7` | S15 判定"高时效"的天数阈值（创建时间 < N 天前）。 |
+| `WEBRAIN_MEM_FRESHNESS_STALE_DAYS` | main-brain | `30` | S15 判定"低时效"的天数阈值（创建时间 ≥ N 天前为低时效）。 |
+| `WEBRAIN_KNOWLEDGE_GAP_ENABLED` | main-brain | `1` | Round S16: 知识缺口检测。当 relevant 为空时注入 `[知识缺口: 当前无相关记忆…]`，当全部为低置信片段时注入 `[知识缺口: 当前记忆均为低置信片段…]`，引导 AI 主动向用户澄清而非猜测/幻觉。将已知弱点转化为主动行为信号。零成本（纯逻辑判断）。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_SIGNAL_GUIDE_ENABLED` | main-brain | `1` | Round S17: 记忆信号使用指南。在 memory_text 顶部注入紧凑单行标签说明 `[记忆标签说明: 已验证事实=…; 近期片段=…; 知识缺口=…; 时效低=…]`，教导 AI 正确解读 S11-S16 注入的元信号，使整个 S 系列形成闭环。约 20 token 开销，仅在有实际记忆内容时注入。设为 `0` 禁用。 |
 
 ---
 

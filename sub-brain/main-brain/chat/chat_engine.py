@@ -403,6 +403,51 @@ class ChatEngine:
         self.l4_anchor_enabled: bool = os.environ.get("WEBRAIN_L4_ANCHOR_ENABLED", "1") != "0"
         self.l4_anchor_top_k: int = int(os.environ.get("WEBRAIN_L4_ANCHOR_TOP_K", "2"))
 
+        # S14: 时态上下文注入 (Temporal Context Injection) — 将当前日期、星期、时间
+        # 注入每次对话的系统提示，使 AI 具备时态感知能力。
+        # 解决 "帮我规划这周的任务"、"今天是什么日期" 等时态查询 AI 无法作答的问题。
+        # 零成本：单次 datetime.now() 调用，无额外 LLM/DB 调用。默认开启。
+        self.temporal_context_enabled: bool = (
+            os.environ.get("WEBRAIN_TEMPORAL_CONTEXT_ENABLED", "1") != "0"
+        )
+
+        # S15: 记忆时效信号 (Memory Freshness Signal) — 计算 relevant 记忆的平均新鲜度，
+        # 补充 S11 的"置信度"信号（S11 基于 importance，S15 基于创建时间）。
+        # 一条重要但过时的记忆（用户观点可能已改变）与一条近期创建的高置信记忆在
+        # S11 看来是等价的；S15 区分这两种情况，帮助 AI 适当地对陈旧记忆保持谨慎。
+        # 零成本：仅解析已查询结果的 created_at 字段，无额外 DB/LLM 调用。
+        self.mem_freshness_enabled: bool = (
+            os.environ.get("WEBRAIN_MEM_FRESHNESS_ENABLED", "1") != "0"
+        )
+        try:
+            self.mem_freshness_fresh_days: int = int(
+                os.environ.get("WEBRAIN_MEM_FRESHNESS_FRESH_DAYS", "7")
+            )
+            self.mem_freshness_stale_days: int = int(
+                os.environ.get("WEBRAIN_MEM_FRESHNESS_STALE_DAYS", "30")
+            )
+        except ValueError:
+            logger.warning("WEBRAIN_MEM_FRESHNESS_*_DAYS 含非法值，使用默认值 7/30")
+            self.mem_freshness_fresh_days = 7
+            self.mem_freshness_stale_days = 30
+
+        # S16: 知识缺口检测 (Knowledge Gap Detection) — 当 relevant 为空或全部为低置信/
+        # 陈旧记忆时，向系统提示注入行为指令 [知识缺口]，引导 AI 主动向用户澄清，
+        # 而非基于不充分的上下文进行猜测或幻觉。
+        # 将一个已知弱点（无记忆上下文时 AI 易幻觉）转化为主动行为信号。
+        # 零成本：纯逻辑判断，无额外 DB/LLM 调用。
+        self.knowledge_gap_enabled: bool = (
+            os.environ.get("WEBRAIN_KNOWLEDGE_GAP_ENABLED", "1") != "0"
+        )
+
+        # S17: 记忆信号使用指南 (Memory Signal Usage Guide) — 在 memory_text 顶部注入
+        # 一行紧凑的自文档化说明，告知 AI 如何解读 S11-S16 注入的各类标签。
+        # 解决"信号存在但 AI 不知道该如何使用"的问题 — 将 S11-S16 从被动装饰转化为
+        # 有明确语义的行为指令。约 20 token 的开销，但使整个 S 系列信号形成闭环。
+        self.mem_signal_guide_enabled: bool = (
+            os.environ.get("WEBRAIN_MEM_SIGNAL_GUIDE_ENABLED", "1") != "0"
+        )
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -891,6 +936,21 @@ class ChatEngine:
             logger.debug("[ChatEngine/S13] L4 锚点加载失败（非致命）: %s", e)
             return []
 
+    def _get_temporal_context_line(self) -> str:
+        """S14: 时态上下文注入 — 返回当前日期、星期、时间的单行标注。
+
+        注入每次对话系统提示，使 AI 具备时态感知能力，能正确回答
+        "今天是几号"、"这周的规划" 等时态相关问题。
+        功能关闭时返回空字符串，调用方无需额外判断。
+        """
+        if not self.temporal_context_enabled:
+            return ""
+        from datetime import datetime
+        now = datetime.now()
+        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        weekday = weekdays[now.weekday()]
+        return f"[当前时间: {now.strftime('%Y-%m-%d')} {weekday} {now.strftime('%H:%M')}]"
+
     def _format_tiered_memory_text(self, relevant: List[Dict]) -> str:
         """S12: 分层记忆展示 — 将记忆结果按重要性分为已验证事实/近期对话片段两组。
 
@@ -942,6 +1002,99 @@ class ChatEngine:
         else:
             level = "低"
         return f"[记忆支撑: {total} 条相关 · 其中 {validated} 条已验证事实 · 置信度: {level}]"
+
+    def _compute_memory_freshness_line(self, relevant: List[Dict]) -> str:
+        """S15: 记忆时效信号 — 基于 created_at 字段计算记忆平均新鲜度，返回单行元信号。
+
+        与 S11 置信度互补：S11 衡量记忆的"固化程度"（importance），S15 衡量
+        记忆的"时效性"（创建时间距今）。两者组合给 AI 完整的可信度画面：
+          - 高: 多数记忆在 fresh_days 内创建
+          - 中: 多数记忆在 stale_days 内创建
+          - 低: 多数记忆超过 stale_days
+        missing created_at 按最大时效（stale）处理，鼓励 AI 谨慎对待无时间戳记忆。
+        """
+        if not self.mem_freshness_enabled or not relevant:
+            return ""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        ages_days: List[float] = []
+        valid_ts_count: int = 0  # 有效时间戳计数（区别于无时间戳的兜底值）
+        for m in relevant:
+            created_raw = m.get("created_at")
+            if not created_raw:
+                # 无时间戳 → 按最大陈旧度兜底，但不计入有效计数。
+                # 场景：S13 注入的 L4 锚定记忆可能无 created_at，不应将其标记为"时效低"。
+                ages_days.append(float(self.mem_freshness_stale_days + 1))
+                continue
+            try:
+                # 支持 ISO 8601 格式（带/不带时区）
+                ts_str = str(created_raw)
+                if ts_str.endswith("Z"):
+                    ts_str = ts_str[:-1] + "+00:00"
+                created_dt = datetime.fromisoformat(ts_str)
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+                age = (now - created_dt).total_seconds() / 86400  # 转为天数
+                ages_days.append(max(0.0, age))
+                valid_ts_count += 1
+            except (ValueError, TypeError):
+                ages_days.append(float(self.mem_freshness_stale_days + 1))
+
+        # 如果全部为无效时间戳（如纯 L4 锚定条目），跳过信号以免误导 AI
+        if valid_ts_count == 0:
+            return ""
+        avg_age = sum(ages_days) / len(ages_days)
+        # 使用严格小于（<）避免浮点边界歧义；边界值归入更保守的级别。
+        if avg_age < self.mem_freshness_fresh_days:
+            level = "高"
+        elif avg_age < self.mem_freshness_stale_days:
+            level = "中"
+        else:
+            level = "低"
+        return f"[记忆时效: {level}（平均 {avg_age:.0f} 天前）]"
+
+    def _compute_knowledge_gap_hint(self, relevant: List[Dict]) -> str:
+        """S16: 知识缺口检测 — 检测记忆上下文是否严重不足，返回行为指令行。
+
+        三种缺口场景（按严重程度从高到低）：
+          1. 完全空白 (relevant=[])：无任何相关记忆 → "无相关记忆" 缺口
+          2. 全低置信 (全部 importance < threshold)：有记忆但均为未固化片段 → "低置信" 缺口
+          3. 仅部分低置信：有验证事实但数量不足 → 不触发（由 S11 置信度标注处理）
+
+        返回格式：`[知识缺口: <场景描述>]`，调用方将其追加到 memory_text 末尾。
+        功能关闭或未检测到缺口时返回空字符串。
+        """
+        if not self.knowledge_gap_enabled:
+            return ""
+        if not relevant:
+            return "[知识缺口: 当前无相关记忆，如需准确回答请主动向用户确认关键信息]"
+        # 检查是否全部为低置信记忆
+        all_low = all(
+            (m.get("importance") or 0.0) < self.mem_confidence_threshold
+            for m in relevant
+        )
+        if all_low:
+            return "[知识缺口: 当前记忆均为低置信片段，建议确认关键事实后再作判断]"
+        return ""
+
+    def _get_memory_signal_guide_line(self) -> str:
+        """S17: 记忆信号使用指南 — 返回紧凑的单行标签说明，前置到 memory_text 顶部。
+
+        通过一行自文档化注释，让 AI 正确解读 S11-S16 注入的各类元信号：
+          · 已验证事实 = L3/L4 高置信记忆，可自信引用
+          · 近期片段   = L1/L2 原始片段，低置信，作上下文参考
+          · 知识缺口   = 信息不足，主动向用户澄清
+          · 时效低     = 记忆陈旧，引用时加保留措辞
+        功能关闭时返回空字符串；只在有实际记忆信号时注入（由调用方判断）。
+        """
+        if not self.mem_signal_guide_enabled:
+            return ""
+        return (
+            "[记忆标签说明: 已验证事实=L3/L4高置信可引用; "
+            "近期片段=L1/L2低置信仅供参考; "
+            "知识缺口=信息不足请主动澄清; "
+            "时效低=记忆陈旧引用时加保留措辞]"
+        )
 
     def _load_kg_context(self, user_message: str) -> str:
         """S9: KG 上下文注入 — 用消息内容在知识图谱中检索相关实体，注入系统提示。
@@ -1034,7 +1187,8 @@ class ChatEngine:
     async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "",
                                     plan_block: str = "", user_profile_text: str = "",
                                     kg_context_text: str = "",
-                                    conv_anchor_text: str = "") -> str:
+                                    conv_anchor_text: str = "",
+                                    temporal_context_line: str = "") -> str:
         """Build system prompt from agent's system.md with template substitution."""
         agent = await self._fetch_agent_config(agent_id)
 
@@ -1089,6 +1243,15 @@ class ChatEngine:
         if conv_anchor_text and "{{conv_anchor}}" not in prompt:
             prompt = prompt + "\n\n## 相关历史对话\n{{conv_anchor}}"
 
+        # S14: 时态上下文注入 — 将当前日期/时间前置追加到提示，不依赖槽位
+        # （大多数 system.md 模板不会预置 {{current_time}}，直接 prepend 更安全）
+        if temporal_context_line:
+            if "{{current_time}}" in prompt:
+                prompt = prompt.replace("{{current_time}}", temporal_context_line)
+            else:
+                # 前置：时态信息对 AI 定向很关键，放最前面确保不被截断
+                prompt = temporal_context_line + "\n\n" + prompt
+
         rag_block = rag_text or "(no relevant documents)"
 
         prompt = prompt.replace("{{memory}}", memory_text)
@@ -1105,6 +1268,8 @@ class ChatEngine:
         prompt = prompt.replace("{{kg_context}}", kg_context_text)
         # S10: 会话锚点槽位替换；空时清理占位符
         prompt = prompt.replace("{{conv_anchor}}", conv_anchor_text)
+        # S14: 清理残余的 {{current_time}} 占位符（当 temporal_context_line="" 时）
+        prompt = prompt.replace("{{current_time}}", "")
 
         return prompt
 
@@ -1592,6 +1757,27 @@ class ChatEngine:
         conf_line = self._compute_memory_confidence_line(relevant)
         if conf_line and memory_text != "无相关记忆":
             memory_text = f"{memory_text}\n{conf_line}"
+        # S15: 记忆时效信号 — 与 S11 置信度并列，反映记忆的时间新鲜度
+        freshness_line = self._compute_memory_freshness_line(relevant)
+        if freshness_line and memory_text != "无相关记忆":
+            memory_text = f"{memory_text}\n{freshness_line}"
+        # S16: 知识缺口检测 — 当记忆上下文严重不足时，注入行为指令引导 AI 主动澄清
+        gap_hint = self._compute_knowledge_gap_hint(relevant)
+        if gap_hint:
+            if memory_text == "无相关记忆":
+                memory_text = gap_hint
+            else:
+                memory_text = f"{memory_text}\n{gap_hint}"
+        # S17: 记忆信号使用指南 — 在 memory block 顶部注入标签说明（仅当有实际记忆内容时）
+        # 注意：S16 可能已将 sentinel "无相关记忆" 替换为纯 gap hint；
+        # 此时 memory_text 以 "[知识缺口:" 开头，无实际记忆条目，不应注入 guide。
+        signal_guide = self._get_memory_signal_guide_line()
+        has_real_memory = (
+            memory_text != "无相关记忆"
+            and not memory_text.startswith("[知识缺口:")
+        )
+        if signal_guide and has_real_memory:
+            memory_text = f"{signal_guide}\n{memory_text}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -1618,7 +1804,9 @@ class ChatEngine:
         kg_context_text = self._load_kg_context(user_input)
         # S10: 会话锚点（新会话首条消息时检索相关 L2 摘要，后续消息直接跳过）
         conv_anchor_text = await self._load_conversation_anchor(session_id, user_input)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text, conv_anchor_text)
+        # S14: 时态上下文注入（当前日期/时间，零成本，每次对话刷新）
+        temporal_context_line = self._get_temporal_context_line()
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text, conv_anchor_text, temporal_context_line)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
@@ -1755,6 +1943,27 @@ class ChatEngine:
         conf_line = self._compute_memory_confidence_line(relevant)
         if conf_line and memory_text != "无相关记忆":
             memory_text = f"{memory_text}\n{conf_line}"
+        # S15: 记忆时效信号 — 与 S11 置信度并列，反映记忆的时间新鲜度
+        freshness_line = self._compute_memory_freshness_line(relevant)
+        if freshness_line and memory_text != "无相关记忆":
+            memory_text = f"{memory_text}\n{freshness_line}"
+        # S16: 知识缺口检测 — 当记忆上下文严重不足时，注入行为指令引导 AI 主动澄清
+        gap_hint = self._compute_knowledge_gap_hint(relevant)
+        if gap_hint:
+            if memory_text == "无相关记忆":
+                memory_text = gap_hint
+            else:
+                memory_text = f"{memory_text}\n{gap_hint}"
+        # S17: 记忆信号使用指南 — 在 memory block 顶部注入标签说明（仅当有实际记忆内容时）
+        # 注意：S16 可能已将 sentinel "无相关记忆" 替换为纯 gap hint；
+        # 此时 memory_text 以 "[知识缺口:" 开头，无实际记忆条目，不应注入 guide。
+        signal_guide = self._get_memory_signal_guide_line()
+        has_real_memory = (
+            memory_text != "无相关记忆"
+            and not memory_text.startswith("[知识缺口:")
+        )
+        if signal_guide and has_real_memory:
+            memory_text = f"{signal_guide}\n{memory_text}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
@@ -1788,7 +1997,9 @@ class ChatEngine:
         kg_context_text = self._load_kg_context(user_input)
         # S10: 会话锚点（新会话首条消息时检索相关 L2 摘要，后续消息直接跳过）
         conv_anchor_text = await self._load_conversation_anchor(session_id, user_input)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text, conv_anchor_text)
+        # S14: 时态上下文注入（当前日期/时间，零成本，每次对话刷新）
+        temporal_context_line = self._get_temporal_context_line()
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text, conv_anchor_text, temporal_context_line)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
