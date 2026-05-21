@@ -39,15 +39,7 @@ const { Dragger } = Upload;
  * same source (frontend/public/logo.svg).
  */
 function BrandMark() {
-  return (
-    <img
-      src="/logo.svg"
-      width={28}
-      height={28}
-      alt="WeBrain"
-      style={{ display: "block" }}
-    />
-  );
+  return <img src="/logo.svg" width={28} height={28} alt="WeBrain" style={{ display: "block" }} />;
 }
 
 /**

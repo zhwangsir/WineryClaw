@@ -84,10 +84,7 @@ export default function PopupChatPage() {
     el.scrollTop = el.scrollHeight;
   }, [messages, streaming]);
 
-  const canSend = useMemo(
-    () => draft.trim().length > 0 && !streaming,
-    [draft, streaming],
-  );
+  const canSend = useMemo(() => draft.trim().length > 0 && !streaming, [draft, streaming]);
 
   const onSubmit = async () => {
     const text = draft.trim();
@@ -116,8 +113,7 @@ export default function PopupChatPage() {
         width: "100vw",
         background: "#1a1a1a",
         color: "#e6e6e6",
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif",
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif",
         overflow: "hidden",
       }}
     >
@@ -166,10 +162,7 @@ export default function PopupChatPage() {
           </div>
         )}
         {messages.map((msg, idx) => {
-          const content =
-            typeof msg.content === "string"
-              ? msg.content
-              : JSON.stringify(msg.content ?? "");
+          const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
           const isLast = idx === messages.length - 1;
           return (
             <MessageRow

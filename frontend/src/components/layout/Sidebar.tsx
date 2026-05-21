@@ -259,13 +259,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         >
           {/* Brand mark — same /logo.svg as favicon / manifest / Tauri tray.
               No gradient wrapper: the multi-color mascot speaks for itself. */}
-          <img
-            src="/logo.svg"
-            width={28}
-            height={28}
-            alt="WeBrain"
-            style={{ display: "block" }}
-          />
+          <img src="/logo.svg" width={28} height={28} alt="WeBrain" style={{ display: "block" }} />
         </div>
         <div style={{ minWidth: 0 }}>
           <div
