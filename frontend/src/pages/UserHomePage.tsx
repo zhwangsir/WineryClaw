@@ -33,23 +33,20 @@ const { Dragger } = Upload;
  * Brand mark — small SVG "brain wave" glyph rendered on the Notion-blue→
  * violet gradient defined in CSS. Replaces the Unicode `●` placeholder.
  */
+/**
+ * BrandMark — renders /logo.svg so the brand mark stays in sync with
+ * favicon, manifest icon, and Tauri tray icon. All four pull from the
+ * same source (frontend/public/logo.svg).
+ */
 function BrandMark() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M3 8c0-2.5 2-4.5 4.5-4.5S12 5.5 12 8c0 1-.3 1.9-.9 2.6"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-      <path
-        d="M2.5 10.5c1.2.6 2.6.6 3.8 0 1.2-.6 2.6-.6 3.8 0 1.2.6 2.6.6 3.8 0"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <img
+      src="/logo.svg"
+      width={28}
+      height={28}
+      alt="WeBrain"
+      style={{ display: "block" }}
+    />
   );
 }
 

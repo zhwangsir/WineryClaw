@@ -252,29 +252,20 @@ export function Sidebar({ onNavigate }: SidebarProps) {
           style={{
             width: 28,
             height: 28,
-            borderRadius: 6,
-            background: "linear-gradient(135deg, var(--c-accent), #8b5cf6)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: "#ffffff",
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M3 8c0-2.5 2-4.5 4.5-4.5S12 5.5 12 8c0 1-.3 1.9-.9 2.6"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-            <path
-              d="M2.5 10.5c1.2.6 2.6.6 3.8 0 1.2-.6 2.6-.6 3.8 0 1.2.6 2.6.6 3.8 0"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          {/* Brand mark — same /logo.svg as favicon / manifest / Tauri tray.
+              No gradient wrapper: the multi-color mascot speaks for itself. */}
+          <img
+            src="/logo.svg"
+            width={28}
+            height={28}
+            alt="WeBrain"
+            style={{ display: "block" }}
+          />
         </div>
         <div style={{ minWidth: 0 }}>
           <div

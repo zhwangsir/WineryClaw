@@ -62,10 +62,13 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--uh-accent), #8b5cf6);
-  color: white;
-  font-size: 14px;
+  /* No gradient wrapper — the multi-color mascot in /logo.svg is the logo. */
+}
+
+.user-home__logo img {
+  width: 28px;
+  height: 28px;
+  display: block;
 }
 
 .user-home__title {

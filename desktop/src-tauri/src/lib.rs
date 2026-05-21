@@ -179,10 +179,12 @@ pub fn run() {
                 ],
             )?;
 
-            // Tray icon. Colored (not template) so the brand logo is visible
-            // against macOS Tahoe blue wallpaper — template mode collapses the
-            // gradient to alpha which renders nearly invisible.
-            let tray_icon_bytes = include_bytes!("../icons/32x32.png");
+            // Tray icon. Uses the project's official logo.svg rasterized to
+            // 44×44 (macOS menu-bar 22pt @ 2× retina), placed at tray-22x22.png.
+            // Colored (NOT template) so the brand mascot stays visible — template
+            // mode would collapse the multi-color palette to alpha and render
+            // nearly invisible against the macOS Tahoe blue wallpaper.
+            let tray_icon_bytes = include_bytes!("../icons/tray-22x22.png");
             let tray_icon = Image::from_bytes(tray_icon_bytes)?;
 
             let _tray = TrayIconBuilder::with_id("webrain-tray")
