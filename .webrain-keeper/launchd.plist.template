@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  WeBrain Keeper — macOS launchd plist 模板
+  由 .webrain-keeper/scripts/install.sh 在安装时模板渲染 + 写入
+    ~/Library/LaunchAgents/ai.webrain.keeper.plist
+
+  默认每天 03:00 触发一次 keeper-loop.sh。可在 StartCalendarInterval 中调整。
+  StandardOutPath / StandardErrorPath 指向项目内 logs/launchd-stdout.log。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.webrain.keeper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO_ROOT__/.webrain-keeper/scripts/keeper-loop.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO_ROOT__</string>
+
+    <!-- 每天 03:00 触发；可改成 StartInterval 用秒级周期 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- 仅在系统空闲（mac 醒着）时跑；省电避免半夜唤醒 -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- 同一时刻不会重叠触发 -->
+    <key>AbandonProcessGroup</key>
+    <false/>
+
+    <!-- 防止 launchd 在脚本崩溃时立刻重启 -->
+    <key>ThrottleInterval</key>
+    <integer>3600</integer>
+
+    <!-- 标准输出 / 错误：写到项目 logs/ 目录 -->
+    <key>StandardOutPath</key>
+    <string>__REPO_ROOT__/.webrain-keeper/logs/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO_ROOT__/.webrain-keeper/logs/launchd-stderr.log</string>
+
+    <!-- 继承登录环境变量(claude CLI 需要 ANTHROPIC_BASE_URL 等) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- 用户应通过 install.sh 注入额外 env(如 ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY)-->
+    </dict>
+
+    <!-- 不限制内存,但限 CPU 优先级 -->
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>

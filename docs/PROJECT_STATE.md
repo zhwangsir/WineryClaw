@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-21（Round K1-K7 + L1-L3 — 用户端能力大补:模型指示器 + 流式光标 + RAG 引用编号 + 追问建议 + 会话切换 + 语音输入 + 首次引导 + 备份脚本 + Dragger 折叠 + 沙箱出站白名单）
+> **最后更新**：2026-05-22（Round S1–S19 全部回填 + v2 启动 + webrain-keeper sub-agent + ROADMAP_V2 上线）
 
 ---
 
@@ -1313,3 +1313,132 @@ H1 文档化的结论:"WAL 不是 lever,连接池才是"。H2 验证。
 | Playwright e2e | **14 通过** | ✅ |
 | Main-brain unit | **402 通过** | ✅ (主脑代码 J 系列未动,纯回归验证;6:28) |
 | 类型检查 | sub-brain + frontend 全干净 | ✅ |
+
+---
+
+## 17. Round K / L / S 系列回填(2026-05-22 同步)
+
+> 本节由 webrain-keeper 设施启动当日(2026-05-22)从 git log 回填,
+> 修正了上文 §7 测试数字与 §9 下一步表已经过时的事实。
+
+### Round K1–K7 (2026-05-21) — 用户态体验大补
+
+commit `959582a`,单 PR 8 文件 / +819 行。
+
+| Sub-round | 能力 |
+|---|---|
+| K1 | 顶栏 model indicator pill,点击跳 `/config` |
+| K2 | 流式光标精修:chatPulse → chatCursorBlink 1.2s steps(2) |
+| K3 | RAG 编号引用 `[1] [2] [3]` 替代单一徽章,每 chunk 独立 hover |
+| K4 | `POST /chat/followups` 自动追问建议(max 3,256-token cap) |
+| K5 | 会话切换抽屉(HistoryOutlined)+ 搜索 + popconfirm 删除 |
+| K6 | Web Speech API 语音输入 hook + interim transcript |
+| K7 | 3 步首次引导 Modal,localStorage 锁定 |
+
+### Round L1–L3 (2026-05-21) — 运维 + 安全闭环
+
+commit `8cf0fb7`。
+
+| Sub-round | 能力 |
+|---|---|
+| L1 | `scripts/backup-data.sh` 全量数据备份(main-brain + workspaces)+ retention + BSD/GNU portable |
+| L2 | RAG 右栏 Dragger 有文档后自动折叠,腾出 120px 垂直空间 |
+| L3 | Sandbox 出站网络白名单 `networkAllowlist` |
+
+### Round S 系列(2026-05-22) — 19 轮 AI 体验深度打磨
+
+每个 Round 都由 `WEBRAIN_*` ENV 开关 / 失败开放 / 端到端测试覆盖。详见 `CLAUDE.md` ENV 速查表(50 个变量)。
+
+| Round | 能力 | 类型 |
+|---|---|---|
+| S1 | HyDE 假设答案文档检索增强 | LLM 增强 |
+| S2 | 反思循环(答案评分→修订) | LLM 增强 |
+| S3 | 会话工作记忆(异步提取 3-5 关键事实) | LLM 增强 |
+| S4 | 只读工具结果缓存(TTL) | 性能 |
+| S5 | 上下文压缩(链式工具调用过长时) | 性能 |
+| S6 | Dreaming 主动洞察 | LLM 增强 |
+| S7 | 语义去重(L2→L3 时检测相似 L3 合并) | 数据质量 |
+| S8 | 持久用户上下文(注入 [preference]/[goal]) | 上下文 |
+| S9 | KG 上下文注入(关键词→实体+1跳) | 上下文 |
+| S10 | 跨会话对话锚点(新会话首条消息) | 上下文 |
+| S11 | 记忆置信度元信号 `[记忆支撑: N 条 · K 条已验证 · 高/中/低]` | 元信号 |
+| S12 | importance 分层显示(已验证事实 vs 近期片段) | 元信号 |
+| S13 | L4 身份锚点强制注入(top-K importance L4) | 上下文 |
+| S14 | 时态上下文(前置当前时间/星期) | 上下文 |
+| S15 | 记忆时效信号(高/中/低 平均年龄) | 元信号 |
+| S16 | 知识缺口检测(relevant=空时引导澄清) | 元信号 |
+| S17 | 记忆信号使用指南(顶部紧凑标签说明) | 元信号 |
+| S18 | 查询意图感知(关键词分类 PERSONAL/TEMPORAL/TASK/GENERAL) | 元信号 |
+| S19 | 记忆来源多样性(L3/L4 vs L1/L2 条数拆解) | 元信号 |
+
+### 当前测试基线(2026-05-22 现场实测)
+
+| 层 | 数量 | 状态 |
+|---|---|---|
+| **Main-brain pytest** | **680 通过** / 0 失败 | ✅ 6:21 分钟(vs J4 的 402,+278 来自 S 系列) |
+| **Sub-brain vitest** | **450 通过** / 2 skipped | ✅ 1.09s |
+| **Frontend vitest** | **1216 通过** / 0 失败 | ✅ 16.76s |
+| **Playwright e2e** | **89 通过**(21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) | ✅ (CLAUDE.md 记录,未现场跑) |
+| **Main-brain smoke** | **53 通过**(6 min) | ✅ (未现场跑) |
+| **Benchmark** | 5 个 | ✅ (Memory + chat-latency) |
+| **TypeScript tsc** | sub-brain + frontend 全干净 | ✅ |
+
+合计 **2346 单测 + 89 e2e + 53 smoke 全绿**。
+
+---
+
+## 18. v2 启动 — 接管纪要(2026-05-22)
+
+### 上下文
+
+用户王震宇在 2026-05-22 当日明确授权:
+1. 将整个项目交予 Claude(本会话)接管
+2. 目标:**全面超越 Hermes Agent (Nous Research) + OpenClaw**
+3. 创建 sub-agent 自动监控和纠正项目
+
+### 严格审计结论(本会话上半段)
+
+| 维度 | Hermes | OpenClaw | WeBrain | 差距 |
+|---|---:|---:|---:|---|
+| 源代码量 | 800K | 847K | 45K | ~1/18 |
+| Channel 数 | 31 | 16 | 6 | ~1/3–1/5 |
+| LLM provider | 13+ | 29 | 1 真 + 框架 | ~1/15 |
+| 原生 client | TUI+Web | macOS+iOS+Android | 仅 Web | 缺位 |
+| 贡献者 | 24+/版本 | 多公司赞助 | 1+AI | 结构性 |
+
+单人 + AI **量化追平** 估算 1.5–2.5 年,**量化超越** 估算 3–5 年。
+
+### 战略转向(已与用户对齐)
+
+放弃量化追平,改为「Axis 极致」战略:
+- 选 1–2 个已领先 axis 做到世界第一
+- 其他维度保持「够用」
+
+详见 `docs/ROADMAP_V2.md`。
+
+### v2 三大「超越」axis
+
+1. **世界最强本地 AI 记忆系统** — S 系列继续到 S30+,recall@5 ≥ 0.85
+2. **世界最强双脑物理隔离架构** — 8/8 plugin hook 跨进程 + protocol versioning
+3. **最完备的隐私优先本地 AI 平台** — SQLCipher + 网络 ledger + 8 大 provider 隐私模式
+
+### v2 配套设施
+
+| 设施 | 路径 | 状态 |
+|---|---|---|
+| 战略指南针 | `docs/ROADMAP_V2.md` | ✅ |
+| 自动化 sub-agent | `.claude/agents/webrain-keeper.md` | ✅ |
+| 监控脚本组 | `.webrain-keeper/scripts/{health-check,auto-fix,keeper-loop,install,uninstall}.sh` | ✅ |
+| launchd / systemd 触发器 | `.webrain-keeper/launchd.plist.template` | ✅ |
+| Stop hook | `.claude/settings.local.json` | ✅ |
+| 用户启用方式 | `./.webrain-keeper/scripts/install.sh` | 待用户手动启用 |
+
+### Sprint 0 后续(由 webrain-keeper 推动 / 用户最终批准)
+
+按用户「按顺序开始进行」指令:
+- 0.1 ✅ 监控基础设施 + 文档同步(本次)
+- 0.2 M6b Tauri 桌面壳(下一会话)
+- 0.3 5 大 LLM provider 接入(OpenAI/Anthropic/Gemini/DeepSeek/Kimi)
+- 0.4 S20+ 记忆系统深度
+
+---

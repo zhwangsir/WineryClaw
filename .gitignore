@@ -54,8 +54,10 @@ sub-brain/data/**/*.db
 # Build outputs (keep source, ignore builds)
 frontend/dist/
 frontend/node_modules/
+frontend/node_modules
 sub-brain/dist/
 sub-brain/node_modules/
+sub-brain/node_modules
 
 # Electron / app builds
 build/
@@ -65,3 +67,8 @@ build/
 # Temporary files
 .tmp/
 temp/
+
+# webrain-keeper runtime artifacts
+.webrain-keeper/logs/
+.webrain-keeper/alerts/
+.webrain-keeper/reports/
