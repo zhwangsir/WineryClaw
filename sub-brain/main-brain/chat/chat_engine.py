@@ -464,6 +464,15 @@ class ChatEngine:
             os.environ.get("WEBRAIN_MEM_SOURCE_DIVERSITY_ENABLED", "1") != "0"
         )
 
+        # S20: 记忆充分性信号 (Memory Adequacy Signal) — 根据 S18 查询意图 +
+        # validated 条数，生成意图特定的行为指令（充足/有限/不足）。与 S11/S19
+        # 聚合-统计互补：S11 给评级、S19 给条数、S20 给"该怎么做"。仅在
+        # PERSONAL_RECALL / TEMPORAL_RECALL 意图下注入；GENERAL/TASK_ASSIST 不注入。
+        # Assembly 层在 S16 gap_hint 触发时跳过 S20，避免矛盾指令（HIGH fix）。
+        self.mem_adequacy_enabled: bool = (
+            os.environ.get("WEBRAIN_MEM_ADEQUACY_ENABLED", "1") != "0"
+        )
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1117,6 +1126,63 @@ class ChatEngine:
             return (
                 f"[记忆来源: 混合来源(已验证 {validated}条 · 近期片段 {raw_count}条) — {advice}]"
             )
+
+    def _compute_memory_adequacy_line(
+        self, relevant: List[Dict], intent: str
+    ) -> str:
+        """S20: 记忆充分性信号 — 基于 S18 意图 + validated 条数生成行为指令。
+
+        与 S11 / S19 互补:
+            S11 聚合评级(高/中/低), S19 条数拆解, S20 给"在这个意图下该怎么做"。
+
+        意图分支:
+            PERSONAL_RECALL — 看已验证(importance >= threshold)条数
+                validated >= 2 → "充足 — 可自信回答 / 有据可查"
+                validated == 1 → "有限 — 据我所知"
+                validated == 0 → "不足 — 主动确认/询问关键信息"
+            TEMPORAL_RECALL — 只看总条数(时序重建依赖事件密度,与置信度无关)
+                total >= 2 → "充足(共 N 条历史记录)"
+                total == 1 → "有限 — 时序重建可能不完整"
+            GENERAL / TASK_ASSIST → 不注入(返回空字符串)
+
+        Args:
+            relevant: 从记忆库检索到的记忆记录列表(每条 dict 含 importance)。
+            intent: S18 _classify_query_intent 的返回值。
+
+        Returns:
+            形如 "[记忆充分性: <verdict> — <action_hint>]" 的紧凑单行
+            (无换行,< 100 字符), 或空字符串(禁用/relevant 空/非个人或时序意图)。
+        """
+        if not self.mem_adequacy_enabled or not relevant:
+            return ""
+        if intent not in ("PERSONAL_RECALL", "TEMPORAL_RECALL"):
+            return ""
+
+        if intent == "PERSONAL_RECALL":
+            validated = sum(
+                1
+                for m in relevant
+                if (m.get("importance") or 0.0) >= self.mem_confidence_threshold
+            )
+            if validated >= 2:
+                return "[记忆充分性: 充足 — 已验证事实可自信回答,有据可查]"
+            if validated == 1:
+                return (
+                    "[记忆充分性: 有限 — 仅 1 条已验证事实,"
+                    "建议用\"据我所知\"等限定语回答]"
+                )
+            # validated == 0
+            return (
+                "[记忆充分性: 不足 — 无已验证事实,"
+                "建议主动确认或询问关键信息]"
+            )
+
+        # intent == "TEMPORAL_RECALL"
+        total = len(relevant)
+        if total >= 2:
+            return f"[记忆充分性: 充足(共 {total} 条历史记录) — 可整合时序脉络]"
+        # total == 1 (total == 0 已被上面 not relevant 兜底)
+        return "[记忆充分性: 有限 — 仅 1 条历史记录,时序重建可能不完整]"
 
     def _compute_knowledge_gap_hint(self, relevant: List[Dict]) -> str:
         """S16: 知识缺口检测 — 检测记忆上下文是否严重不足，返回行为指令行。
@@ -1964,6 +2030,12 @@ class ChatEngine:
         intent_hint = self._get_query_intent_hint(intent)
         if intent_hint:
             memory_text = f"{memory_text}\n{intent_hint}"
+        # S20: 记忆充分性信号 — 基于 S18 意图 + validated 条数,给出意图特定的
+        # 行为指令。位置紧邻 S18 之后(意图先行,充分性紧跟)。
+        # 关键 guard: S16 gap_hint 触发时跳过 S20,避免与"知识缺口"指令矛盾。
+        adequacy_line = self._compute_memory_adequacy_line(relevant, intent)
+        if adequacy_line and not gap_hint:
+            memory_text = f"{memory_text}\n{adequacy_line}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -2160,6 +2232,12 @@ class ChatEngine:
         intent_hint = self._get_query_intent_hint(intent)
         if intent_hint:
             memory_text = f"{memory_text}\n{intent_hint}"
+        # S20: 记忆充分性信号 — 基于 S18 意图 + validated 条数,给出意图特定的
+        # 行为指令。位置紧邻 S18 之后(意图先行,充分性紧跟)。
+        # 关键 guard: S16 gap_hint 触发时跳过 S20,避免与"知识缺口"指令矛盾。
+        adequacy_line = self._compute_memory_adequacy_line(relevant, intent)
+        if adequacy_line and not gap_hint:
+            memory_text = f"{memory_text}\n{adequacy_line}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
