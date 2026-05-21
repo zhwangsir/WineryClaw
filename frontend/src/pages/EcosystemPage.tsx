@@ -41,7 +41,7 @@ export default function EcosystemPage() {
       {resources.length === 0 ? (
         <Empty description="暂无资源" />
       ) : (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={resources}
             rowKey="id"
