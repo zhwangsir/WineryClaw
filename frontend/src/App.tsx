@@ -40,6 +40,7 @@ const UploadsPage = lazy(() => import("./pages/UploadsPage"));
 const HooksPage = lazy(() => import("./pages/HooksPage"));
 const MetricsPage = lazy(() => import("./pages/MetricsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const PopupChatPage = lazy(() => import("./pages/PopupChatPage"));
 
 /** Global app initializer — runs once on mount, parallelizes all store hydration */
 function AppInitializer() {
@@ -114,6 +115,23 @@ function AdminShell() {
 export default function App() {
   const location = useLocation();
   const isUserMode = location.pathname === "/";
+  // Popup-chat: minimal compact chat surface for the macOS menu-bar tray.
+  // No admin chrome, no global progress bar, no AppInitializer (the bigger
+  // initializer fires extra fetches the popup doesn't need; the popup boots
+  // its own minimal state).
+  const isPopupChat = location.pathname === "/popup-chat";
+
+  if (isPopupChat) {
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path="/popup-chat" element={<PopupChatPage />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <ErrorBoundary>

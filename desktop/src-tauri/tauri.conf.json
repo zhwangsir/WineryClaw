@@ -14,6 +14,7 @@
       {
         "label": "main",
         "title": "WeBrain",
+        "url": "http://127.0.0.1:3000/",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,
@@ -23,6 +24,22 @@
         "center": true,
         "decorations": true,
         "transparent": false
+      },
+      {
+        "label": "popup",
+        "title": "WeBrain Quick Chat",
+        "url": "http://127.0.0.1:3000/popup-chat",
+        "width": 400,
+        "height": 580,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": true,
+        "shadow": true
       }
     ],
     "security": {
