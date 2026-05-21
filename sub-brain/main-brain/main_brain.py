@@ -316,6 +316,7 @@ async def lifespan(app: FastAPI) -> None:
         rag_retriever=_state["rag"],
         planner=_state["planner"],
         active_memory=_state["active_memory"],
+        kg=_state["kg"],  # S9: KG 上下文注入
     )
 
     # LLM health monitor (M4a) — opt out with WEBRAIN_LLM_HEALTH_DISABLED=1.

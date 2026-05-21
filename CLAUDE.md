@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-22, post Round S S5–S8):
-> **450** sub-brain unit + 1216 frontend unit + **461** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S9):
+> **450** sub-brain unit + 1216 frontend unit + **474** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -155,6 +155,9 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_USER_PROFILE_ENABLED` | main-brain | `1` | Round S8: 持久化用户上下文。将 L3/L4 中的 [preference]/[goal] 事实无条件注入每次对话的系统提示，使 AI 时刻感知用户风格偏好（不依赖查询相关性）。设为 `0` 禁用。 |
 | `WEBRAIN_USER_PROFILE_TOP_K` | main-brain | `5` | S8 用户画像最多注入多少条 [preference]/[goal] 事实。 |
 | `WEBRAIN_USER_PROFILE_TTL` | main-brain | `60` | S8 用户画像缓存有效期（秒）。到期后下次对话重新查 DB。 |
+| `WEBRAIN_KG_CONTEXT_ENABLED` | main-brain | `1` | Round S9: KG 上下文注入。每次对话时用消息关键词检索知识图谱，将命中实体及其一跳关系注入系统提示，使 AI 能利用跨会话积累的结构化实体知识。纯内存操作，延迟 <1ms。设为 `0` 禁用。 |
+| `WEBRAIN_KG_CONTEXT_TOP_K` | main-brain | `3` | S9 每次最多注入多少个 KG 实体。 |
+| `WEBRAIN_KG_CONTEXT_MAX_RELS` | main-brain | `3` | S9 每个实体最多展开多少条直接关联关系。 |
 
 ---
 

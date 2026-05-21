@@ -262,7 +262,7 @@ MAX_TOOL_ITERATIONS = 10
 class ChatEngine:
     def __init__(self, memory_manager: Any, sub_brain_client: Any, llm_config: Optional[Dict[str, Any]] = None,
                  sub_brain_url: str = "http://127.0.0.1:3000", rag_retriever: Any = None,
-                 planner: Any = None, active_memory: Any = None):
+                 planner: Any = None, active_memory: Any = None, kg: Optional[Any] = None):
         self.memory = memory_manager
         self.sub_brain = sub_brain_client
         self.sub_brain_url = sub_brain_url
@@ -279,6 +279,9 @@ class ChatEngine:
         # this wiring, ActiveMemory was an orphan endpoint that no one called.
         # Round B2 (2026-05-20) wires it in.
         self.active_memory = active_memory
+        # S9: 知识图谱上下文注入 (KG Context Injection) — 将 KG 中与当前消息相关的
+        # 实体及其关联无条件注入系统提示。零成本：纯内存子串匹配，无 LLM 调用/DB 查询。
+        self.kg = kg
         # Round E1 fix: retain strong refs to background tasks so CPython's
         # GC can't collect them mid-flight. asyncio.create_task returns a
         # Task object that the event loop only weakly references; without
@@ -356,6 +359,12 @@ class ChatEngine:
         # 注意：asyncio.Lock 必须在运行中的 event loop 内创建；此处设为 None，
         # 在第一次 _load_user_profile 调用时（已在协程中）惰性初始化。
         self._user_profile_lock: Optional[asyncio.Lock] = None
+
+        # S9: 知识图谱上下文 (KG Context) — 将 KG 中命中当前消息关键词的实体和关系
+        # 直接注入系统提示。纯内存操作，延迟 <1ms。不影响无 KG 场景（直接跳过）。
+        self.kg_context_enabled: bool = os.environ.get("WEBRAIN_KG_CONTEXT_ENABLED", "1") != "0"
+        self.kg_context_top_k: int = int(os.environ.get("WEBRAIN_KG_CONTEXT_TOP_K", "3"))
+        self.kg_context_max_rels: int = int(os.environ.get("WEBRAIN_KG_CONTEXT_MAX_RELS", "3"))
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -791,6 +800,45 @@ class ChatEngine:
             lines.append(f"- [{tid}] {desc}{tool_part}")
         return "\n".join(lines)
 
+    def _load_kg_context(self, user_message: str) -> str:
+        """S9: KG 上下文注入 — 用消息内容在知识图谱中检索相关实体，注入系统提示。
+
+        使用 KG.search() 的内存子串匹配，零成本（无 LLM 调用、无 DB 查询）。
+        对每个命中实体额外展开其直接邻居（深度 1），提供一跳关联知识。
+        若 KG 未启用、为空或检索无结果则返回空字符串。
+        """
+        if not self.kg_context_enabled or not self.kg:
+            return ""
+        if not user_message.strip():
+            return ""
+        try:
+            entities = self.kg.search(user_message, limit=self.kg_context_top_k)
+            if not entities:
+                return ""
+            lines: List[str] = []
+            for entity in entities:
+                eid = entity["id"]
+                name = entity.get("name", "")
+                etype = entity.get("type", "unknown")
+                desc = (entity.get("description") or "").strip()
+                header = f"**{name}** ({etype})"
+                if desc:
+                    header += f": {desc}"
+                lines.append(header)
+                # 展开直接邻居（深度 1，最多 kg_context_max_rels 条）
+                neighbors = self.kg.get_neighbors(eid)[:self.kg_context_max_rels]
+                for nb in neighbors:
+                    rel_type = nb.get("relation", "关联")
+                    nb_name = nb.get("name", "")
+                    if nb.get("direction", "out") == "out":
+                        lines.append(f"  → {rel_type}: {nb_name}")
+                    else:
+                        lines.append(f"  ← {rel_type}: {nb_name}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug("[ChatEngine/S9] KG 上下文加载失败（非致命）: %s", e)
+            return ""
+
     async def _load_user_profile(self) -> str:
         """S8: 持久化用户上下文 — 从 L3/L4 加载 [preference]/[goal] 事实注入系统提示。
 
@@ -841,7 +889,8 @@ class ChatEngine:
                 return ""
 
     async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "",
-                                    plan_block: str = "", user_profile_text: str = "") -> str:
+                                    plan_block: str = "", user_profile_text: str = "",
+                                    kg_context_text: str = "") -> str:
         """Build system prompt from agent's system.md with template substitution."""
         agent = await self._fetch_agent_config(agent_id)
 
@@ -888,6 +937,10 @@ class ChatEngine:
         if user_profile_text and "{{user_profile}}" not in prompt:
             prompt = prompt + "\n\n## 用户偏好与目标\n{{user_profile}}"
 
+        # S9: KG 实体上下文 — 若检索到相关实体，在模板末尾追加（或替换槽位）
+        if kg_context_text and "{{kg_context}}" not in prompt:
+            prompt = prompt + "\n\n## 相关知识图谱实体\n{{kg_context}}"
+
         rag_block = rag_text or "(no relevant documents)"
 
         prompt = prompt.replace("{{memory}}", memory_text)
@@ -900,6 +953,8 @@ class ChatEngine:
         prompt = prompt.replace("{{plan}}", plan_block)
         # S8: 用户画像槽位替换；若无 profile，同样清理占位符
         prompt = prompt.replace("{{user_profile}}", user_profile_text)
+        # S9: KG 实体槽位替换；若无 KG 上下文，清理占位符防止泄漏到最终提示
+        prompt = prompt.replace("{{kg_context}}", kg_context_text)
 
         return prompt
 
@@ -1395,7 +1450,9 @@ class ChatEngine:
         agent_config = await self._fetch_agent_config(agent_id)
         # S8: 持久化用户上下文
         user_profile_text = await self._load_user_profile()
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text)
+        # S9: KG 实体上下文（同步，零延迟）
+        kg_context_text = self._load_kg_context(user_input)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
@@ -1548,7 +1605,9 @@ class ChatEngine:
         agent_config = await self._fetch_agent_config(agent_id)
         # S8: 持久化用户上下文
         user_profile_text = await self._load_user_profile()
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text)
+        # S9: KG 实体上下文（同步，零延迟）
+        kg_context_text = self._load_kg_context(user_input)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
