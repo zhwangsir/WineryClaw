@@ -382,6 +382,12 @@ class ChatEngine:
         self.mem_confidence_enabled: bool = os.environ.get("WEBRAIN_MEM_CONFIDENCE_ENABLED", "1") != "0"
         self.mem_confidence_threshold: float = float(os.environ.get("WEBRAIN_MEM_CONFIDENCE_THRESHOLD", "0.7"))
 
+        # S12: 分层记忆展示 (Importance-Tiered Memory Display) — 将 memory_text 中的
+        # 记忆条目按重要性分组：已验证事实（importance ≥ 阈值）与近期对话片段分开展示，
+        # 帮助 AI 在事实层面区分高置信来源与原始片段，而非仅依赖 S11 的汇总信号。
+        # 与 S11 共用 mem_confidence_threshold 阈值，默认开启。
+        self.mem_tiered_enabled: bool = os.environ.get("WEBRAIN_MEM_TIERED_ENABLED", "1") != "0"
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -856,6 +862,30 @@ class ChatEngine:
         except Exception as e:
             logger.debug("[ChatEngine/S10] 会话锚点加载失败（非致命）: %s", e)
             return ""
+
+    def _format_tiered_memory_text(self, relevant: List[Dict]) -> str:
+        """S12: 分层记忆展示 — 将记忆结果按重要性分为已验证事实/近期对话片段两组。
+
+        当 mem_tiered_enabled=False 时，退回到扁平格式（与 S12 前行为一致）。
+        两组均为空时返回空字符串（调用方需处理 '无相关记忆' 回落）。
+        """
+        if not relevant:
+            return ""
+        if not self.mem_tiered_enabled:
+            # 降级：扁平格式
+            return "\n".join(f"- {m.get('content', '')}" for m in relevant if m.get("content"))
+
+        validated = [m for m in relevant if (m.get("importance") or 0.0) >= self.mem_confidence_threshold]
+        raw = [m for m in relevant if (m.get("importance") or 0.0) < self.mem_confidence_threshold]
+
+        parts: List[str] = []
+        if validated:
+            parts.append("[已验证事实]")
+            parts.extend(f"- {m.get('content', '')}" for m in validated if m.get("content"))
+        if raw:
+            parts.append("[近期对话片段]")
+            parts.extend(f"- {m.get('content', '')}" for m in raw if m.get("content"))
+        return "\n".join(parts)
 
     def _compute_memory_confidence_line(self, relevant: List[Dict]) -> str:
         """S11: 记忆置信度标注 — 统计已验证事实数量，返回单行元信号。
@@ -1507,15 +1537,17 @@ class ChatEngine:
             hyde_doc=hyde_doc,
         )
         # S3: 工作记忆 — 将当前会话已积累的关键事实注入 memory_text
+        # S12: 用分层格式替代扁平列表，区分已验证事实与近期对话片段
         working_mem_text = self._get_working_memory_text(session_id)
+        tiered_text = self._format_tiered_memory_text(relevant)
         if working_mem_text:
             memory_parts = []
-            if any(m.get("content") for m in relevant):
-                memory_parts.append("\n".join([f"- {m.get('content', '')}" for m in relevant]))
+            if tiered_text:
+                memory_parts.append(tiered_text)
             memory_parts.append(f"[会话上下文]\n{working_mem_text}")
             memory_text = "\n".join(memory_parts)
         else:
-            memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
+            memory_text = tiered_text or "无相关记忆"
         # S11: 记忆置信度标注 — 在 memory_text 末尾追加元信号（有相关记忆时）
         conf_line = self._compute_memory_confidence_line(relevant)
         if conf_line:
@@ -1661,15 +1693,17 @@ class ChatEngine:
             hyde_doc=hyde_doc,
         )
         # S3: 工作记忆注入
+        # S12: 用分层格式替代扁平列表，区分已验证事实与近期对话片段
         working_mem_text = self._get_working_memory_text(session_id)
+        tiered_text = self._format_tiered_memory_text(relevant)
         if working_mem_text:
             mem_parts = []
-            if any(m.get("content") for m in relevant):
-                mem_parts.append("\n".join([f"- {m.get('content', '')}" for m in relevant]))
+            if tiered_text:
+                mem_parts.append(tiered_text)
             mem_parts.append(f"[会话上下文]\n{working_mem_text}")
             memory_text = "\n".join(mem_parts)
         else:
-            memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
+            memory_text = tiered_text or "无相关记忆"
         # S11: 记忆置信度标注 — 在 memory_text 末尾追加元信号（有相关记忆时）
         conf_line = self._compute_memory_confidence_line(relevant)
         if conf_line:
