@@ -16,7 +16,11 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: |
+          # Production deps + pytest stack (pytest is intentionally NOT in
+          # requirements.txt — that file is for runtime only). Without these
+          # the CI "Run tests" step errors with `No module named pytest`.
           pip install -r sub-brain/main-brain/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
       - name: Syntax check
         run: |
           python -m py_compile sub-brain/main-brain/main_brain.py
@@ -24,7 +28,7 @@ jobs:
           python -m py_compile sub-brain/main-brain/chat/chat_engine.py
       - name: Run tests
         run: |
-          cd sub-brain/main-brain && python -m pytest tests/ -q --tb=short
+          cd sub-brain/main-brain && python -m pytest tests/ -q --tb=short --no-cov
 
   typescript-check:
     runs-on: ubuntu-latest
