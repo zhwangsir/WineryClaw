@@ -456,6 +456,14 @@ class ChatEngine:
             os.environ.get("WEBRAIN_QUERY_INTENT_ENABLED", "1") != "0"
         )
 
+        # S19: 记忆来源多样性信号 (Memory Source Diversity Signal) — 统计 relevant 中
+        # L3/L4（已验证事实）与 L1/L2（近期片段）的条数分布，生成单行来源标签。
+        # 与 S11 置信度聚合互补：S11 给出整体评级，S19 给出条数拆解，帮助 AI 了解
+        # 当前记忆集的可信度结构，而非仅凭聚合分数做判断。零成本（纯列表统计）。
+        self.mem_source_diversity_enabled: bool = (
+            os.environ.get("WEBRAIN_MEM_SOURCE_DIVERSITY_ENABLED", "1") != "0"
+        )
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1060,6 +1068,55 @@ class ChatEngine:
         else:
             level = "低"
         return f"[记忆时效: {level}（平均 {avg_age:.0f} 天前）]"
+
+    def _compute_memory_source_diversity_line(self, relevant: List[Dict]) -> str:
+        """S19: 记忆来源多样性信号 — 分析 relevant 的 L3/L4 vs L1/L2 分布，返回单行标签。
+
+        根据 importance 阈值（与 S11/S12 共用 mem_confidence_threshold）将记忆分为：
+          - 已验证事实（L3/L4）：importance >= threshold（默认 0.7）
+          - 近期片段（L1/L2）：importance < threshold
+
+        输出格式举例：
+            [记忆来源: 已验证事实主导(3/3条) — 可直接引用]
+            [记忆来源: 近期片段主导(3/3条未验证) — 置信度低，引用时请说明不确定性]
+            [记忆来源: 混合来源(已验证 2条 · 近期片段 1条) — 优先引用已验证事实]
+            [记忆来源: 混合来源(已验证 1条 · 近期片段 2条) — 已验证事实较少，引用时注意置信度差异]
+
+        与 S11 置信度聚合互补：S11 给整体评级（高/中/低），S19 给条数拆解。
+        功能关闭或 relevant 为空时返回空字符串。
+
+        Args:
+            relevant: 从记忆库检索到的记忆记录列表。
+
+        Returns:
+            格式化的单行来源多样性标签（不含换行符），或空字符串（禁用 / 无记忆时）。
+        """
+        if not self.mem_source_diversity_enabled or not relevant:
+            return ""
+
+        total = len(relevant)
+        validated = sum(
+            1 for m in relevant
+            if (m.get("importance") or 0.0) >= self.mem_confidence_threshold
+        )
+        raw_count = total - validated
+
+        if validated == total:
+            return f"[记忆来源: 已验证事实主导({validated}/{total}条) — 可直接引用]"
+        elif validated == 0:
+            return (
+                f"[记忆来源: 近期片段主导({total}/{total}条未验证) — "
+                f"置信度低，引用时请说明不确定性]"
+            )
+        else:
+            # 已验证比例 >= 50% → 正面引导；< 50% → 谨慎引导
+            if validated / total >= 0.5:
+                advice = "优先引用已验证事实"
+            else:
+                advice = "已验证事实较少，引用时注意置信度差异"
+            return (
+                f"[记忆来源: 混合来源(已验证 {validated}条 · 近期片段 {raw_count}条) — {advice}]"
+            )
 
     def _compute_knowledge_gap_hint(self, relevant: List[Dict]) -> str:
         """S16: 知识缺口检测 — 检测记忆上下文是否严重不足，返回行为指令行。
@@ -1849,6 +1906,11 @@ class ChatEngine:
         freshness_line = self._compute_memory_freshness_line(relevant)
         if freshness_line and memory_text != "无相关记忆":
             memory_text = f"{memory_text}\n{freshness_line}"
+        # S19: 记忆来源多样性信号 — 统计 L3/L4（已验证）vs L1/L2（近期片段）分布，
+        # 给出条数拆解标签，与 S11 置信度聚合互补。
+        diversity_line = self._compute_memory_source_diversity_line(relevant)
+        if diversity_line and memory_text != "无相关记忆":
+            memory_text = f"{memory_text}\n{diversity_line}"
         # S16: 知识缺口检测 — 当记忆上下文严重不足时，注入行为指令引导 AI 主动澄清
         gap_hint = self._compute_knowledge_gap_hint(relevant)
         if gap_hint:
@@ -2040,6 +2102,11 @@ class ChatEngine:
         freshness_line = self._compute_memory_freshness_line(relevant)
         if freshness_line and memory_text != "无相关记忆":
             memory_text = f"{memory_text}\n{freshness_line}"
+        # S19: 记忆来源多样性信号 — 统计 L3/L4（已验证）vs L1/L2（近期片段）分布，
+        # 给出条数拆解标签，与 S11 置信度聚合互补。
+        diversity_line = self._compute_memory_source_diversity_line(relevant)
+        if diversity_line and memory_text != "无相关记忆":
+            memory_text = f"{memory_text}\n{diversity_line}"
         # S16: 知识缺口检测 — 当记忆上下文严重不足时，注入行为指令引导 AI 主动澄清
         gap_hint = self._compute_knowledge_gap_hint(relevant)
         if gap_hint:

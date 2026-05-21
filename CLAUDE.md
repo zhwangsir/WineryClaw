@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-22, post Round S S5–S18):
-> **450** sub-brain unit + 1216 frontend unit + **613** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S19):
+> **450** sub-brain unit + 1216 frontend unit + **645** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -173,6 +173,7 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_KNOWLEDGE_GAP_ENABLED` | main-brain | `1` | Round S16: 知识缺口检测。当 relevant 为空时注入 `[知识缺口: 当前无相关记忆…]`，当全部为低置信片段时注入 `[知识缺口: 当前记忆均为低置信片段…]`，引导 AI 主动向用户澄清而非猜测/幻觉。将已知弱点转化为主动行为信号。零成本（纯逻辑判断）。设为 `0` 禁用。 |
 | `WEBRAIN_MEM_SIGNAL_GUIDE_ENABLED` | main-brain | `1` | Round S17: 记忆信号使用指南。在 memory_text 顶部注入紧凑单行标签说明 `[记忆标签说明: 已验证事实=…; 近期片段=…; 知识缺口=…; 时效低=…]`，教导 AI 正确解读 S11-S16 注入的元信号，使整个 S 系列形成闭环。约 20 token 开销，仅在有实际记忆内容时注入。设为 `0` 禁用。 |
 | `WEBRAIN_QUERY_INTENT_ENABLED` | main-brain | `1` | Round S18: 查询意图感知。纯关键词分类（零 LLM 调用），将用户消息分为 PERSONAL_RECALL / TEMPORAL_RECALL / TASK_ASSIST / GENERAL 四类，在 memory_text 末尾追加对应的行为提示（如 `[查询意图: 个人信息回溯 — …]`），帮助 AI 在不同查询场景下灵活调整记忆引用策略。与 S16 互补：S16 反映"有多少记忆"，S18 反映"如何使用记忆"。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_SOURCE_DIVERSITY_ENABLED` | main-brain | `1` | Round S19: 记忆来源多样性信号。统计 relevant 中 L3/L4（已验证事实，importance ≥ mem_confidence_threshold）与 L1/L2（近期片段）的条数分布，在 memory_text 中追加单行来源标签（如 `[记忆来源: 混合来源(已验证 2条 · 近期片段 1条) — 优先引用已验证事实]`）。与 S11 置信度聚合互补：S11 给整体评级（高/中/低），S19 给条数拆解，帮助 AI 了解当前记忆集的可信度结构。零成本（纯列表统计）。设为 `0` 禁用。 |
 
 ---
 
