@@ -161,7 +161,13 @@ export class SkillManager {
    * so uninstall is also reflected.
    */
   reloadInstalledHubSkills(): void {
-    // Drop any previously-loaded hub skills that no longer have a file.
+    // Drop any previously-loaded HUB skills whose disk file is gone.
+    // Original implementation used a fragile `createdBy` heuristic that
+    // didn't match the real sentinels ("agent-default", "webrain-built-in",
+    // "agent-auto") and silently evicted user-authored skills on every
+    // install/uninstall (code-review finding 2026-05-21).
+    // The right discriminator is `source === "hub"` — SkillHubClient sets
+    // it at install time (skill-hub-client.ts: `skill.source = "hub"`).
     const live = new Set<string>();
     if (existsSync(INSTALLED_DIR)) {
       for (const id of readdirSync(INSTALLED_DIR)) {
@@ -169,10 +175,7 @@ export class SkillManager {
       }
     }
     for (const [id, sk] of this.skills) {
-      if (sk.createdBy && sk.createdBy !== "user" && sk.createdBy !== "builtin" && !live.has(id)) {
-        // Heuristic: only evict skills that look hub-sourced (have an
-        // author beyond the local "user"/"builtin" sentinels) AND are
-        // no longer on disk.
+      if (sk.source === "hub" && !live.has(id)) {
         this.skills.delete(id);
       }
     }
