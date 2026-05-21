@@ -124,6 +124,19 @@ class TestTieredMemoryDisplay:
         lines = [l for l in result.split("\n") if l.strip() == "-"]
         assert len(lines) == 0
 
+    def test_no_orphan_header_when_all_content_empty(self, engine):
+        """HIGH fix: 同组所有条目 content 为空时，该组的区块标题不应出现。"""
+        relevant = [
+            {"content": "", "importance": 0.9},   # validated, but empty
+            {"content": "有内容的片段", "importance": 0.3},  # raw, has content
+        ]
+        result = engine._format_tiered_memory_text(relevant)
+        # 已验证组无实际内容，不应出现其标题
+        assert "[已验证事实]" not in result
+        # 近期片段组有内容，应出现
+        assert "[近期对话片段]" in result
+        assert "有内容的片段" in result
+
     def test_missing_importance_treated_as_raw(self, engine):
         """importance 字段缺失时视为 0.0，归入近期对话片段区块。"""
         relevant = [{"content": "no importance"}]

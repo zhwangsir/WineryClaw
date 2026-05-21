@@ -151,3 +151,18 @@ class TestMemoryConfidenceGrounding:
         result = engine._compute_memory_confidence_line(relevant)
         assert result.startswith("[记忆支撑:")
         assert "置信度:" in result
+
+    def test_invalid_threshold_env_falls_back_to_default(self, mock_memory, mock_sub_brain):
+        """MEDIUM fix: WEBRAIN_MEM_CONFIDENCE_THRESHOLD 非法值时启动不崩溃，使用默认 0.7。"""
+        import os
+        original = os.environ.get("WEBRAIN_MEM_CONFIDENCE_THRESHOLD")
+        try:
+            os.environ["WEBRAIN_MEM_CONFIDENCE_THRESHOLD"] = "not_a_float"
+            e = ChatEngine(memory_manager=mock_memory, sub_brain_client=mock_sub_brain, llm_config={})
+            # 不应抛出 ValueError，且阈值回退到默认值 0.7
+            assert e.mem_confidence_threshold == 0.7
+        finally:
+            if original is None:
+                os.environ.pop("WEBRAIN_MEM_CONFIDENCE_THRESHOLD", None)
+            else:
+                os.environ["WEBRAIN_MEM_CONFIDENCE_THRESHOLD"] = original

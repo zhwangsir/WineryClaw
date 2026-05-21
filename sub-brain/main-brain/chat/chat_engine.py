@@ -380,7 +380,13 @@ class ChatEngine:
         # L3/L4 事实，而非仅为原始 L1/L2 片段。AI 可据此校准其回答的确信度。
         # 零成本：仅统计 memory.query 已返回的结果，无额外 DB/LLM 调用。
         self.mem_confidence_enabled: bool = os.environ.get("WEBRAIN_MEM_CONFIDENCE_ENABLED", "1") != "0"
-        self.mem_confidence_threshold: float = float(os.environ.get("WEBRAIN_MEM_CONFIDENCE_THRESHOLD", "0.7"))
+        try:
+            self.mem_confidence_threshold: float = float(
+                os.environ.get("WEBRAIN_MEM_CONFIDENCE_THRESHOLD", "0.7")
+            )
+        except ValueError:
+            logger.warning("WEBRAIN_MEM_CONFIDENCE_THRESHOLD 无效，使用默认值 0.7")
+            self.mem_confidence_threshold = 0.7
 
         # S12: 分层记忆展示 (Importance-Tiered Memory Display) — 将 memory_text 中的
         # 记忆条目按重要性分组：已验证事实（importance ≥ 阈值）与近期对话片段分开展示，
@@ -879,12 +885,16 @@ class ChatEngine:
         raw = [m for m in relevant if (m.get("importance") or 0.0) < self.mem_confidence_threshold]
 
         parts: List[str] = []
-        if validated:
+        # 先收集各组有内容的行；仅当存在实际内容时才追加区块标题，
+        # 避免产生标题后无条目的孤立区块（HIGH fix）。
+        validated_lines = [f"- {m.get('content', '')}" for m in validated if m.get("content")]
+        if validated_lines:
             parts.append("[已验证事实]")
-            parts.extend(f"- {m.get('content', '')}" for m in validated if m.get("content"))
-        if raw:
+            parts.extend(validated_lines)
+        raw_lines = [f"- {m.get('content', '')}" for m in raw if m.get("content")]
+        if raw_lines:
             parts.append("[近期对话片段]")
-            parts.extend(f"- {m.get('content', '')}" for m in raw if m.get("content"))
+            parts.extend(raw_lines)
         return "\n".join(parts)
 
     def _compute_memory_confidence_line(self, relevant: List[Dict]) -> str:
@@ -1548,9 +1558,10 @@ class ChatEngine:
             memory_text = "\n".join(memory_parts)
         else:
             memory_text = tiered_text or "无相关记忆"
-        # S11: 记忆置信度标注 — 在 memory_text 末尾追加元信号（有相关记忆时）
+        # S11: 记忆置信度标注 — 仅当 memory_text 有实际内容时追加元信号，
+        # 避免在 "无相关记忆" 后追加置信度行产生逻辑矛盾（MEDIUM fix）。
         conf_line = self._compute_memory_confidence_line(relevant)
-        if conf_line:
+        if conf_line and memory_text != "无相关记忆":
             memory_text = f"{memory_text}\n{conf_line}"
 
         # Plan-execution call sites set these flags to prevent recursion
@@ -1704,9 +1715,10 @@ class ChatEngine:
             memory_text = "\n".join(mem_parts)
         else:
             memory_text = tiered_text or "无相关记忆"
-        # S11: 记忆置信度标注 — 在 memory_text 末尾追加元信号（有相关记忆时）
+        # S11: 记忆置信度标注 — 仅当 memory_text 有实际内容时追加元信号，
+        # 避免在 "无相关记忆" 后追加置信度行产生逻辑矛盾（MEDIUM fix）。
         conf_line = self._compute_memory_confidence_line(relevant)
-        if conf_line:
+        if conf_line and memory_text != "无相关记忆":
             memory_text = f"{memory_text}\n{conf_line}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
