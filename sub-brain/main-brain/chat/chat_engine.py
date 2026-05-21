@@ -1114,34 +1114,42 @@ class ChatEngine:
           GENERAL         — 不匹配以上任何类型的通用查询
 
         分类优先级：PERSONAL_RECALL > TEMPORAL_RECALL > TASK_ASSIST > GENERAL
-        匹配采用精确子串，避免引入正则解析开销。
-        功能关闭时返回 GENERAL（无任何额外注入）。
+        匹配采用精确子串（PERSONAL/TEMPORAL）和正则词边界（英文 TASK 词汇），
+        避免前缀歧义和过宽匹配。
+        功能关闭或消息为空时返回 GENERAL（无任何额外注入）。
         """
-        if not self.query_intent_enabled:
+        if not self.query_intent_enabled or not user_message:
             return "GENERAL"
-        # PERSONAL_RECALL: 显式询问关于用户自身的信息
+        # PERSONAL_RECALL: 显式询问关于用户自身的信息。
+        # 注意：使用精确子串避免前缀歧义：
+        #   "记得我的" 不匹配 "记得我们"；"你知道我的" 不匹配 "你知道我们"
         personal_patterns = [
-            "我叫", "我的名字", "关于我", "我是谁", "你知道我", "记得我", "我有没有告诉",
+            "我叫", "我的名字", "关于我", "我是谁", "你知道我的", "记得我的", "我有没有告诉",
             "我喜欢", "我不喜欢", "我的偏好", "我的习惯", "我的工作", "我的目标",
         ]
         if any(p in user_message for p in personal_patterns):
             return "PERSONAL_RECALL"
-        # TEMPORAL_RECALL: 询问历史/上次/之前的内容
+        # TEMPORAL_RECALL: 询问历史/上次/之前的内容。
+        # "历史" 单独出现时过于宽泛（"中国历史"等非对话历史），改为更具体的复合词。
         temporal_patterns = [
-            "上次", "之前", "上周", "昨天", "最近", "历史", "以前", "记得我们",
+            "上次", "之前", "上周", "昨天", "最近", "以前", "记得我们",
             "我们聊过", "上一次", "之前说过", "你之前", "我之前",
+            "对话历史", "历史记录", "聊天历史",
         ]
         if any(p in user_message for p in temporal_patterns):
             return "TEMPORAL_RECALL"
-        # TASK_ASSIST: 编程、写作、计算等执行型任务（中英文混合）
+        # TASK_ASSIST: 编程、写作、计算等执行型任务（中英文混合）。
+        # 英文词汇使用 \b 词边界匹配，避免 trailing-space 漏匹配和内部词干误匹配。
+        import re as _re
         msg_lower = user_message.lower()
-        task_patterns_lower = [
+        chinese_task_patterns = [
             "帮我写", "帮我做", "帮我实现", "帮我分析", "帮我生成", "帮我创建",
             "给我写", "写一个", "写一段", "实现一个", "创建一个", "生成一个",
             "代码", "python", "javascript", "typescript", "sql", "bash", "shell",
-            "write ", "generate ", "create ", "implement ", "code ",
         ]
-        if any(p in msg_lower for p in task_patterns_lower):
+        if any(p in msg_lower for p in chinese_task_patterns):
+            return "TASK_ASSIST"
+        if _re.search(r"\b(write|generate|create|implement|code)\b", msg_lower):
             return "TASK_ASSIST"
         return "GENERAL"
 

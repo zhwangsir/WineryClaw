@@ -101,9 +101,18 @@ class TestQueryIntentClassification:
         """'昨天' 触发 TEMPORAL_RECALL。"""
         assert engine._classify_query_intent("昨天我们讨论的那个问题") == "TEMPORAL_RECALL"
 
-    def test_temporal_recall_li_shi(self, engine):
-        """'历史' 触发 TEMPORAL_RECALL。"""
+    def test_temporal_recall_dui_hua_li_shi(self, engine):
+        """'对话历史' 触发 TEMPORAL_RECALL（复合词，避免"中国历史"等宽泛匹配）。"""
         assert engine._classify_query_intent("查看对话历史") == "TEMPORAL_RECALL"
+
+    def test_temporal_recall_li_shi_ji_lu(self, engine):
+        """'历史记录' 触发 TEMPORAL_RECALL。"""
+        assert engine._classify_query_intent("历史记录里有什么？") == "TEMPORAL_RECALL"
+
+    def test_general_for_broad_history_question(self, engine):
+        """单独出现的'历史'（作为历史学话题）不触发 TEMPORAL_RECALL（已从 patterns 移除）。"""
+        result = engine._classify_query_intent("中国历史上最伟大的发明是什么？")
+        assert result == "GENERAL"
 
     # --- TASK_ASSIST ---
 
@@ -126,6 +135,32 @@ class TestQueryIntentClassification:
     def test_task_assist_bang_wo_fen_xi(self, engine):
         """'帮我分析' 触发 TASK_ASSIST。"""
         assert engine._classify_query_intent("帮我分析这段日志") == "TASK_ASSIST"
+
+    def test_task_assist_english_word_boundary_end_of_msg(self, engine):
+        """英文 'write' 位于消息末尾时（无 trailing space）仍触发 TASK_ASSIST（\b 词边界匹配）。"""
+        assert engine._classify_query_intent("please write") == "TASK_ASSIST"
+
+    def test_task_assist_english_word_boundary_code(self, engine):
+        """英文 'code' 独立成词时触发 TASK_ASSIST（不应误匹配 'decode'/'encode' 等）。"""
+        assert engine._classify_query_intent("write some code") == "TASK_ASSIST"
+
+    # --- 边界场景（代码审查 HIGH/MEDIUM 修复验证）---
+
+    def test_ji_de_wo_men_is_temporal_not_personal(self, engine):
+        """'记得我们' 应触发 TEMPORAL_RECALL，不应被 '记得我' 误分类为 PERSONAL_RECALL。"""
+        # 修复：personal_patterns 从 "记得我" 改为 "记得我的"，避免前缀歧义
+        result = engine._classify_query_intent("记得我们上次的约定吗？")
+        assert result == "TEMPORAL_RECALL"
+
+    def test_ni_zhi_dao_wo_men_is_general(self, engine):
+        """'你知道我们' 不应被误分类为 PERSONAL_RECALL（已将 '你知道我' 改为 '你知道我的'）。"""
+        result = engine._classify_query_intent("你知道我们公司的情况吗？")
+        # 没有个人信息关键词，也没有任务关键词 → GENERAL
+        assert result == "GENERAL"
+
+    def test_returns_general_for_empty_message(self, engine):
+        """空字符串消息返回 GENERAL（None guard 的延伸覆盖）。"""
+        assert engine._classify_query_intent("") == "GENERAL"
 
     # --- 优先级测试 ---
 
