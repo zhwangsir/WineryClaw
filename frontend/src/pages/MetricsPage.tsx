@@ -34,14 +34,17 @@ export default function MetricsPage() {
   }, []);
 
   return (
-    <PageShell
-      title="指标"
-      subtitle="系统指标查询与监控"
-      icon={<BarChartOutlined />}
-    >
+    <PageShell title="指标" subtitle="系统指标查询与监控" icon={<BarChartOutlined />}>
       <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
-        <Input placeholder="指标名称（可选）" value={name} onChange={(e) => setName(e.target.value)} style={{ maxWidth: 300 }} />
-        <Button type="primary" icon={<SearchOutlined />} onClick={fetchMetrics} loading={loading}>查询</Button>
+        <Input
+          placeholder="指标名称（可选）"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          style={{ maxWidth: 300 }}
+        />
+        <Button type="primary" icon={<SearchOutlined />} onClick={fetchMetrics} loading={loading}>
+          查询
+        </Button>
       </div>
 
       {data && typeof data === "object" && "error" in data ? (
@@ -50,7 +53,16 @@ export default function MetricsPage() {
         </Card>
       ) : data && typeof data === "object" ? (
         <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
-          <pre style={{ background: "var(--c-hover)", padding: 16, borderRadius: 8, fontSize: 12, overflow: "auto", maxHeight: 400 }}>
+          <pre
+            style={{
+              background: "var(--c-hover)",
+              padding: 16,
+              borderRadius: 8,
+              fontSize: 12,
+              overflow: "auto",
+              maxHeight: 400,
+            }}
+          >
             {JSON.stringify(data, null, 2)}
           </pre>
         </Card>
