@@ -375,6 +375,13 @@ class ChatEngine:
         # 本进程内已"激活"的 session_id 集合 — 用于识别新会话（S10 只在首条消息触发）
         self._anchored_sessions: set = set()
 
+        # S11: 记忆置信度标注 (Memory Confidence Grounding) — 在 memory_text 末尾追加
+        # 一行元信号，告知 AI 当前查出的记忆中有多少条是已验证（importance ≥ 阈值）的
+        # L3/L4 事实，而非仅为原始 L1/L2 片段。AI 可据此校准其回答的确信度。
+        # 零成本：仅统计 memory.query 已返回的结果，无额外 DB/LLM 调用。
+        self.mem_confidence_enabled: bool = os.environ.get("WEBRAIN_MEM_CONFIDENCE_ENABLED", "1") != "0"
+        self.mem_confidence_threshold: float = float(os.environ.get("WEBRAIN_MEM_CONFIDENCE_THRESHOLD", "0.7"))
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -849,6 +856,30 @@ class ChatEngine:
         except Exception as e:
             logger.debug("[ChatEngine/S10] 会话锚点加载失败（非致命）: %s", e)
             return ""
+
+    def _compute_memory_confidence_line(self, relevant: List[Dict]) -> str:
+        """S11: 记忆置信度标注 — 统计已验证事实数量，返回单行元信号。
+
+        调用方将此行追加到 memory_text 末尾。当无相关记忆或功能关闭时返回空字符串。
+        置信度级别（基于已验证事实占比）：
+          - 高: validated ≥ 2
+          - 中: validated == 1
+          - 低: validated == 0（有相关记忆但均为 L1/L2 原始片段）
+        """
+        if not self.mem_confidence_enabled or not relevant:
+            return ""
+        total = len(relevant)
+        validated = sum(
+            1 for m in relevant
+            if (m.get("importance") or 0.0) >= self.mem_confidence_threshold
+        )
+        if validated >= 2:
+            level = "高"
+        elif validated == 1:
+            level = "中"
+        else:
+            level = "低"
+        return f"[记忆支撑: {total} 条相关 · 其中 {validated} 条已验证事实 · 置信度: {level}]"
 
     def _load_kg_context(self, user_message: str) -> str:
         """S9: KG 上下文注入 — 用消息内容在知识图谱中检索相关实体，注入系统提示。
@@ -1485,6 +1516,10 @@ class ChatEngine:
             memory_text = "\n".join(memory_parts)
         else:
             memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
+        # S11: 记忆置信度标注 — 在 memory_text 末尾追加元信号（有相关记忆时）
+        conf_line = self._compute_memory_confidence_line(relevant)
+        if conf_line:
+            memory_text = f"{memory_text}\n{conf_line}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -1635,6 +1670,10 @@ class ChatEngine:
             memory_text = "\n".join(mem_parts)
         else:
             memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
+        # S11: 记忆置信度标注 — 在 memory_text 末尾追加元信号（有相关记忆时）
+        conf_line = self._compute_memory_confidence_line(relevant)
+        if conf_line:
+            memory_text = f"{memory_text}\n{conf_line}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.

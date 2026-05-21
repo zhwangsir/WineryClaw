@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-22, post Round S S5–S10):
-> **450** sub-brain unit + 1216 frontend unit + **485** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S11):
+> **450** sub-brain unit + 1216 frontend unit + **496** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -161,6 +161,8 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_CONV_ANCHOR_ENABLED` | main-brain | `1` | Round S10: 会话锚点。新会话第一条消息时，在向量空间检索近期相关 L2 对话摘要注入系统提示，帮助 AI 维持跨会话对话脉络（"上次我们在讨论..."）。后续消息不触发。设为 `0` 禁用。 |
 | `WEBRAIN_CONV_ANCHOR_TOP_K` | main-brain | `2` | S10 最多注入多少条近期相关对话摘要。 |
 | `WEBRAIN_CONV_ANCHOR_DAYS` | main-brain | `7` | S10 只检索最近多少天内的 L2 摘要（超出则过滤）。 |
+| `WEBRAIN_MEM_CONFIDENCE_ENABLED` | main-brain | `1` | Round S11: 记忆置信度标注。每次对话在 memory_text 末尾追加 `[记忆支撑: N 条相关 · 其中 K 条已验证事实 · 置信度: 高/中/低]` 元信号，帮助 AI 校准其回答的确信度。零成本（仅统计已查询结果）。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_CONFIDENCE_THRESHOLD` | main-brain | `0.7` | S11 判定"已验证事实"的 importance 阈值（≥ 此值视为 L3/L4 已固化事实）。默认 0.7 与 L3 默认 importance 对齐。 |
 
 ---
 

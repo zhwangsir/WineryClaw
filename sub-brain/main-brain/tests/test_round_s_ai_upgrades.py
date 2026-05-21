@@ -112,10 +112,12 @@ class TestHyDE:
             return_value=_make_llm_response("答复内容")
         )
         await engine.chat("测试问题", "session-001")
-        # memory.query 应被调用，且 hyde_doc 为假设文档
+        # memory.query 应被调用，且第一次调用（主记忆检索）含 hyde_doc
+        # 注意：S10 会话锚点可能触发第二次 memory.query（不含 hyde_doc），
+        # 因此检查 call_args_list[0]（首次调用）而非 call_args（末次调用）。
         mock_memory.query.assert_awaited()
-        call_kwargs = mock_memory.query.call_args
-        assert call_kwargs.kwargs.get("hyde_doc") == "假设答案文档内容"
+        first_call = mock_memory.query.call_args_list[0]
+        assert first_call.kwargs.get("hyde_doc") == "假设答案文档内容"
 
 
 # ---------------------------------------------------------------------------
