@@ -448,6 +448,14 @@ class ChatEngine:
             os.environ.get("WEBRAIN_MEM_SIGNAL_GUIDE_ENABLED", "1") != "0"
         )
 
+        # S18: 查询意图感知 (Query Intent Awareness) — 纯关键词分类（零 LLM 调用），
+        # 根据用户消息类型动态注入记忆使用提示，帮助 AI 在不同查询场景下调整
+        # 记忆引用策略（个人信息回溯 / 历史回溯 / 任务执行）。
+        # 与 S16 知识缺口检测形成互补：S16 告诉 AI 记忆有多少，S18 告诉 AI 如何使用。
+        self.query_intent_enabled: bool = (
+            os.environ.get("WEBRAIN_QUERY_INTENT_ENABLED", "1") != "0"
+        )
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1095,6 +1103,78 @@ class ChatEngine:
             "知识缺口=信息不足请主动澄清; "
             "时效低=记忆陈旧引用时加保留措辞]"
         )
+
+    def _classify_query_intent(self, user_message: str) -> str:
+        """S18: 查询意图分类 — 纯关键词/模式匹配，零额外 LLM 调用。
+
+        将用户消息分为 4 类：
+          PERSONAL_RECALL — 询问关于自身的信息（我叫什么、我的偏好等）
+          TEMPORAL_RECALL — 询问历史/上次/之前的内容（历史回溯）
+          TASK_ASSIST     — 编程、写作、计算等执行型任务
+          GENERAL         — 不匹配以上任何类型的通用查询
+
+        分类优先级：PERSONAL_RECALL > TEMPORAL_RECALL > TASK_ASSIST > GENERAL
+        匹配采用精确子串，避免引入正则解析开销。
+        功能关闭时返回 GENERAL（无任何额外注入）。
+        """
+        if not self.query_intent_enabled:
+            return "GENERAL"
+        # PERSONAL_RECALL: 显式询问关于用户自身的信息
+        personal_patterns = [
+            "我叫", "我的名字", "关于我", "我是谁", "你知道我", "记得我", "我有没有告诉",
+            "我喜欢", "我不喜欢", "我的偏好", "我的习惯", "我的工作", "我的目标",
+        ]
+        if any(p in user_message for p in personal_patterns):
+            return "PERSONAL_RECALL"
+        # TEMPORAL_RECALL: 询问历史/上次/之前的内容
+        temporal_patterns = [
+            "上次", "之前", "上周", "昨天", "最近", "历史", "以前", "记得我们",
+            "我们聊过", "上一次", "之前说过", "你之前", "我之前",
+        ]
+        if any(p in user_message for p in temporal_patterns):
+            return "TEMPORAL_RECALL"
+        # TASK_ASSIST: 编程、写作、计算等执行型任务（中英文混合）
+        msg_lower = user_message.lower()
+        task_patterns_lower = [
+            "帮我写", "帮我做", "帮我实现", "帮我分析", "帮我生成", "帮我创建",
+            "给我写", "写一个", "写一段", "实现一个", "创建一个", "生成一个",
+            "代码", "python", "javascript", "typescript", "sql", "bash", "shell",
+            "write ", "generate ", "create ", "implement ", "code ",
+        ]
+        if any(p in msg_lower for p in task_patterns_lower):
+            return "TASK_ASSIST"
+        return "GENERAL"
+
+    def _get_query_intent_hint(self, intent: str) -> str:
+        """S18: 根据查询意图返回单行行为提示，追加到 memory_text 末尾。
+
+        设计目标：帮助 AI 在不同查询场景下灵活调整记忆引用策略：
+          PERSONAL_RECALL → 强调已验证事实的引用价值
+          TEMPORAL_RECALL → 强调时序整合，近期摘要同等重要
+          TASK_ASSIST     → 提示聚焦执行，避免不必要的记忆陈述占用输出
+          GENERAL         → 不注入，保持默认行为
+
+        与 S16 知识缺口检测互补：S16 反映记忆"有多少"，S18 反映"如何使用"。
+        功能关闭或 GENERAL 意图时返回空字符串。
+        """
+        if not self.query_intent_enabled or intent == "GENERAL":
+            return ""
+        if intent == "PERSONAL_RECALL":
+            return (
+                "[查询意图: 个人信息回溯 — 优先引用已验证事实(L3/L4)；"
+                "无相关记忆时请明确告知用户而非猜测]"
+            )
+        if intent == "TEMPORAL_RECALL":
+            return (
+                "[查询意图: 历史回溯 — 近期对话摘要与低时效记忆同等重要；"
+                "请整合时序脉络而非仅引用最新条目]"
+            )
+        if intent == "TASK_ASSIST":
+            return (
+                "[查询意图: 任务执行 — 聚焦完成用户请求；"
+                "记忆仅作用户背景参考，不必在回复中逐一陈述]"
+            )
+        return ""
 
     def _load_kg_context(self, user_message: str) -> str:
         """S9: KG 上下文注入 — 用消息内容在知识图谱中检索相关实体，注入系统提示。
@@ -1778,6 +1858,11 @@ class ChatEngine:
         )
         if signal_guide and has_real_memory:
             memory_text = f"{signal_guide}\n{memory_text}"
+        # S18: 查询意图感知 — 根据用户消息动态注入记忆使用策略提示（零 LLM 调用）
+        intent = self._classify_query_intent(user_input)
+        intent_hint = self._get_query_intent_hint(intent)
+        if intent_hint:
+            memory_text = f"{memory_text}\n{intent_hint}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -1964,6 +2049,11 @@ class ChatEngine:
         )
         if signal_guide and has_real_memory:
             memory_text = f"{signal_guide}\n{memory_text}"
+        # S18: 查询意图感知 — 根据用户消息动态注入记忆使用策略提示（零 LLM 调用）
+        intent = self._classify_query_intent(user_input)
+        intent_hint = self._get_query_intent_hint(intent)
+        if intent_hint:
+            memory_text = f"{memory_text}\n{intent_hint}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
