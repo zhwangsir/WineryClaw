@@ -78,8 +78,8 @@ export default function SkillhubPage() {
 
   return (
     <PageShell
-      title="Skillhub"
-      subtitle="技能市场 · 安装 · 自我改进 · 草稿审核"
+      title="技能市场"
+      subtitle="Skillhub · 安装 · 自我改进 · 草稿审核"
       icon={<AppstoreAddOutlined />}
     >
       <Tabs

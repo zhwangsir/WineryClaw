@@ -55,7 +55,8 @@ describe("PluginsPage", () => {
   it("renders page shell", async () => {
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("Plugins")).toBeInTheDocument();
+      // Q14.3 — title changed from "Plugins" → "插件" for i18n consistency.
+      expect(screen.getByText("插件")).toBeInTheDocument();
     });
   });
 

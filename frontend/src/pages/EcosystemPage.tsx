@@ -56,7 +56,18 @@ export default function EcosystemPage() {
                   {v?.map((s) => <Tag key={s} style={{ fontSize: 10, margin: 0 }}>{s}</Tag>)}
                 </div>
               )},
-              { title: "创建时间", dataIndex: "createdAt", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span> },
+              {
+                title: "创建时间",
+                dataIndex: "createdAt",
+                // Q14.9 (2026-05-21) — backend may omit createdAt; new Date(undefined)
+                // produces "Invalid Date" which leaked into the table. Treat missing
+                // or unparseable values as "—" so the column stays readable.
+                render: (v?: string) => {
+                  const d = v ? new Date(v) : null;
+                  const display = d && !Number.isNaN(d.getTime()) ? d.toLocaleString("zh-CN") : "—";
+                  return <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{display}</span>;
+                },
+              },
               {
                 title: "操作",
                 key: "action",

@@ -146,13 +146,23 @@ export default function SkillsPage() {
     {
       title: "Triggers",
       key: "triggers",
-      render: (_: unknown, s: Skill) => (
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {s.triggerPatterns.map((t) => (
-            <Tag key={t}>{t}</Tag>
-          ))}
-        </div>
-      ),
+      render: (_: unknown, s: Skill) => {
+        // Q14.4 (2026-05-21) — `__never-match__` is an internal sentinel
+        // meaning "no auto-trigger, only explicit /skills run". Don't
+        // leak it into the UI as a literal Tag — render an em-dash if
+        // it's the only pattern, otherwise filter just the sentinel out.
+        const visible = s.triggerPatterns.filter((t) => t !== "__never-match__");
+        if (visible.length === 0) {
+          return <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>—</span>;
+        }
+        return (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {visible.map((t) => (
+              <Tag key={t}>{t}</Tag>
+            ))}
+          </div>
+        );
+      },
     },
     {
       title: "Actions",
@@ -178,8 +188,8 @@ export default function SkillsPage() {
 
   return (
     <PageShell
-      title="Skills"
-      subtitle={`${skills.length} skill(s) registered`}
+      title="技能"
+      subtitle={`已注册 ${skills.length} 个技能`}
       icon={<ThunderboltOutlined />}
     >
       <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>

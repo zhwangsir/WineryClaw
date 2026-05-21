@@ -130,8 +130,8 @@ export default function PluginsPage() {
 
   return (
     <PageShell
-      title="Plugins"
-      subtitle={`${plugins.length} plugin(s) loaded`}
+      title="插件"
+      subtitle={`已加载 ${plugins.length} 个插件`}
       icon={<AppstoreOutlined />}
     >
       <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
