@@ -152,6 +152,34 @@ export class SkillManager {
   }
 
   /**
+   * Public re-entry to the hub-installed loader. Call this after the
+   * Skillhub install/uninstall handlers touch ~/.webrain/skills/installed
+   * so the in-memory `skills` map matches what's on disk. Without this
+   * the install API succeeded but `invokeSkill(id)` would fail with
+   * "Skill not found" until the next sub-brain restart.
+   * Removes in-memory hub skills whose files no longer exist on disk
+   * so uninstall is also reflected.
+   */
+  reloadInstalledHubSkills(): void {
+    // Drop any previously-loaded hub skills that no longer have a file.
+    const live = new Set<string>();
+    if (existsSync(INSTALLED_DIR)) {
+      for (const id of readdirSync(INSTALLED_DIR)) {
+        if (existsSync(join(INSTALLED_DIR, id, "skill.json"))) live.add(id);
+      }
+    }
+    for (const [id, sk] of this.skills) {
+      if (sk.createdBy && sk.createdBy !== "user" && sk.createdBy !== "builtin" && !live.has(id)) {
+        // Heuristic: only evict skills that look hub-sourced (have an
+        // author beyond the local "user"/"builtin" sentinels) AND are
+        // no longer on disk.
+        this.skills.delete(id);
+      }
+    }
+    this._loadInstalledHubSkills();
+  }
+
+  /**
    * Load skills installed via SkillHubClient. Mirrors _loadImprovedForks
    * but reads from ~/.webrain/skills/installed/<id>/skill.json.
    */

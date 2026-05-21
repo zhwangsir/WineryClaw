@@ -1,0 +1,15 @@
+{
+  "id": "starter-json-pretty",
+  "name": "JSON Pretty",
+  "description": "Parse a JSON string (handling single-line minified payloads) and re-emit with 2-space indent. Returns { pretty } on success or { error, hint } on parse failure.",
+  "triggerPatterns": ["pretty json ", "format json ", "json format "],
+  "code": "const text = String(params.json || params.input || params.text || '').trim();\nif (!text) return { error: 'pass params.json (the JSON string to format)' };\ntry {\n  const parsed = JSON.parse(text);\n  return { pretty: JSON.stringify(parsed, null, 2), bytes_in: text.length };\n} catch (e) {\n  // Try to give a useful pointer\n  const m = String(e.message).match(/position (\\d+)/);\n  const at = m ? Number(m[1]) : -1;\n  const window = at >= 0 ? text.slice(Math.max(0, at - 20), at + 20) : '';\n  return { error: e.message, hint: window ? `near: …${window}…` : 'unparseable JSON' };\n}",
+  "language": "javascript",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["json", "format", "utility"]
+}

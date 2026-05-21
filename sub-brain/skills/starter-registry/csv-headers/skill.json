@@ -1,0 +1,15 @@
+{
+  "id": "starter-csv-headers",
+  "name": "CSV Headers",
+  "description": "Read a CSV file (params.path = absolute path) and report its header row, column count, and row count. Uses stdlib csv module — no pandas dependency. Reads up to a 50MB file.",
+  "triggerPatterns": ["csv headers ", "csv columns ", "describe csv "],
+  "code": "import csv, os\npath = params.get('path') or params.get('file') or ''\nif not path:\n    result = {'error': 'pass params.path (absolute CSV file path)'}\nelif not os.path.isabs(path):\n    result = {'error': 'path must be absolute', 'received': path}\nelif not os.path.isfile(path):\n    result = {'error': 'file not found', 'path': path}\nelif os.path.getsize(path) > 50 * 1024 * 1024:\n    result = {'error': 'file > 50MB; trim before passing through this skill', 'path': path, 'size': os.path.getsize(path)}\nelse:\n    delimiter = params.get('delimiter') or ','\n    try:\n        with open(path, 'r', encoding='utf-8', newline='') as f:\n            reader = csv.reader(f, delimiter=delimiter)\n            headers = next(reader, [])\n            row_count = sum(1 for _ in reader)\n        result = {\n            'path': path,\n            'headers': headers,\n            'column_count': len(headers),\n            'row_count': row_count,\n            'delimiter': delimiter,\n        }\n    except UnicodeDecodeError:\n        result = {'error': 'not UTF-8 — re-save the CSV as UTF-8 or pass params.encoding (not yet supported)'}\n    except Exception as e:\n        result = {'error': f'csv parse failed: {e}', 'path': path}",
+  "language": "python",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["csv", "data", "utility"]
+}

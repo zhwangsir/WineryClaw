@@ -213,6 +213,43 @@ const state = {
   cli: new WeBrainCLI({ subBrainUrl: `http://127.0.0.1:${PORT}`, mainBrainUrl: MAIN_BRAIN_URL }),
 };
 
+// Bootstrap starter skill registry (vision-gap #1, 2026-05-21):
+// Ship a non-empty Skillhub Marketplace out of the box. The repo carries
+// 8 production-quality starter skills under
+// `<sub-brain>/skills/starter-registry/`. Seed only if the user hasn't
+// added a registry with this name themselves — idempotent. Removal via
+// the Skillhub UI is honoured (we don't re-seed on every boot).
+{
+  const STARTER_NAME = "webrain-starters";
+  const existing = state.skillHubClient.listRegistries();
+  if (!existing.some((r) => r.name === STARTER_NAME)) {
+    // Resolve the registry directory relative to this file's location so
+    // it works in both `pnpm dev` (src/) and a built `dist/` layout. The
+    // tsc layout mirrors src/, so going up two levels lands us at
+    // sub-brain/, and the registry lives at sub-brain/skills/...
+    const candidatePaths = [
+      pathResolve(__dirname, "../skills/starter-registry"),
+      pathResolve(__dirname, "../../skills/starter-registry"),
+    ];
+    const starterPath = candidatePaths.find((p) => existsSync(join(p, "index.json")));
+    if (starterPath) {
+      const add = state.skillHubClient.addRegistry({
+        name: STARTER_NAME,
+        url: "file://" + starterPath,
+        enabled: true,
+        priority: 100,
+      });
+      if (add.ok) {
+        app.log.info(`[skillhub] seeded starter registry at ${starterPath}`);
+      } else {
+        app.log.warn(`[skillhub] starter registry seed skipped: ${add.error}`);
+      }
+    } else {
+      app.log.warn("[skillhub] starter registry index.json not found in any candidate path");
+    }
+  }
+}
+
 await state.toolExecutor.initialize();
 await state.channelManager.initialize();
 state.channelManager.setBroadcastHandler((msg: unknown) => wsHub.broadcast(msg));

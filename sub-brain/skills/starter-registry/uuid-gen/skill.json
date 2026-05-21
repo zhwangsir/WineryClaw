@@ -1,0 +1,15 @@
+{
+  "id": "starter-uuid-gen",
+  "name": "UUID Generator",
+  "description": "Generate N random UUID v4 strings (default 1, capped at 100). Uses Node's built-in crypto.randomUUID — cryptographically strong and dependency-free.",
+  "triggerPatterns": ["uuid ", "generate uuid", "random uuid"],
+  "code": "const { randomUUID } = require('crypto');\nconst nRaw = Number(params.n ?? params.count ?? 1);\nconst n = Number.isFinite(nRaw) && nRaw >= 1 ? Math.min(100, Math.floor(nRaw)) : 1;\nconst uuids = Array.from({ length: n }, () => randomUUID());\nreturn { count: n, uuids };",
+  "language": "javascript",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["uuid", "utility"]
+}

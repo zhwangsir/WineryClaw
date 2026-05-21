@@ -1,0 +1,15 @@
+{
+  "id": "starter-slugify",
+  "name": "Slugify",
+  "description": "Convert text into a URL-safe slug. ASCII letters lowercased, non-ASCII (incl. CJK) replaced with '-', collapsed runs of hyphens, no leading/trailing dashes. Returns { input, slug }.",
+  "triggerPatterns": ["slugify ", "to slug "],
+  "code": "const text = String(params.text || params.input || '').trim();\nif (!text) return { error: 'pass params.text' };\nconst slug = text\n  .toLowerCase()\n  .normalize('NFKD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .replace(/[^a-z0-9]+/g, '-')\n  .replace(/^-+|-+$/g, '');\nreturn { input: text, slug: slug || 'untitled' };",
+  "language": "javascript",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["text", "url", "utility"]
+}

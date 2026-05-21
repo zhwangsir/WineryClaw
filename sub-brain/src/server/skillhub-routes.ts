@@ -70,14 +70,24 @@ export function registerSkillhubRoutes(app: FastifyInstance, deps: SkillhubRoute
     // Accept both `slug` (frontend convention) and `skillId` (canonical).
     const id = String(body.skillId ?? body.slug ?? "");
     if (!id) return { ok: false, error: "Missing skillId/slug" };
-    return skillHubClient.install(id, body.registry);
+    const res = await skillHubClient.install(id, body.registry);
+    // Tell the in-process SkillManager about the new skill so
+    // /api/skills/<id>/invoke works immediately. Without this, the
+    // hub-installed skill is on disk but the in-memory registry is
+    // stale until the next sub-brain restart.
+    if (res.ok) skillManager.reloadInstalledHubSkills();
+    return res;
   });
 
   app.post("/api/skillhub/uninstall", async (request) => {
     const body = (request.body as { slug?: string; skillId?: string }) ?? {};
     const id = String(body.skillId ?? body.slug ?? "");
     if (!id) return { ok: false, error: "Missing skillId/slug" };
-    return skillHubClient.uninstall(id);
+    const res = await skillHubClient.uninstall(id);
+    // Mirror install: drop the in-memory copy so the user-visible state
+    // matches disk immediately.
+    if (res.ok) skillManager.reloadInstalledHubSkills();
+    return res;
   });
 
   app.get("/api/skillhub/installed", async () => ({

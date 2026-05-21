@@ -1,0 +1,15 @@
+{
+  "id": "starter-word-count",
+  "name": "Word Count",
+  "description": "Report word / char (including + excluding whitespace) / line / CJK-char counts for a chunk of text. Words split on Unicode whitespace; CJK characters counted individually (single-character languages don't have inter-word spaces).",
+  "triggerPatterns": ["word count ", "count words ", "wc "],
+  "code": "import re, sys\ntext = (params.get('text') or params.get('input') or '')\nif not isinstance(text, str):\n    text = str(text)\nif not text.strip():\n    result = {'error': 'pass params.text'}\nelse:\n    words = [w for w in re.split(r'\\s+', text.strip()) if w]\n    cjk = re.findall(r'[\\u4e00-\\u9fff\\u3040-\\u30ff\\uac00-\\ud7af]', text)\n    result = {\n        'chars': len(text),\n        'chars_no_ws': len(re.sub(r'\\s', '', text)),\n        'lines': text.count('\\n') + (0 if text.endswith('\\n') else 1),\n        'words': len(words),\n        'cjk_chars': len(cjk),\n    }",
+  "language": "python",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["text", "stats", "utility"]
+}
