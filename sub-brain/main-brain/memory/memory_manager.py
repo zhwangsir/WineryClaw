@@ -1270,6 +1270,22 @@ class MemoryManager:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    async def get_top_l4(self, limit: int = 2) -> List[Dict[str, Any]]:
+        """S13: 按 importance 降序返回前 K 条非归档的 L4 记忆。
+
+        L4 是高频 L3 事实晋升的长期身份层（importance=0.9 基准），
+        用于 ChatEngine 的 _get_l4_anchors() 强制注入机制。
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM memories
+                   WHERE level = 'L4' AND (archived IS NULL OR archived = 0)
+                   ORDER BY importance DESC, access_count DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     async def get_skills(self, limit: int = 100) -> List[Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM skills LIMIT ?", (limit,)).fetchall()

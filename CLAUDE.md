@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-22, post Round S S5–S12):
-> **450** sub-brain unit + 1216 frontend unit + **507** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S13):
+> **450** sub-brain unit + 1216 frontend unit + **518** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -164,6 +164,8 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_MEM_CONFIDENCE_ENABLED` | main-brain | `1` | Round S11: 记忆置信度标注。每次对话在 memory_text 末尾追加 `[记忆支撑: N 条相关 · 其中 K 条已验证事实 · 置信度: 高/中/低]` 元信号，帮助 AI 校准其回答的确信度。零成本（仅统计已查询结果）。设为 `0` 禁用。 |
 | `WEBRAIN_MEM_CONFIDENCE_THRESHOLD` | main-brain | `0.7` | S11 判定"已验证事实"的 importance 阈值（≥ 此值视为 L3/L4 已固化事实）。默认 0.7 与 L3 默认 importance 对齐。 |
 | `WEBRAIN_MEM_TIERED_ENABLED` | main-brain | `1` | Round S12: 分层记忆展示。将 memory_text 中的记忆条目按 importance 阈值分为"已验证事实"（L3/L4）和"近期对话片段"（L1/L2）两个区块，帮助 AI 在事实层面区分高置信来源。与 S11 共用 WEBRAIN_MEM_CONFIDENCE_THRESHOLD 阈值。设为 `0` 退回扁平格式。 |
+| `WEBRAIN_L4_ANCHOR_ENABLED` | main-brain | `1` | Round S13: L4 身份锚点强制注入。每次对话前额外查询 importance 最高的 K 条 L4 记忆，去重后前置追加到 relevant 列表，确保用户核心身份事实（工作风格、长期偏好等）始终进入上下文，不依赖语义相似性。单次 SQLite 排序查询，延迟 <1ms。设为 `0` 禁用。 |
+| `WEBRAIN_L4_ANCHOR_TOP_K` | main-brain | `2` | S13 每次前置追加的最大 L4 记忆条数。 |
 
 ---
 

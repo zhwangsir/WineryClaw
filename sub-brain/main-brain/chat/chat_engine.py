@@ -394,6 +394,15 @@ class ChatEngine:
         # 与 S11 共用 mem_confidence_threshold 阈值，默认开启。
         self.mem_tiered_enabled: bool = os.environ.get("WEBRAIN_MEM_TIERED_ENABLED", "1") != "0"
 
+        # S13: L4 身份锚点强制注入 (Always-On L4 Identity Anchors) — 每次对话时，
+        # 将 importance 最高的 K 条 L4 记忆（用户的长期身份事实）前置追加到 relevant 列表。
+        # L4 事实仅在与当前 query 语义相似时才会出现在 memory.query 结果中；
+        # S13 确保无论当前 query 主题如何，用户的核心身份信息（工作风格、技术偏好、
+        # 长期目标等）始终进入 AI 上下文。与 S8 的 [preference]/[goal] 过滤互补：
+        # S8 仅注入标签明确的偏好/目标；S13 注入所有 L4（包括未打标签的身份事实）。
+        self.l4_anchor_enabled: bool = os.environ.get("WEBRAIN_L4_ANCHOR_ENABLED", "1") != "0"
+        self.l4_anchor_top_k: int = int(os.environ.get("WEBRAIN_L4_ANCHOR_TOP_K", "2"))
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -868,6 +877,19 @@ class ChatEngine:
         except Exception as e:
             logger.debug("[ChatEngine/S10] 会话锚点加载失败（非致命）: %s", e)
             return ""
+
+    async def _get_l4_anchors(self) -> List[Dict]:
+        """S13: L4 身份锚点 — 检索 importance 最高的 L4 记忆，强制注入对话上下文。
+
+        失败时静默降级返回空列表，不影响正常对话流程。
+        """
+        if not self.l4_anchor_enabled:
+            return []
+        try:
+            return await self.memory.get_top_l4(limit=self.l4_anchor_top_k)
+        except Exception as e:
+            logger.debug("[ChatEngine/S13] L4 锚点加载失败（非致命）: %s", e)
+            return []
 
     def _format_tiered_memory_text(self, relevant: List[Dict]) -> str:
         """S12: 分层记忆展示 — 将记忆结果按重要性分为已验证事实/近期对话片段两组。
@@ -1546,6 +1568,13 @@ class ChatEngine:
             {"query": user_input, "levels": ["L2", "L3"], "limit": 5},
             hyde_doc=hyde_doc,
         )
+        # S13: L4 身份锚点 — 将最高 importance 的 L4 记忆前置追加（去重），
+        # 确保用户核心身份事实始终进入上下文，无论当前 query 语义是否覆盖它们。
+        l4_anchors = await self._get_l4_anchors()
+        if l4_anchors:
+            seen_ids = {m.get("id") for m in relevant if m.get("id")}
+            new_l4 = [m for m in l4_anchors if m.get("id") not in seen_ids]
+            relevant = new_l4 + relevant
         # S3: 工作记忆 — 将当前会话已积累的关键事实注入 memory_text
         # S12: 用分层格式替代扁平列表，区分已验证事实与近期对话片段
         working_mem_text = self._get_working_memory_text(session_id)
@@ -1703,6 +1732,12 @@ class ChatEngine:
             {"query": user_input, "levels": ["L2", "L3"], "limit": 5},
             hyde_doc=hyde_doc,
         )
+        # S13: L4 身份锚点 — 前置追加最高 importance 的 L4 记忆（去重）
+        l4_anchors = await self._get_l4_anchors()
+        if l4_anchors:
+            seen_ids = {m.get("id") for m in relevant if m.get("id")}
+            new_l4 = [m for m in l4_anchors if m.get("id") not in seen_ids]
+            relevant = new_l4 + relevant
         # S3: 工作记忆注入
         # S12: 用分层格式替代扁平列表，区分已验证事实与近期对话片段
         working_mem_text = self._get_working_memory_text(session_id)
