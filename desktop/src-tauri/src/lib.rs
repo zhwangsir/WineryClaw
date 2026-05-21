@@ -3,35 +3,46 @@
 //! Boots the desktop app, spawns the dual-brain services (sub-brain on :3000,
 //! main-brain on UDS /tmp/webrain-main.sock), shows the main webview window
 //! pointed at sub-brain's served frontend, AND installs a macOS-style menu-bar
-//! tray icon that toggles a compact "Quick Chat" popup window.
+//! tray icon with this interaction model:
 //!
-//! Architecture:
-//!   Tauri main process (Rust)
-//!     ├─ main window     → http://127.0.0.1:3000/        (sub-brain serves SPA + APIs)
-//!     ├─ popup window    → http://127.0.0.1:3000/popup-chat  (compact chat surface)
-//!     ├─ tray icon       (menu bar) → clicks toggle popup, right-click → menu
-//!     └─ spawns:
-//!          └─ sub-brain  (Node.js)   `cd sub-brain && pnpm dev`
-//!             (main-brain auto-spawned by sub-brain's main-brain-spawn.ts)
+//!   - **Left click**  → directly toggles the compact Quick Chat popup
+//!     (most common path — chat lives one click away from anywhere)
+//!   - **Right click** → context menu with full navigation:
+//!       💬 Quick Chat      — same as left click
+//!       ──────
+//!       🏠 Home            — main window, route `/`
+//!       📊 Dashboard       — `/dashboard`
+//!       💬 Chat            — `/chat`
+//!       🧠 Memory          — `/memory`
+//!       ⚡ Skills           — `/skills`
+//!       🧩 Skillhub        — `/skillhub`
+//!       🔌 MCP             — `/mcp`
+//!       ⚙️ Settings        — `/settings`
+//!       ──────
+//!       🪟 Open Main Window
+//!       ✕ Quit
 //!
-//! Why webview loads :3000 instead of file:// — sub-brain's `static.ts` already
-//! serves frontend/dist as the root and proxies /api/* to internal routes. Going
-//! through it means relative URLs in axios calls "just work" with no protocol
-//! mismatch. The previous v0.1.0 file:// load tripped over a startup fetch
-//! returning undefined → `.length` crash.
+//! Navigation menu items push the main window to the front and `eval()` a
+//! `location.href` change — the SPA's hash/history router picks it up. No
+//! frontend IPC plumbing required.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, RunEvent,
 };
 
 mod service_manager;
 
 use service_manager::ServiceManager;
+
+/// Sub-brain origin — main + popup webviews load from this base. Hard-coded
+/// because the static.ts in sub-brain only serves on :3000 and the bind is
+/// not configurable in current wiring.
+const APP_BASE_URL: &str = "http://127.0.0.1:3000";
 
 /// Resolve the repo root by walking up from the binary's CWD until we hit
 /// a directory containing `sub-brain/` and `frontend/`. Falls back to CWD.
@@ -54,8 +65,7 @@ fn service_status(state: tauri::State<'_, Mutex<ServiceManager>>) -> serde_json:
     mgr.status()
 }
 
-/// Show the popup window. Centers near the tray icon click position so the
-/// popup feels attached to the menu-bar icon (within Tauri's positioning limits).
+/// Show & focus the popup, raising it above other windows.
 fn show_popup(app: &tauri::AppHandle) {
     if let Some(popup) = app.get_webview_window("popup") {
         let _ = popup.show();
@@ -66,14 +76,7 @@ fn show_popup(app: &tauri::AppHandle) {
     }
 }
 
-#[allow(dead_code)] // reserved for future "close popup via shortcut" wiring
-fn hide_popup(app: &tauri::AppHandle) {
-    if let Some(popup) = app.get_webview_window("popup") {
-        let _ = popup.hide();
-    }
-}
-
-#[allow(dead_code)] // reserved for future left-click toggle behavior
+/// Left-click toggle: if popup visible, hide it; otherwise show it.
 fn toggle_popup(app: &tauri::AppHandle) {
     if let Some(popup) = app.get_webview_window("popup") {
         match popup.is_visible() {
@@ -89,12 +92,47 @@ fn toggle_popup(app: &tauri::AppHandle) {
     }
 }
 
+/// Bring the main window forward (creating focus + unminimizing if needed).
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
         let _ = main.set_focus();
         let _ = main.unminimize();
     }
+}
+
+/// Navigate the main window to the given SPA route (`/dashboard`, `/chat`, ...).
+/// Brings the window forward first, then assigns `location.href` so the
+/// react-router history listener picks it up.
+fn navigate_main_to(app: &tauri::AppHandle, route: &str) {
+    let main = match app.get_webview_window("main") {
+        Some(w) => w,
+        None => {
+            log::warn!("main window not found for navigate({route})");
+            return;
+        }
+    };
+    let _ = main.show();
+    let _ = main.unminimize();
+    let _ = main.set_focus();
+
+    // route is constructed from menu IDs we control — no untrusted input —
+    // but we still URL-escape single quotes defensively.
+    let safe_route = route.replace('\'', "%27");
+    let js = format!("window.location.href = '{APP_BASE_URL}{safe_route}'");
+    if let Err(e) = main.eval(&js) {
+        log::warn!("navigate eval failed for {route}: {e}");
+    }
+}
+
+/// Quit cleanly: shut down spawned child services first, then `app.exit`.
+fn quit_with_shutdown(app: &tauri::AppHandle) {
+    if let Some(mgr_state) = app.try_state::<Mutex<ServiceManager>>() {
+        if let Ok(mut mgr) = mgr_state.lock() {
+            mgr.shutdown_all();
+        }
+    }
+    app.exit(0);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -116,60 +154,77 @@ pub fn run() {
                 let mgr_state = app.state::<Mutex<ServiceManager>>();
                 let mut mgr = mgr_state.lock().expect("service manager mutex poisoned");
                 if let Err(e) = mgr.spawn_all() {
-                    log::warn!("sub-brain spawn returned: {} (likely already running)", e);
+                    log::warn!("sub-brain spawn returned: {e} (likely already running)");
                 }
             }
 
-            // Build the menu-bar tray icon. macOS conventions:
-            //   left-click → toggle popup
-            //   right-click → context menu (Quick Chat / Open Main / Quit)
+            // Tray menu (right-click on macOS, left-click shows separately below).
+            // Menu item IDs starting with "nav:" are routed through navigate_main_to.
             let menu = Menu::with_items(
                 app,
                 &[
                     &MenuItem::with_id(app, "open_chat", "💬 Quick Chat", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "open_main", "🪟 Open WeBrain", true, None::<&str>)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &MenuItem::with_id(app, "nav:/", "🏠 Home", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "nav:/dashboard", "📊 Dashboard", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "nav:/chat", "💬 Chat", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "nav:/memory", "🧠 Memory", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "nav:/skills", "⚡ Skills", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "nav:/skillhub", "🧩 Skillhub", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "nav:/mcp", "🔌 MCP", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "nav:/settings", "⚙️ Settings", true, None::<&str>)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &MenuItem::with_id(app, "open_main", "🪟 Open Main Window", true, None::<&str>)?,
                     &MenuItem::with_id(app, "quit", "✕ Quit", true, None::<&str>)?,
                 ],
             )?;
 
-            // Reuse the bundled app icon for the tray. We keep it as a colored
-            // icon (NOT template) so the brand purple-blue is visible against
-            // the menu bar — template mode collapsed the gradient to alpha,
-            // making the icon nearly invisible against the macOS Tahoe blue
-            // wallpaper.
+            // Tray icon. Colored (not template) so the brand logo is visible
+            // against macOS Tahoe blue wallpaper — template mode collapses the
+            // gradient to alpha which renders nearly invisible.
             let tray_icon_bytes = include_bytes!("../icons/32x32.png");
             let tray_icon = Image::from_bytes(tray_icon_bytes)?;
 
             let _tray = TrayIconBuilder::with_id("webrain-tray")
                 .icon(tray_icon)
                 .icon_as_template(false)
-                .tooltip("WeBrain — click for Quick Chat")
+                .tooltip("WeBrain — left-click for Quick Chat · right-click for menu")
                 .menu(&menu)
-                // Left-click pops the menu directly (deprecation: the newer
-                // `show_menu_on_left_click` replaces `menu_on_left_click`;
-                // we use the new API to avoid the warning).
-                .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open_chat" => show_popup(app),
-                    "open_main" => show_main_window(app),
-                    "quit" => {
-                        if let Some(mgr_state) = app.try_state::<Mutex<ServiceManager>>() {
-                            if let Ok(mut mgr) = mgr_state.lock() {
-                                mgr.shutdown_all();
+                // CRITICAL: left click does NOT show the menu — it goes
+                // straight to toggle_popup. Right click still opens the
+                // context menu (Tauri default behavior on macOS).
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    let id = event.id.as_ref();
+                    match id {
+                        "open_chat" => show_popup(app),
+                        "open_main" => show_main_window(app),
+                        "quit" => quit_with_shutdown(app),
+                        other => {
+                            if let Some(route) = other.strip_prefix("nav:") {
+                                navigate_main_to(app, route);
+                            } else {
+                                log::warn!("unknown menu id: {other}");
                             }
                         }
-                        app.exit(0);
                     }
-                    _ => {}
                 })
-                // With show_menu_on_left_click(true), left-click pops the
-                // menu directly. We keep a no-op on_tray_icon_event so future
-                // gestures (double-click etc.) can be wired without restructuring.
-                .on_tray_icon_event(|_tray, _event| {})
+                .on_tray_icon_event(|tray, event| {
+                    // Left mouse Up triggers the popup. We use Up (not Down)
+                    // so a click-and-drag away from the icon doesn't fire.
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        toggle_popup(tray.app_handle());
+                    }
+                })
                 .build(app)?;
 
-            // The popup window is created hidden via tauri.conf.json; ensure it
-            // doesn't pop up at boot.
+            // Popup is configured visible:false in tauri.conf.json — belt &
+            // suspenders ensure it stays hidden on boot.
             if let Some(popup) = app.get_webview_window("popup") {
                 let _ = popup.hide();
             }
