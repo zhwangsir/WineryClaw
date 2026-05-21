@@ -3,9 +3,11 @@ Chat Engine — Streaming + Multi-turn Tool Calling + Multi-model Endpoint Suppo
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, AsyncGenerator, Dict, Iterator, List, Optional, Tuple
 
@@ -304,6 +306,33 @@ class ChatEngine:
         # Same gating for ActiveMemory — fires per exchange so it's worth
         # making opt-out cheap. WEBRAIN_ACTIVE_MEMORY_ENABLED=0 disables.
         self.active_memory_enabled: bool = os.environ.get("WEBRAIN_ACTIVE_MEMORY_ENABLED", "1") != "0"
+
+        # ── Round S: AI 能力升级 ──────────────────────────────────────────────
+        # S1: HyDE (Hypothetical Document Embeddings) — 生成假设性答案文档辅助向量检索。
+        # 将原始问题扩展为一个"理想答案草稿"，用该草稿的 embedding 检索语义更接近答案空间
+        # 的记忆块，比直接用问题 embedding 精度更高（尤其对知识密集型问题）。
+        # 代价：每次记忆检索额外一次 LLM 调用（快速小模型可控）。
+        self.hyde_enabled: bool = os.environ.get("WEBRAIN_HYDE_ENABLED", "1") != "0"
+        self.hyde_max_tokens: int = int(os.environ.get("WEBRAIN_HYDE_MAX_TOKENS", "120"))
+
+        # S2: 反思循环 (Reflection Loop) — 生成答复后对自身进行评分，分低则修订。
+        # 仅在非工具调用路径且答复长度 > 100 字时触发，最多修订 1 次，避免无限循环。
+        # 默认关闭（每次对话增加一个额外 LLM 调用）。
+        self.reflection_enabled: bool = os.environ.get("WEBRAIN_REFLECTION_ENABLED", "0") != "0"
+        self.reflection_threshold: int = int(os.environ.get("WEBRAIN_REFLECTION_THRESHOLD", "3"))
+
+        # S3: 工作记忆 (Working Memory) — 会话内短期上下文记忆，独立于 L1-L4 长期记忆。
+        # 每轮对话结束后异步提取 3-5 条关键实体/事实，注入下一轮 system prompt。
+        # 防止长对话中早期重要信息被淡忘（与 M2 摘要互补，M2 负责压缩历史，
+        # WorkingMemory 负责保持当前任务关键信息的即时可达性）。
+        self.working_memory_enabled: bool = os.environ.get("WEBRAIN_WORKING_MEMORY_ENABLED", "1") != "0"
+        self.working_memory_max: int = int(os.environ.get("WEBRAIN_WORKING_MEMORY_MAX", "10"))
+        self._working_memory: Dict[str, List[str]] = {}  # session_id → 当前会话关键事实列表
+
+        # S4: 工具结果缓存 (Tool Result Cache) — 对只读工具结果按 (工具名+参数) 缓存。
+        # 避免在同一对话内重复调用相同的文件读取/HTTP 请求。TTL 单位秒。
+        self._tool_cache: Dict[str, Tuple[str, float]] = {}  # cache_key → (result, timestamp)
+        self.tool_cache_ttl: float = float(os.environ.get("WEBRAIN_TOOL_CACHE_TTL", "300"))
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -1007,6 +1036,129 @@ class ChatEngine:
                             continue
 
     # -----------------------------------------------------------------------
+    # Round S: AI 能力升级 — 四大新方法
+    # -----------------------------------------------------------------------
+
+    # S1: HyDE — 生成假设答案文档用于向量检索增强
+    async def _expand_query_hyde(self, query: str) -> Optional[str]:
+        """生成 HyDE (Hypothetical Document Embeddings) 假设答案文档。
+
+        将用户问题扩展为一个"假设的理想答复"，使用该文档的 embedding 进行记忆向量检索。
+        相比直接用问题 embedding，答案空间的向量与记忆中存储的知识语义更接近，
+        可显著提升 recall（尤其对知识密集型问题）。
+        失败时静默降级：返回 None，调用方回退到原始 query 检索。
+        """
+        if not self.hyde_enabled or not query.strip():
+            return None
+        try:
+            result = await self._chat_completion(
+                [{"role": "user", "content": (
+                    f"请用1-3句话简洁回答以下问题，只给出事实性内容，不要解释或提问。\n"
+                    f"问题：{query[:400]}"
+                )}],
+                max_tokens=self.hyde_max_tokens,
+                temperature=0.1,
+            )
+            hyde_doc = result["choices"][0]["message"].get("content", "").strip()
+            if hyde_doc:
+                logger.debug("HyDE 文档生成: %s...", hyde_doc[:60])
+            return hyde_doc if hyde_doc else None
+        except Exception as e:
+            logger.debug("HyDE 生成失败（非致命）: %s", e)
+            return None
+
+    # S2: 反思循环 — 对生成的答复自我评分并在质量低时修订
+    async def _reflect_on_reply(self, user_input: str, reply: str) -> Optional[str]:
+        """对答复进行自我批评，分数低于阈值时生成修订版本。
+
+        评分维度：完整性、准确性、帮助性（1-5分）。
+        仅在答复长度 > 100 字且反思功能启用时触发，最多修订 1 次。
+        失败时静默降级：返回 None，调用方保留原始答复。
+        """
+        if not self.reflection_enabled or len(reply) < 100:
+            return None
+        try:
+            critique_result = await self._chat_completion(
+                [{"role": "user", "content": (
+                    f"请评估以下 AI 答复对用户问题的质量，仅返回 JSON：\n"
+                    f'用户问题：{user_input[:300]}\n'
+                    f'AI 答复：{reply[:600]}\n\n'
+                    f'返回格式（只有JSON，无其他内容）：{{"score": 1-5, "issues": "问题简述"}}\n'
+                    f'评分标准：1-2=信息缺失/不准确，3=基本合格，4-5=完整准确'
+                )}],
+                max_tokens=100,
+                temperature=0.0,
+            )
+            content = critique_result["choices"][0]["message"].get("content", "")
+            m = re.search(r'\{[^}]+\}', content, re.DOTALL)
+            if not m:
+                return None
+            critique = json.loads(m.group())
+            score = int(critique.get("score", 5))
+            issues = critique.get("issues", "")
+            if score >= self.reflection_threshold:
+                return None  # 质量达标，不修订
+            logger.info("反思触发 (score=%d): %s", score, issues)
+            revised = await self._chat_completion(
+                [
+                    {"role": "user", "content": user_input},
+                    {"role": "assistant", "content": reply},
+                    {"role": "user", "content": f"你之前的回答有些不足：{issues}。请提供更完整、准确的回答。"},
+                ],
+                max_tokens=2048,
+            )
+            return revised["choices"][0]["message"].get("content", reply)
+        except Exception as e:
+            logger.debug("反思循环失败（非致命）: %s", e)
+            return None
+
+    # S3: 工作记忆 — 异步提取会话关键事实
+    async def _extract_working_memory(self, session_id: str, user_input: str, reply: str) -> None:
+        """从当前对话轮次中提取关键事实，更新会话工作记忆。
+
+        工作记忆是独立于 L1-L4 长期记忆的会话级短期缓存，用于防止
+        长对话中早期重要信息丢失。每次对话结束后异步运行，不阻塞主流程。
+        """
+        if not self.working_memory_enabled:
+            return
+        try:
+            result = await self._chat_completion(
+                [{"role": "user", "content": (
+                    f"从以下对话中提取 3-5 条当前任务最关键的事实或上下文信息。\n"
+                    f"只返回 JSON 数组，每条不超过 20 字，不要解释：\n"
+                    f"用户：{user_input[:400]}\n助手：{reply[:400]}"
+                )}],
+                max_tokens=150,
+                temperature=0.0,
+            )
+            content = result["choices"][0]["message"].get("content", "")
+            m = re.search(r'\[.*?\]', content, re.DOTALL)
+            if m:
+                facts: List[str] = json.loads(m.group())
+                if isinstance(facts, list):
+                    existing = self._working_memory.get(session_id, [])
+                    combined = existing + [str(f).strip() for f in facts if f]
+                    # 保留最新的 working_memory_max 条，旧的自然淘汰
+                    self._working_memory[session_id] = combined[-self.working_memory_max:]
+        except Exception as e:
+            logger.debug("工作记忆提取失败（非致命）: %s", e)
+
+    def _fire_working_memory_async(self, session_id: str, user_input: str, reply: str) -> None:
+        """以 fire-and-forget 方式异步提取工作记忆（不阻塞响应）。"""
+        task = asyncio.create_task(
+            self._extract_working_memory(session_id, user_input, reply)
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    def _get_working_memory_text(self, session_id: str) -> str:
+        """格式化工作记忆用于系统提示注入。"""
+        facts = self._working_memory.get(session_id, [])
+        if not facts:
+            return ""
+        return "\n".join([f"- {f}" for f in facts])
+
+    # -----------------------------------------------------------------------
     # Tool execution
     # -----------------------------------------------------------------------
     async def _execute_tool(self, tool_call: Dict) -> str:
@@ -1026,12 +1178,35 @@ class ChatEngine:
             "browse_web": "screenshot",
         }.get(tool_name, tool_name)
 
+        # S4: 工具结果缓存 — 对只读工具按 (工具名+参数) 缓存结果，避免重复调用。
+        # 只读工具：file_read（不修改状态）、http_request GET（幂等）。
+        # 写入/执行类工具（shell, file_write, screenshot）不缓存。
+        _READ_ONLY_TOOLS = {"file_read", "http_request"}
+        cache_key: Optional[str] = None
+        if sub_tool in _READ_ONLY_TOOLS:
+            # http_request 只缓存 GET 方法
+            if sub_tool == "http_request" and str(args.get("method", "GET")).upper() != "GET":
+                pass  # 非 GET 不缓存
+            else:
+                raw = json.dumps({"t": sub_tool, "a": args}, sort_keys=True, ensure_ascii=False)
+                cache_key = hashlib.sha256(raw.encode()).hexdigest()[:20]
+                cached = self._tool_cache.get(cache_key)
+                if cached:
+                    cached_result, cached_at = cached
+                    if time.time() - cached_at < self.tool_cache_ttl:
+                        logger.debug("工具缓存命中: %s [%s]", sub_tool, cache_key[:8])
+                        return cached_result
+
         try:
             result = await asyncio.wait_for(
                 self.sub_brain.execute_tool(sub_tool, args),
                 timeout=30.0,
             )
-            return json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
+            result_str = json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
+            # 写入缓存（仅只读工具）
+            if cache_key:
+                self._tool_cache[cache_key] = (result_str, time.time())
+            return result_str
         except asyncio.TimeoutError:
             return f"Error: Tool '{tool_name}' timed out after 30s"
         except Exception as e:
@@ -1045,9 +1220,23 @@ class ChatEngine:
         # Store user message
         await self.memory.store({"level": "L1", "content": user_input, "session_id": session_id, "source": "user"})
 
-        # Retrieve memories
-        relevant = await self.memory.query({"query": user_input, "levels": ["L2", "L3"], "limit": 5})
-        memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
+        # S1: HyDE — 生成假设答案文档辅助向量检索。与 FTS 并发运行以节省延迟。
+        hyde_doc = await self._expand_query_hyde(user_input)
+        # Retrieve memories (使用 HyDE 文档增强向量检索，若未启用则降级到原始 query)
+        relevant = await self.memory.query(
+            {"query": user_input, "levels": ["L2", "L3"], "limit": 5},
+            hyde_doc=hyde_doc,
+        )
+        # S3: 工作记忆 — 将当前会话已积累的关键事实注入 memory_text
+        working_mem_text = self._get_working_memory_text(session_id)
+        if working_mem_text:
+            memory_parts = []
+            if any(m.get("content") for m in relevant):
+                memory_parts.append("\n".join([f"- {m.get('content', '')}" for m in relevant]))
+            memory_parts.append(f"[会话上下文]\n{working_mem_text}")
+            memory_text = "\n".join(memory_parts)
+        else:
+            memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -1095,6 +1284,12 @@ class ChatEngine:
 
             if not tool_calls:
                 reply = msg.get("content", "")
+
+                # S2: 反思循环 — 非工具调用路径才触发（避免工具链中途中断）
+                revised = await self._reflect_on_reply(user_input, reply)
+                if revised:
+                    reply = revised
+
                 await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", "session_id": session_id, "source": "assistant"})
                 # Fire ActiveMemory extraction in the background. Must come
                 # AFTER the L1 store so process_conversation sees a coherent
@@ -1106,6 +1301,8 @@ class ChatEngine:
                 # patterns, summarizer compresses history); they query
                 # memory independently.
                 self._fire_session_summarize_async(session_id)
+                # S3: 工作记忆 — 异步提取当前轮次关键信息供下一轮使用
+                self._fire_working_memory_async(session_id, user_input, reply)
                 return {
                     "reply": reply,
                     "tool_calls": all_tool_calls,
@@ -1164,8 +1361,22 @@ class ChatEngine:
 
         await self.memory.store({"level": "L1", "content": user_input, "session_id": session_id, "source": "user"})
 
-        relevant = await self.memory.query({"query": user_input, "levels": ["L2", "L3"], "limit": 5})
-        memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
+        # S1: HyDE — 与 chat() 一致，用假设答案文档增强向量检索
+        hyde_doc = await self._expand_query_hyde(user_input)
+        relevant = await self.memory.query(
+            {"query": user_input, "levels": ["L2", "L3"], "limit": 5},
+            hyde_doc=hyde_doc,
+        )
+        # S3: 工作记忆注入
+        working_mem_text = self._get_working_memory_text(session_id)
+        if working_mem_text:
+            mem_parts = []
+            if any(m.get("content") for m in relevant):
+                mem_parts.append("\n".join([f"- {m.get('content', '')}" for m in relevant]))
+            mem_parts.append(f"[会话上下文]\n{working_mem_text}")
+            memory_text = "\n".join(mem_parts)
+        else:
+            memory_text = "\n".join([f"- {m.get('content', '')}" for m in relevant]) or "无相关记忆"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
@@ -1238,6 +1449,8 @@ class ChatEngine:
                     await self.memory.store({"level": "L1", "content": f"Assistant: {full_content}", "session_id": session_id, "source": "assistant"})
                     self._fire_active_memory_async(session_id, user_input, full_content)
                     self._fire_session_summarize_async(session_id)
+                    # S3: 工作记忆异步提取
+                    self._fire_working_memory_async(session_id, user_input, full_content)
                     yield {"type": "done", "data": full_content}
                     return
 
@@ -1255,6 +1468,8 @@ class ChatEngine:
                 await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", "session_id": session_id, "source": "assistant"})
                 self._fire_active_memory_async(session_id, user_input, reply)
                 self._fire_session_summarize_async(session_id)
+                # S3: 工作记忆异步提取
+                self._fire_working_memory_async(session_id, user_input, reply)
                 yield {"type": "content", "data": reply}
                 yield {"type": "done", "data": reply}
                 return

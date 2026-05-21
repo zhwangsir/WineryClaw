@@ -71,11 +71,17 @@ class TestChatEngine:
 
     @pytest.fixture
     def chat(self, mock_memory, mock_subbrain, mock_llm_config):
-        return ChatEngine(
+        engine = ChatEngine(
             memory_manager=mock_memory,
             sub_brain_client=mock_subbrain,
             llm_config=mock_llm_config,
         )
+        # 禁用 Round S 功能以保持原有测试的 mock POST 计数不变；
+        # HyDE / 反思 / 工作记忆在 test_round_s_ai_upgrades.py 单独覆盖。
+        engine.hyde_enabled = False
+        engine.reflection_enabled = False
+        engine.working_memory_enabled = False
+        return engine
 
     @pytest.mark.asyncio
     async def test_chat_no_tools(self, chat, mock_llm_response):

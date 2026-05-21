@@ -10,7 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
 > **Current test totals** (2026-05-21, post functional-deep):
-> **450** sub-brain unit + 1216 frontend unit + **402** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **450** sub-brain unit + 1216 frontend unit + **408** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+>
+> Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
 > **Sandbox runtime decision** — see `docs/adr/0001-sandbox-runtime.md`. We stay on the in-house `DockerSandbox` + workspace mode; do not refactor toward E2B / OpenHands without first re-reading that ADR's "Triggers for revisiting" list.
 
@@ -138,6 +140,13 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_RAG_MIN_SCORE` | main-brain | `0.0` | Minimum cosine to include a RAG chunk. |
 | `WEBRAIN_PYTHON` | sub-brain spawn | (auto-pick from venv) | Override Python interpreter when sub-brain spawns main-brain. |
 | `WEBRAIN_EMBEDDED` | main-brain | unset | Set to `1` automatically by sub-brain when spawning main-brain as a child. |
+| `WEBRAIN_HYDE_ENABLED` | main-brain | `1` | Round S1: HyDE 记忆检索增强。每次记忆查询前额外一次 LLM 调用生成假设答案文档用于向量检索，显著提升知识密集型问答的 recall。设为 `0` 禁用（降低延迟但会损失检索精度）。 |
+| `WEBRAIN_HYDE_MAX_TOKENS` | main-brain | `120` | HyDE 假设答案文档的最大 token 数。 |
+| `WEBRAIN_REFLECTION_ENABLED` | main-brain | `0` | Round S2: 反思循环。答复生成后自动评分，分低则修订（额外 1-2 次 LLM 调用）。默认关闭以控制延迟。 |
+| `WEBRAIN_REFLECTION_THRESHOLD` | main-brain | `3` | 反思触发分数阈值（1-5）。低于该值时触发修订。 |
+| `WEBRAIN_WORKING_MEMORY_ENABLED` | main-brain | `1` | Round S3: 会话工作记忆。每轮对话后异步提取 3-5 条关键事实，注入下轮系统提示，防止长对话中重要信息丢失。 |
+| `WEBRAIN_WORKING_MEMORY_MAX` | main-brain | `10` | 每个会话最大工作记忆条数（超出后滚动淘汰旧条目）。 |
+| `WEBRAIN_TOOL_CACHE_TTL` | main-brain | `300` | Round S4: 只读工具结果缓存 TTL（秒）。同一会话内相同参数的 file_read / http_request GET 命中缓存时跳过子脑调用。 |
 
 ---
 

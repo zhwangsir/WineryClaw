@@ -826,7 +826,7 @@ class MemoryManager:
         return ret
 
     # ========== Advanced Query: Hybrid Search + Re-ranking ==========
-    async def query(self, query_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def query(self, query_data: Dict[str, Any], hyde_doc: Optional[str] = None) -> List[Dict[str, Any]]:
         q = query_data.get("query", "")
         levels = query_data.get("levels", ["L1", "L2", "L3"])
         limit = query_data.get("limit", 10)
@@ -845,6 +845,7 @@ class MemoryManager:
                 q, top_k,
                 exclude_ids=[r["id"] for r in fts_results],
                 levels=levels,  # honor caller's level scope in BOTH sources
+                **({"embed_text": hyde_doc} if hyde_doc else {}),  # HyDE：用假设文档向量代替原始查询向量
             )
 
         # Phase 2: Hybrid fusion (RRF) — annotates each row with rrf_score
@@ -920,6 +921,7 @@ class MemoryManager:
         limit: int,
         exclude_ids: Optional[List[str]] = None,
         levels: Optional[List[str]] = None,
+        embed_text: Optional[str] = None,  # HyDE：若提供则用此文本生成向量，FTS 仍使用原始 query
     ) -> List[Dict]:
         """Vector search using in-memory ANN index (BallTree/brute) with numpy.
 
@@ -933,7 +935,7 @@ class MemoryManager:
         lineage assertions.
         """
         try:
-            query_vec = await self._get_embedding(query)
+            query_vec = await self._get_embedding(embed_text if embed_text else query)  # HyDE：优先使用假设文档
             exclude_ids = set(exclude_ids or [])
             level_filter = set(levels) if levels else None
             qvec = np.array(query_vec, dtype=np.float32)
