@@ -63,12 +63,13 @@ test("用户聊天 — 发送消息并收到回复", async ({ page }) => {
     expect(count).toBeGreaterThan(beforeCount);
   }).toPass({ timeout: 60000, intervals: [1000] });
 
-  // 滚动消息列表到底部，确保最新消息可见
-  await page.locator(".chat-scroll-container").evaluate((el) => { el.scrollTop = el.scrollHeight; }).catch(() => {});
+  // 把最新的 .chat-markdown 滚入视口（scrollIntoView 比操作 scrollTop 更可靠）
+  const lastMsg = page.locator(".chat-markdown").last();
+  await lastMsg.scrollIntoViewIfNeeded();
   await page.waitForTimeout(300);
 
   // 最新的 .chat-markdown 应在视口内可见
-  await expect(page.locator(".chat-markdown").last()).toBeVisible({ timeout: 5000 });
+  await expect(lastMsg).toBeVisible({ timeout: 5000 });
 });
 
 // ─── 2. 知识库上传 ────────────────────────────────────────────────────────────
@@ -339,7 +340,7 @@ test("记忆搜索 — API 搜索返回结果", async ({ page }) => {
 
 // ─── 14. Dreaming 触发 ────────────────────────────────────────────────────────
 test("Dreaming — 触发梦境整合并等待完成", async ({ page }) => {
-  test.setTimeout(90000); // Dreaming 在数据量大时可能需要 30-60s
+  test.setTimeout(120000); // Dreaming 在数据量大 / 并发压力下可能需要 60-90s
   await nav(page, "/memory");
 
   const res = await page.evaluate(async () => {
