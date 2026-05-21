@@ -102,8 +102,13 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// Navigate the main window to the given SPA route (`/dashboard`, `/chat`, ...).
-/// Brings the window forward first, then assigns `location.href` so the
-/// react-router history listener picks it up.
+/// Brings the window forward first, then uses `history.pushState` +
+/// dispatching a `popstate` event so react-router treats it as an internal
+/// transition (no full reload, instant route switch).
+///
+/// Earlier this used `window.location.href = '...'` which triggered a full
+/// reload — slow, lost in-flight state, and on the user's machine often
+/// appeared as "no response" because the SPA reload took 1–2s.
 fn navigate_main_to(app: &tauri::AppHandle, route: &str) {
     let main = match app.get_webview_window("main") {
         Some(w) => w,
@@ -116,10 +121,20 @@ fn navigate_main_to(app: &tauri::AppHandle, route: &str) {
     let _ = main.unminimize();
     let _ = main.set_focus();
 
-    // route is constructed from menu IDs we control — no untrusted input —
-    // but we still URL-escape single quotes defensively.
-    let safe_route = route.replace('\'', "%27");
-    let js = format!("window.location.href = '{APP_BASE_URL}{safe_route}'");
+    // route comes from menu IDs we control — no untrusted input —
+    // but defend single-quote injection just in case.
+    let safe_route = route.replace('\'', "\\'");
+    // pushState first, then synthesize a popstate so react-router's listener
+    // picks up the new path. Wrap in try/catch + IIFE so any error is logged
+    // server-side via console but doesn't crash the SPA.
+    let js = format!(
+        r#"(function(){{
+          try {{
+            window.history.pushState({{ tray: true }}, '', '{safe_route}');
+            window.dispatchEvent(new PopStateEvent('popstate', {{ state: {{ tray: true }} }}));
+          }} catch (e) {{ console.error('[tray-nav] failed:', e); }}
+        }})()"#
+    );
     if let Err(e) = main.eval(&js) {
         log::warn!("navigate eval failed for {route}: {e}");
     }

@@ -308,6 +308,13 @@ async def lifespan(app: FastAPI) -> None:
     # reachable via the /active-memory/* HTTP endpoints which no client called.
     _state["active_memory"] = ActiveMemory(memory_manager=_state["memory"], llm_config=llm_config)
 
+    # KnowledgeGraph must exist before ChatEngine — S9 (KG context injection)
+    # wires `kg=_state["kg"]` into the constructor. Earlier code path created
+    # the KG ~30 lines AFTER ChatEngine, which crashed every production boot
+    # with `KeyError: 'kg'`. Tests passed only because they pass mocks.
+    # (Fix: 2026-05-22 startup-crash repro.)
+    _state["kg"] = KnowledgeGraph(llm_config=llm_config)
+
     _state["chat"] = ChatEngine(
         memory_manager=_state["memory"],
         sub_brain_client=_state["sub_brain"],
@@ -345,8 +352,8 @@ async def lifespan(app: FastAPI) -> None:
     # Initialize Canvas Engine
     _state["canvas"] = CanvasEngine()
 
-    # Initialize Knowledge Graph
-    _state["kg"] = KnowledgeGraph(llm_config=llm_config)
+    # Knowledge Graph was already initialized before ChatEngine (see above) —
+    # just log the post-boot stats here, where the rest of the engines also log.
     logger.info(f"Knowledge Graph initialized: {_state['kg'].get_stats()}")
 
     # Initialize Cron Engine
