@@ -1,0 +1,10 @@
+{
+  "id": "skill-system-info",
+  "name": "System Info",
+  "description": "Local machine info: OS, CPU, memory, uptime, network interfaces, disk usage. Actions: all (default) | os | cpu | memory | network | disk.",
+  "triggerPatterns": ["system info", "machine info", "uname", "cpu info", "memory usage"],
+  "code": "const os = require('os');\nconst { execSync } = require('child_process');\nconst action = (params.action || 'all').toLowerCase();\nfunction safeExec(cmd, timeoutMs = 5000) {\n  try { return execSync(cmd, { encoding: 'utf8', timeout: timeoutMs }).trim(); } catch { return null; }\n}\nfunction collect(part) {\n  if (part === 'os') return { platform: os.platform(), arch: os.arch(), release: os.release(), hostname: os.hostname(), uptime_sec: Math.floor(os.uptime()), user: os.userInfo().username };\n  if (part === 'cpu') {\n    const cpus = os.cpus();\n    return { model: cpus[0]?.model, cores: cpus.length, speed_mhz: cpus[0]?.speed, load_avg_1_5_15: os.loadavg() };\n  }\n  if (part === 'memory') {\n    const total = os.totalmem();\n    const free = os.freemem();\n    return { total_gb: (total / 1024 ** 3).toFixed(2), free_gb: (free / 1024 ** 3).toFixed(2), used_pct: (((total - free) / total) * 100).toFixed(1) };\n  }\n  if (part === 'network') {\n    const ifaces = os.networkInterfaces();\n    const out = {};\n    for (const [name, addrs] of Object.entries(ifaces)) {\n      out[name] = (addrs || []).filter(a => !a.internal).map(a => ({ family: a.family, address: a.address, mac: a.mac }));\n    }\n    return out;\n  }\n  if (part === 'disk') {\n    const df = safeExec('df -h');\n    return { df: df ? df.split('\\n').slice(0, 12) : 'df unavailable' };\n  }\n}\nif (action === 'all') {\n  return { os: collect('os'), cpu: collect('cpu'), memory: collect('memory'), network: collect('network'), disk: collect('disk') };\n}\nconst out = collect(action);\nif (!out) throw new Error('Unknown action: ' + action);\nreturn { [action]: out };",
+  "language": "javascript",
+  "tags": ["system", "monitoring"],
+  "version": 1
+}

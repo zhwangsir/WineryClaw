@@ -1,0 +1,10 @@
+{
+  "id": "skill-regex-tool",
+  "name": "Regex Tool",
+  "description": "Test / extract / replace using JavaScript regex. Actions: test (boolean match) | match (all matches with groups) | replace (find+replace).",
+  "triggerPatterns": ["regex test", "regex match", "regex replace"],
+  "code": "const input = params.input ?? params.text;\nconst pattern = params.pattern;\nif (typeof input !== 'string') throw new Error('params.input (string) required');\nif (!pattern) throw new Error('params.pattern required');\nconst flags = params.flags || 'g';\nconst action = (params.action || 'match').toLowerCase();\nconst re = new RegExp(pattern, flags);\nif (action === 'test') return { matched: re.test(input) };\nif (action === 'replace') {\n  const replacement = params.replacement ?? '';\n  return { result: input.replace(re, replacement) };\n}\n// action: match\nconst matches = [];\nlet m;\nconst gre = new RegExp(pattern, flags.includes('g') ? flags : flags + 'g');\nlet guard = 0;\nwhile ((m = gre.exec(input)) !== null) {\n  matches.push({ match: m[0], groups: m.slice(1), index: m.index });\n  if (m.index === gre.lastIndex) gre.lastIndex++;\n  if (++guard > 1000) break;\n}\nreturn { pattern, flags, count: matches.length, matches };",
+  "language": "javascript",
+  "tags": ["text", "regex", "utility"],
+  "version": 1
+}

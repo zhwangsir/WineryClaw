@@ -1,0 +1,10 @@
+{
+  "id": "skill-shell-safe",
+  "name": "Safe Shell (allowlist)",
+  "description": "Execute a small set of safe read-only shell commands (pwd, ls, whoami, uname, date, df, du, env, which, echo, cat). User-supplied 'cmd' must start with one of the allowed binaries — anything else rejected. Output capped at 50 KB.",
+  "triggerPatterns": ["shell", "command", "execute "],
+  "code": "const { execSync } = require('child_process');\nconst ALLOW = ['pwd','ls','whoami','uname','date','df','du','env','which','echo','cat','head','tail','wc','file','stat','printenv','hostname','uptime','sw_vers'];\nconst cmd = params.cmd;\nif (!cmd) throw new Error('params.cmd required');\nconst tokens = cmd.trim().split(/\\s+/);\nconst bin = tokens[0];\nif (!ALLOW.includes(bin)) throw new Error('Command not in allowlist: ' + bin + ' (allowed: ' + ALLOW.join(', ') + ')');\n// Reject shell metacharacters that could chain commands.\nif (/[;|&`$(){}<>\\\\]/.test(cmd)) throw new Error('Shell metacharacters are not allowed in this safe wrapper');\nconst cwd = params.cwd || undefined;\nconst timeout = Number(params.timeout_ms ?? 10000);\nlet out;\ntry { out = execSync(cmd, { encoding: 'utf8', timeout, cwd, shell: '/bin/sh' }); }\ncatch (e) { return { ok: false, error: e.message, stdout: e.stdout?.toString() ?? '', stderr: e.stderr?.toString() ?? '' }; }\nif (out.length > 50000) out = out.slice(0, 50000) + '\\n...[truncated]';\nreturn { ok: true, cmd, stdout: out };",
+  "language": "javascript",
+  "tags": ["system", "shell", "utility"],
+  "version": 1
+}

@@ -42,6 +42,20 @@ export interface MCPSelfServerInfo {
   tools: MCPExposedToolSummary[];
 }
 
+export interface McpCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  category: "files" | "dev" | "data" | "web" | "ai" | "system";
+  command: string;
+  args: string[];
+  type: "stdio";
+  requiredEnv?: string[];
+  pathArgHint?: string;
+  sizeEstimateMb?: number;
+  homepage?: string;
+}
+
 export const mcpApi = {
   // Client-side (webrain as consumer)
   listServers: () => api.get<{ servers: McpServer[] }>("/api/mcp/servers").then((r) => r.servers),
@@ -50,6 +64,12 @@ export const mcpApi = {
     api.post("/api/mcp/connect", data),
   callTool: (server: string, tool: string, params?: Record<string, unknown>) =>
     api.post(`/api/mcp/${server}/tool`, { tool, params }),
+
+  // Builtin catalog (v2.8) — recommended MCP servers with one-click install.
+  listCatalog: () =>
+    api.get<{ catalog: McpCatalogEntry[]; count: number }>("/api/mcp/catalog").then((r) => r.catalog),
+  installFromCatalog: (id: string, body: { env?: Record<string, string>; pathArg?: string }) =>
+    api.post<{ ok: boolean; error?: string; tools?: string[] }>(`/api/mcp/install/${id}`, body),
 
   // Server-side (webrain as provider, M4b)
   selfInfo: () => api.get<MCPSelfServerInfo>("/brain/mcp/info"),

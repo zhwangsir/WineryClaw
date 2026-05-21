@@ -1,0 +1,10 @@
+{
+  "id": "skill-process-list",
+  "name": "Process List",
+  "description": "List running processes optionally filtered by name pattern. Action: list (default) | port (look up which process binds a TCP port).",
+  "triggerPatterns": ["list processes", "ps ", "what's running", "port "],
+  "code": "const { execSync } = require('child_process');\nconst action = (params.action || 'list').toLowerCase();\nfunction safeExec(cmd, timeoutMs = 5000) {\n  try { return execSync(cmd, { encoding: 'utf8', timeout: timeoutMs }); } catch (e) { return ''; }\n}\nif (action === 'list') {\n  const pattern = params.pattern ? new RegExp(params.pattern, 'i') : null;\n  const limit = Number(params.limit ?? 40);\n  const raw = safeExec('ps -axo pid,user,%cpu,%mem,command');\n  const lines = raw.split('\\n').filter(l => l.trim());\n  const header = lines.shift();\n  const rows = lines.filter(l => !pattern || pattern.test(l)).slice(0, limit).map(l => l.trim());\n  return { header, count: rows.length, processes: rows };\n}\nif (action === 'port') {\n  const port = params.port;\n  if (!port) throw new Error('params.port required');\n  if (process.platform === 'win32') return { raw: safeExec(`netstat -ano | findstr :${port}`) };\n  return { raw: safeExec(`lsof -nP -iTCP:${port} -sTCP:LISTEN 2>/dev/null || netstat -anv -p tcp | grep ${port}`) };\n}\nthrow new Error('Unknown action: ' + action);",
+  "language": "javascript",
+  "tags": ["system", "process", "monitoring"],
+  "version": 1
+}

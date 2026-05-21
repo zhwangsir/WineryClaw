@@ -1,0 +1,10 @@
+{
+  "id": "skill-clipboard",
+  "name": "Clipboard",
+  "description": "Read or write the system clipboard. macOS uses pbcopy/pbpaste, Linux uses xclip/wl-copy, Windows uses clip.exe. Action: read | write.",
+  "triggerPatterns": ["clipboard", "copy to clipboard", "paste clipboard"],
+  "code": "const { execSync, spawnSync } = require('child_process');\nconst action = (params.action || 'read').toLowerCase();\nconst platform = process.platform;\nif (action === 'read') {\n  if (platform === 'darwin') {\n    return { content: execSync('pbpaste', { encoding: 'utf8' }) };\n  }\n  if (platform === 'win32') {\n    const out = execSync('powershell -command Get-Clipboard', { encoding: 'utf8' });\n    return { content: out };\n  }\n  // linux: try xclip then wl-paste\n  try { return { content: execSync('xclip -selection clipboard -o', { encoding: 'utf8' }) }; } catch {}\n  try { return { content: execSync('wl-paste', { encoding: 'utf8' }) }; } catch {}\n  throw new Error('No clipboard reader found (install xclip or wl-clipboard)');\n}\nif (action === 'write') {\n  const text = params.content ?? params.text ?? '';\n  if (platform === 'darwin') {\n    const r = spawnSync('pbcopy', [], { input: text }); if (r.status !== 0) throw new Error('pbcopy failed'); return { ok: true, bytes: Buffer.byteLength(text) };\n  }\n  if (platform === 'win32') {\n    const r = spawnSync('clip', [], { input: text, shell: false }); if (r.status !== 0) throw new Error('clip failed'); return { ok: true, bytes: Buffer.byteLength(text) };\n  }\n  // linux\n  try { spawnSync('xclip', ['-selection', 'clipboard'], { input: text }); return { ok: true, bytes: Buffer.byteLength(text) }; } catch {}\n  try { spawnSync('wl-copy', [], { input: text }); return { ok: true, bytes: Buffer.byteLength(text) }; } catch {}\n  throw new Error('No clipboard writer found');\n}\nthrow new Error('Unknown action: ' + action);",
+  "language": "javascript",
+  "tags": ["system", "clipboard", "utility"],
+  "version": 1
+}

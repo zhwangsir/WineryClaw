@@ -1,0 +1,10 @@
+{
+  "id": "skill-http-request",
+  "name": "HTTP Request",
+  "description": "Make an HTTP request (GET/POST/PUT/DELETE/PATCH). Supports JSON body, custom headers, timeout. Returns status, headers, body.",
+  "triggerPatterns": ["http get", "http post", "curl", "api call", "fetch url"],
+  "code": "const url = params.url;\nif (!url) throw new Error('params.url required');\nconst method = (params.method || 'GET').toUpperCase();\nconst headers = params.headers || {};\nconst body = params.body;\nconst timeout = Number(params.timeout_ms ?? 30000);\nconst init = { method, headers: { 'User-Agent': 'WeBrain-Skill/1.0', ...headers } };\nif (body !== undefined && method !== 'GET' && method !== 'HEAD') {\n  if (typeof body === 'string') { init.body = body; }\n  else { init.body = JSON.stringify(body); init.headers['Content-Type'] = init.headers['Content-Type'] || 'application/json'; }\n}\nconst controller = new AbortController();\nconst timer = setTimeout(() => controller.abort(), timeout);\ninit.signal = controller.signal;\nconst resp = await fetch(url, init);\nclearTimeout(timer);\nconst ct = resp.headers.get('content-type') || '';\nlet bodyOut;\nif (ct.includes('application/json')) { try { bodyOut = await resp.json(); } catch { bodyOut = await resp.text(); } }\nelse { bodyOut = await resp.text(); if (bodyOut.length > 50000) bodyOut = bodyOut.slice(0, 50000) + '\\n...[truncated]'; }\nconst respHeaders = {};\nresp.headers.forEach((v, k) => { respHeaders[k] = v; });\nreturn { url, method, status: resp.status, ok: resp.ok, headers: respHeaders, body: bodyOut };",
+  "language": "javascript",
+  "tags": ["network", "http", "api"],
+  "version": 1
+}

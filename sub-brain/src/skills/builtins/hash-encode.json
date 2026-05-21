@@ -1,0 +1,10 @@
+{
+  "id": "skill-hash-encode",
+  "name": "Hash & Encode",
+  "description": "Compute md5/sha1/sha256/sha512 hash OR base64/hex/url encode/decode. Action: hash | base64 | hex | url; subAction: encode | decode (for non-hash).",
+  "triggerPatterns": ["md5", "sha256", "sha1", "base64", "url encode", "hex encode"],
+  "code": "const crypto = require('crypto');\nconst action = (params.action || 'hash').toLowerCase();\nconst input = params.input;\nif (input === undefined || input === null) throw new Error('params.input required');\nconst data = typeof input === 'string' ? input : JSON.stringify(input);\nif (action === 'hash') {\n  const algo = (params.algo || 'sha256').toLowerCase();\n  if (!['md5','sha1','sha256','sha512'].includes(algo)) throw new Error('algo must be md5/sha1/sha256/sha512');\n  return { algo, input_bytes: Buffer.byteLength(data, 'utf8'), digest: crypto.createHash(algo).update(data).digest('hex') };\n}\nconst sub = (params.subAction || params.mode || 'encode').toLowerCase();\nif (action === 'base64') {\n  if (sub === 'encode') return { encoded: Buffer.from(data, 'utf8').toString('base64') };\n  return { decoded: Buffer.from(data, 'base64').toString('utf8') };\n}\nif (action === 'hex') {\n  if (sub === 'encode') return { encoded: Buffer.from(data, 'utf8').toString('hex') };\n  return { decoded: Buffer.from(data, 'hex').toString('utf8') };\n}\nif (action === 'url') {\n  if (sub === 'encode') return { encoded: encodeURIComponent(data) };\n  return { decoded: decodeURIComponent(data) };\n}\nthrow new Error('Unknown action: ' + action);",
+  "language": "javascript",
+  "tags": ["crypto", "encoding", "utility"],
+  "version": 1
+}

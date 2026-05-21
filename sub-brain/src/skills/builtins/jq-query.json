@@ -1,0 +1,10 @@
+{
+  "id": "skill-jq-query",
+  "name": "JSON Path Query",
+  "description": "Query a JSON value with simple dot/bracket path (no jq binary needed). Supports `.foo.bar`, `.arr[0]`, `.arr.length`, `keys`, `values`, deep path with `*` wildcard. Returns extracted value(s).",
+  "triggerPatterns": ["jq ", "json path", "query json", "json get"],
+  "code": "const data = params.data ?? params.input;\nconst pathStr = (params.path || params.query || '.').trim();\nif (data === undefined) throw new Error('params.data required');\nlet root = data;\nif (typeof root === 'string') { try { root = JSON.parse(root); } catch (e) { throw new Error('Failed to parse JSON: ' + e.message); } }\nif (pathStr === '.' || pathStr === '') return { value: root };\nif (pathStr === 'keys') return { value: Object.keys(root || {}) };\nif (pathStr === 'values') return { value: Object.values(root || {}) };\nif (pathStr === 'length' || pathStr === '.length') return { value: Array.isArray(root) ? root.length : Object.keys(root || {}).length };\n// Strip leading '.' if present\nconst tokens = pathStr.replace(/^\\.+/, '').split(/\\.(?![^\\[]*\\])/);\nlet cur = root;\nfor (const tok of tokens) {\n  if (!tok) continue;\n  const m = tok.match(/^([^\\[]*)((?:\\[[^\\]]+\\])*)$/);\n  if (!m) throw new Error('Bad path token: ' + tok);\n  const key = m[1];\n  const indices = (m[2].match(/\\[[^\\]]+\\]/g) || []).map(s => s.slice(1, -1));\n  if (key && key !== '*') {\n    if (cur && typeof cur === 'object') cur = cur[key];\n    else { cur = undefined; break; }\n  } else if (key === '*') {\n    cur = Array.isArray(cur) ? cur : Object.values(cur || {});\n  }\n  for (const idx of indices) {\n    if (cur === undefined || cur === null) break;\n    if (idx === '*') cur = Array.isArray(cur) ? cur : Object.values(cur || {});\n    else if (Array.isArray(cur)) cur = cur[Number(idx)];\n    else cur = cur[idx];\n  }\n}\nreturn { path: pathStr, value: cur, type: cur === null ? 'null' : Array.isArray(cur) ? 'array' : typeof cur };",
+  "language": "javascript",
+  "tags": ["data", "json", "query"],
+  "version": 1
+}
