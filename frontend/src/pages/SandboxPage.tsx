@@ -126,7 +126,10 @@ export default function SandboxPage() {
               .replace(/\b\w/g, (c) => c.toUpperCase());
           return (
             <Col xs={12} md={6} key={key}>
-              <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
+              <Card
+                style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
+                styles={{ body: { padding: 24 } }}
+              >
                 <Statistic title={niceTitle} value={value} />
               </Card>
             </Col>

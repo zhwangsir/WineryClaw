@@ -121,59 +121,40 @@ export interface PromoteResult {
 export const skillhubApi = {
   // ---- Marketplace ----
 
-  list: () =>
-    api.get<{ skills: SkillhubItem[] }>("/api/skillhub/list").then((r) => r.skills),
+  list: () => api.get<{ skills: SkillhubItem[] }>("/api/skillhub/list").then((r) => r.skills),
 
   search: (q: string) =>
-    api
-      .get<{ skills: SkillhubItem[] }>(`/api/skillhub/search?q=${encodeURIComponent(q)}`)
-      .then((r) => r.skills),
+    api.get<{ skills: SkillhubItem[] }>(`/api/skillhub/search?q=${encodeURIComponent(q)}`).then((r) => r.skills),
 
-  install: (slug: string, registry?: string) =>
-    api.post<InstallResult>("/api/skillhub/install", { slug, registry }),
+  install: (slug: string, registry?: string) => api.post<InstallResult>("/api/skillhub/install", { slug, registry }),
 
-  uninstall: (slug: string) =>
-    api.post<InstallResult>("/api/skillhub/uninstall", { slug }),
+  uninstall: (slug: string) => api.post<InstallResult>("/api/skillhub/uninstall", { slug }),
 
-  listInstalled: () =>
-    api.get<{ skills: Skill[] }>("/api/skillhub/installed").then((r) => r.skills),
+  listInstalled: () => api.get<{ skills: Skill[] }>("/api/skillhub/installed").then((r) => r.skills),
 
   // ---- Registries ----
 
-  listRegistries: () =>
-    api
-      .get<{ registries: SkillRegistry[] }>("/api/skillhub/registries")
-      .then((r) => r.registries),
+  listRegistries: () => api.get<{ registries: SkillRegistry[] }>("/api/skillhub/registries").then((r) => r.registries),
 
-  addRegistry: (reg: SkillRegistry) =>
-    api.post<{ ok: boolean; error?: string }>("/api/skillhub/registries", reg),
+  addRegistry: (reg: SkillRegistry) => api.post<{ ok: boolean; error?: string }>("/api/skillhub/registries", reg),
 
   removeRegistry: (name: string) =>
-    api.delete<{ ok: boolean; error?: string }>(
-      `/api/skillhub/registries/${encodeURIComponent(name)}`,
-    ),
+    api.delete<{ ok: boolean; error?: string }>(`/api/skillhub/registries/${encodeURIComponent(name)}`),
 
-  refresh: (name?: string) =>
-    api.post<RefreshResult>("/api/skillhub/refresh", name ? { name } : {}),
+  refresh: (name?: string) => api.post<RefreshResult>("/api/skillhub/refresh", name ? { name } : {}),
 
   // ---- Improvements ----
 
   listCandidates: () =>
-    api
-      .get<{ candidates: ImprovementCandidate[] }>("/api/skillhub/candidates")
-      .then((r) => r.candidates),
+    api.get<{ candidates: ImprovementCandidate[] }>("/api/skillhub/candidates").then((r) => r.candidates),
 
   improve: (skillId: string, code: string, reason: string) =>
     api.post<ImproveResult>("/api/skillhub/improve", { skillId, code, reason }),
 
   // ---- Drafts ----
 
-  listDrafts: () =>
-    api.get<{ drafts: Skill[] }>("/api/skillhub/drafts").then((r) => r.drafts),
+  listDrafts: () => api.get<{ drafts: Skill[] }>("/api/skillhub/drafts").then((r) => r.drafts),
 
   promoteDraft: (draftId: string) =>
-    api.post<PromoteResult>(
-      `/api/skillhub/drafts/${encodeURIComponent(draftId)}/promote`,
-      {},
-    ),
+    api.post<PromoteResult>(`/api/skillhub/drafts/${encodeURIComponent(draftId)}/promote`, {}),
 };

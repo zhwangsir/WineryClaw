@@ -106,7 +106,9 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-            <Tag color={LEVEL_COLOR[mem.level] ?? "default"} style={{ margin: 0 }}>{mem.level}</Tag>
+            <Tag color={LEVEL_COLOR[mem.level] ?? "default"} style={{ margin: 0 }}>
+              {mem.level}
+            </Tag>
             {inConflict && (
               <Tooltip title={isCurrent ? "当前版本(冲突组中已被采用)" : "已被新版本替代(在冲突组中)"}>
                 <Tag
@@ -171,9 +173,7 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
           {mem.vectorScore !== undefined && (
             <span style={{ color: "var(--c-accent)" }}>相似:{(mem.vectorScore * 100).toFixed(1)}%</span>
           )}
-          {mem.final_score !== undefined && (
-            <span>综合:{mem.final_score.toFixed(3)}</span>
-          )}
+          {mem.final_score !== undefined && <span>综合:{mem.final_score.toFixed(3)}</span>}
         </div>
       </div>
     </Card>
@@ -222,9 +222,7 @@ function ConflictCard({ group, onMarkCurrent }: ConflictCardProps) {
                     {isCurrent ? "当前" : "旧版"}
                   </Tag>
                   <Tag style={{ margin: 0 }}>{m.level}</Tag>
-                  <span style={{ fontSize: 11, color: "var(--c-text-3)" }}>
-                    {formatRelativeTime(m.createdAt)}
-                  </span>
+                  <span style={{ fontSize: 11, color: "var(--c-text-3)" }}>{formatRelativeTime(m.createdAt)}</span>
                 </div>
                 <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.content}</div>
               </div>
@@ -339,11 +337,7 @@ export default function MemoryPage() {
           allowClear
         />
         <Tooltip title="立即运行 Dreaming 周期:把安静的 L1 合并成 L2,从 L2 抽取 L3 事实">
-          <Button
-            icon={<ThunderboltOutlined />}
-            onClick={() => runDreaming()}
-            loading={dreamingRunning}
-          >
+          <Button icon={<ThunderboltOutlined />} onClick={() => runDreaming()} loading={dreamingRunning}>
             运行 Dreaming
           </Button>
         </Tooltip>
@@ -419,9 +413,7 @@ export default function MemoryPage() {
                     }
                   />
                 ) : (
-                  conflicts.map((g) => (
-                    <ConflictCard key={g.conflict_group} group={g} onMarkCurrent={markCurrent} />
-                  ))
+                  conflicts.map((g) => <ConflictCard key={g.conflict_group} group={g} onMarkCurrent={markCurrent} />)
                 )}
               </>
             ),

@@ -106,7 +106,9 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
         <Space>
           <ApiOutlined />
           <span>webrain MCP server</span>
-          <Tag color="success">{info.server.name} v{info.server.version}</Tag>
+          <Tag color="success">
+            {info.server.name} v{info.server.version}
+          </Tag>
           <Tag>{info.transport}</Tag>
         </Space>
       }
@@ -118,8 +120,8 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
         message="把 webrain 作为 MCP server 暴露给外部客户端使用"
         description={
           <Paragraph style={{ marginBottom: 0 }}>
-            外部 MCP 客户端可以通过下方 HTTP 端点直接调用 webrain 的 memory / RAG / wiki /
-            knowledge graph 能力。需要 stdio 传输的客户端请用下方 stdio bridge 脚本作为子进程。
+            外部 MCP 客户端可以通过下方 HTTP 端点直接调用 webrain 的 memory / RAG / wiki / knowledge graph 能力。需要
+            stdio 传输的客户端请用下方 stdio bridge 脚本作为子进程。
           </Paragraph>
         }
         style={{ marginBottom: 16 }}
@@ -150,21 +152,20 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
                 write 工具开放(未配置 token)
               </Tag>
             )}
-            {tokenConfigured && (
-              <Tag color="success">已配置 token</Tag>
-            )}
+            {tokenConfigured && <Tag color="success">已配置 token</Tag>}
           </Space>
           <Text style={{ fontSize: 12, color: "var(--c-text-3)" }}>
-            Token 通过 <Text code>WEBRAIN_MCP_TOKEN</Text> 环境变量 或 <Text code>~/.webrain/mcp_token</Text> 文件
-            提供 / 自动生成。read 类工具(query / search / stats)不需要 token,write 类工具(memory_store /
-            wiki_create / rag_index_file)需要 <Text code>Authorization: Bearer &lt;token&gt;</Text> 头。
+            Token 通过 <Text code>WEBRAIN_MCP_TOKEN</Text> 环境变量 或 <Text code>~/.webrain/mcp_token</Text> 文件 提供
+            / 自动生成。read 类工具(query / search / stats)不需要 token,write 类工具(memory_store / wiki_create /
+            rag_index_file)需要 <Text code>Authorization: Bearer &lt;token&gt;</Text> 头。
           </Text>
         </Space>
       </div>
 
       <div style={{ marginTop: 24 }}>
         <Text strong>
-          暴露的工具 ({info.tool_count}{writeToolCount > 0 && ` · ${writeToolCount} 个 write`}):
+          暴露的工具 ({info.tool_count}
+          {writeToolCount > 0 && ` · ${writeToolCount} 个 write`}):
         </Text>
         <Table<MCPExposedToolSummary>
           dataSource={info.tools}
@@ -177,7 +178,11 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               title: "工具名",
               dataIndex: "name",
               width: 240,
-              render: (n: string) => <Text code style={{ fontSize: 12 }}>{n}</Text>,
+              render: (n: string) => (
+                <Text code style={{ fontSize: 12 }}>
+                  {n}
+                </Text>
+              ),
             },
             {
               title: "scope",
@@ -185,7 +190,9 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               width: 80,
               render: (s: string | undefined) =>
                 s === "write" ? (
-                  <Tag icon={<LockOutlined />} color="warning">write</Tag>
+                  <Tag icon={<LockOutlined />} color="warning">
+                    write
+                  </Tag>
                 ) : (
                   <Tag color="default">read</Tag>
                 ),

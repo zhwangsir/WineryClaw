@@ -39,7 +39,9 @@ vi.mock("antd", async () => {
   return {
     ...actual,
     Card: ({ children, bodyStyle, ...rest }: any) => (
-      <div data-testid="card" {...rest}><div style={bodyStyle}>{children}</div></div>
+      <div data-testid="card" {...rest}>
+        <div style={bodyStyle}>{children}</div>
+      </div>
     ),
   };
 });
@@ -51,18 +53,30 @@ describe("McpPage", () => {
   });
 
   it("renders page shell", () => {
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("MCP")).toBeInTheDocument();
   });
 
   it("fetches servers and tools on mount", () => {
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     expect(fetchServers).toHaveBeenCalled();
     expect(fetchTools).toHaveBeenCalled();
   });
 
   it("renders connected and disconnected servers", () => {
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     expect(screen.getAllByText("fs").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("web").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("已连接").length).toBeGreaterThanOrEqual(1);
@@ -70,32 +84,52 @@ describe("McpPage", () => {
   });
 
   it("renders server tools tags", () => {
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     expect(screen.getAllByText("read").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("write").length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders tools table", () => {
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("Read file")).toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
   it("shows empty when no servers", () => {
     vi.mocked(useMcpStore).mockImplementation(() => createMockStore({ servers: [] }) as any);
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("暂无 MCP 服务器")).toBeInTheDocument();
   });
 
   it("shows empty when no tools", () => {
     vi.mocked(useMcpStore).mockImplementation(() => createMockStore({ tools: [] }) as any);
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("暂无 MCP 工具")).toBeInTheDocument();
   });
 
   it("opens connect drawer and submits", async () => {
     connect.mockResolvedValue(undefined);
-    render(<BrowserRouter><McpPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <McpPage />
+      </BrowserRouter>
+    );
     fireEvent.click(screen.getByText("连接服务器"));
     expect(screen.getByText("连接 MCP 服务器")).toBeInTheDocument();
 

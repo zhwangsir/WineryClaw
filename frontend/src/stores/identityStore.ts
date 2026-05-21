@@ -38,11 +38,8 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     }
   },
 
-  deleteUser: createOptimisticDelete<IdentityUser>(
-    get,
-    set,
-    "users",
-    identityApi.deleteUser,
-    { successMsg: "用户已删除", errorMsg: "删除用户失败" }
-  ),
+  deleteUser: createOptimisticDelete<IdentityUser>(get, set, "users", identityApi.deleteUser, {
+    successMsg: "用户已删除",
+    errorMsg: "删除用户失败",
+  }),
 }));

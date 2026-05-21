@@ -38,7 +38,15 @@ export default function MessageList({
         ref={containerRef}
         onScroll={onScroll}
         className="chat-scroll-container"
-        style={{ flex: 1, overflow: "auto", padding: "24px 32px", display: "flex", flexDirection: "column", gap: 20, minHeight: 0 }}
+        style={{
+          flex: 1,
+          overflow: "auto",
+          padding: "24px 32px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 20,
+          minHeight: 0,
+        }}
       >
         {messages.length === 0 ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -52,9 +60,7 @@ export default function MessageList({
             />
           </div>
         ) : (
-          messages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} isDark={isDark} highlight={highlight} />
-          ))
+          messages.map((msg) => <MessageBubble key={msg.id} msg={msg} isDark={isDark} highlight={highlight} />)
         )}
       </div>
 

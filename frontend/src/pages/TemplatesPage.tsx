@@ -13,8 +13,16 @@ import { useTemplateStore } from "../stores/templateStore";
 import type { AgentTemplate } from "../api/types";
 
 export default function TemplatesPage() {
-  const { templates, categories, fetchTemplates, fetchCategories, fetchTags, createTemplate, deleteTemplate, instantiate } =
-    useTemplateStore();
+  const {
+    templates,
+    categories,
+    fetchTemplates,
+    fetchCategories,
+    fetchTags,
+    createTemplate,
+    deleteTemplate,
+    instantiate,
+  } = useTemplateStore();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [instOpen, setInstOpen] = useState(false);
@@ -59,11 +67,20 @@ export default function TemplatesPage() {
     >
       {/* Category filter */}
       <div style={{ display: "flex", gap: 8, marginBottom: 24, flexWrap: "wrap" }}>
-        <Button size="small" type={selectedCategory === "" ? "primary" : "default"} onClick={() => setSelectedCategory("")}>
+        <Button
+          size="small"
+          type={selectedCategory === "" ? "primary" : "default"}
+          onClick={() => setSelectedCategory("")}
+        >
           全部
         </Button>
         {categories.map((c) => (
-          <Button key={c} size="small" type={selectedCategory === c ? "primary" : "default"} onClick={() => setSelectedCategory(c)}>
+          <Button
+            key={c}
+            size="small"
+            type={selectedCategory === c ? "primary" : "default"}
+            onClick={() => setSelectedCategory(c)}
+          >
             {c}
           </Button>
         ))}
@@ -77,7 +94,10 @@ export default function TemplatesPage() {
             <Card
               key={t.id}
               style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-              styles={{ body: { padding: 24 }, header: { padding: "16px 20px", borderBottom: "1px solid var(--c-border)" } }}
+              styles={{
+                body: { padding: 24 },
+                header: { padding: "16px 20px", borderBottom: "1px solid var(--c-border)" },
+              }}
               title={
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <FolderOutlined style={{ color: "var(--c-text-2)" }} />
@@ -91,13 +111,25 @@ export default function TemplatesPage() {
                     size="small"
                     icon={<CopyOutlined />}
                     style={{ color: "var(--c-accent)" }}
-                    onClick={() => { setInstTemplate(t); setInstOpen(true); }}
+                    onClick={() => {
+                      setInstTemplate(t);
+                      setInstOpen(true);
+                    }}
                   >
                     实例化
                   </Button>
                 </Tooltip>,
-                <Popconfirm key="delete" title="确认删除" description={`删除模板 "${t.name}"？`} onConfirm={() => deleteTemplate(t.id)} okText="删除" cancelText="取消">
-                  <Button type="text" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                <Popconfirm
+                  key="delete"
+                  title="确认删除"
+                  description={`删除模板 "${t.name}"？`}
+                  onConfirm={() => deleteTemplate(t.id)}
+                  okText="删除"
+                  cancelText="取消"
+                >
+                  <Button type="text" size="small" danger icon={<DeleteOutlined />}>
+                    删除
+                  </Button>
                 </Popconfirm>,
               ]}
             >
@@ -111,7 +143,8 @@ export default function TemplatesPage() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                 {t.tags?.map((tag) => (
                   <Tag key={tag} style={{ fontSize: 10, margin: 0, background: "var(--c-hover)", border: "none" }}>
-                    <TagsOutlined style={{ marginRight: 2 }} />{tag}
+                    <TagsOutlined style={{ marginRight: 2 }} />
+                    {tag}
                   </Tag>
                 ))}
               </div>
@@ -138,26 +171,35 @@ export default function TemplatesPage() {
             <Input placeholder="例如: development, support" />
           </Form.Item>
           <Form.Item name="role" label="角色">
-            <Select placeholder="选择角色" options={[
-              { value: "general", label: "通用助手" },
-              { value: "developer", label: "开发工程师" },
-              { value: "analyst", label: "数据分析师" },
-              { value: "writer", label: "写作助手" },
-              { value: "support", label: "客服" },
-            ]} />
+            <Select
+              placeholder="选择角色"
+              options={[
+                { value: "general", label: "通用助手" },
+                { value: "developer", label: "开发工程师" },
+                { value: "analyst", label: "数据分析师" },
+                { value: "writer", label: "写作助手" },
+                { value: "support", label: "客服" },
+              ]}
+            />
           </Form.Item>
           <Form.Item name="systemPrompt" label="系统提示词">
             <Input.TextArea rows={4} placeholder="定义智能体的系统提示词..." />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>创建</Button>
+            <Button type="primary" htmlType="submit" block>
+              创建
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>
 
       {/* Instantiate Drawer */}
       <Drawer
-        title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>实例化模板: {instTemplate?.name}</span>}
+        title={
+          <span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>
+            实例化模板: {instTemplate?.name}
+          </span>
+        }
         open={instOpen}
         onClose={() => setInstOpen(false)}
         width={420}
@@ -167,7 +209,9 @@ export default function TemplatesPage() {
             <Input placeholder="新智能体的名称" />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block icon={<CopyOutlined />}>实例化</Button>
+            <Button type="primary" htmlType="submit" block icon={<CopyOutlined />}>
+              实例化
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>

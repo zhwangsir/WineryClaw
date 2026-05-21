@@ -147,7 +147,9 @@ describe("skillhubStore", () => {
     vi.mocked(skillhubApi.addRegistry).mockResolvedValue({ ok: true });
     vi.mocked(skillhubApi.listRegistries).mockResolvedValue([]);
     const ok = await useSkillhubStore.getState().addRegistry({
-      name: "r1", url: "u", enabled: true,
+      name: "r1",
+      url: "u",
+      enabled: true,
     });
     expect(ok).toBe(true);
     expect(skillhubApi.listRegistries).toHaveBeenCalled();
@@ -156,7 +158,9 @@ describe("skillhubStore", () => {
   it("addRegistry returns false on backend error", async () => {
     vi.mocked(skillhubApi.addRegistry).mockResolvedValue({ ok: false, error: "dup" });
     const ok = await useSkillhubStore.getState().addRegistry({
-      name: "r1", url: "u", enabled: true,
+      name: "r1",
+      url: "u",
+      enabled: true,
     });
     expect(ok).toBe(false);
     expect(message.error).toHaveBeenCalledWith("dup");

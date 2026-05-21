@@ -14,6 +14,8 @@ export const templatesApi = {
   delete: (id: string) => api.delete(`/api/templates/${id}`),
   categories: () => api.get<{ categories: string[] }>("/api/templates/categories").then((r) => r.categories),
   tags: () => api.get<{ tags: string[] }>("/api/templates/tags").then((r) => r.tags),
-  instantiate: (id: string, data: { name: string; workspaceId?: string; owner?: string; variables?: Record<string, string> }) =>
-    api.post<{ agent: { id: string; name: string } }>(`/api/templates/${id}/instantiate`, data).then((r) => r.agent),
+  instantiate: (
+    id: string,
+    data: { name: string; workspaceId?: string; owner?: string; variables?: Record<string, string> }
+  ) => api.post<{ agent: { id: string; name: string } }>(`/api/templates/${id}/instantiate`, data).then((r) => r.agent),
 };

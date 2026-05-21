@@ -1,5 +1,22 @@
 import { useState, useEffect, useMemo } from "react";
-import { Input, Button, List, Tag, Empty, Spin, Card, Statistic, Row, Col, Drawer, Form, Select, Slider, message, Modal } from "antd";
+import {
+  Input,
+  Button,
+  List,
+  Tag,
+  Empty,
+  Spin,
+  Card,
+  Statistic,
+  Row,
+  Col,
+  Drawer,
+  Form,
+  Select,
+  Slider,
+  message,
+  Modal,
+} from "antd";
 import {
   ShareAltOutlined,
   DatabaseOutlined,
@@ -44,8 +61,20 @@ const relationTypes = [
 ];
 
 export default function KnowledgeGraphPage() {
-  const { entities, selectedEntity, entityRelations, stats, loading, fetchEntities, selectEntity, search, fetchStats, addEntity, addRelation, deleteEntity } =
-    useKgStore();
+  const {
+    entities,
+    selectedEntity,
+    entityRelations,
+    stats,
+    loading,
+    fetchEntities,
+    selectEntity,
+    search,
+    fetchStats,
+    addEntity,
+    addRelation,
+    deleteEntity,
+  } = useKgStore();
 
   const [query, setQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("");

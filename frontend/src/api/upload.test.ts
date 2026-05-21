@@ -33,10 +33,13 @@ describe("upload API", () => {
 
     const result = await uploadApi.upload(file);
 
-    expect(api.post).toHaveBeenCalledWith("/api/upload", expect.objectContaining({
-      filename: "hello.txt",
-      type: "text/plain",
-    }));
+    expect(api.post).toHaveBeenCalledWith(
+      "/api/upload",
+      expect.objectContaining({
+        filename: "hello.txt",
+        type: "text/plain",
+      })
+    );
     expect(result).toEqual({ ok: true, url: "/uploads/hello.txt" });
   });
 });

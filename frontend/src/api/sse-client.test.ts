@@ -28,7 +28,7 @@ describe("SSEClient", () => {
       ok: true,
       status: 200,
       statusText: "OK",
-      body: makeStream(["data: {\"msg\":\"hello\"}\n", "data: [DONE]\n"]),
+      body: makeStream(['data: {"msg":"hello"}\n', "data: [DONE]\n"]),
     });
     global.fetch = fetchMock;
 
@@ -149,7 +149,7 @@ describe("SSEClient", () => {
   it("calls onDone when stream ends without [DONE] marker", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      body: makeStream(["data: {\"msg\":\"hello\"}\n"]),
+      body: makeStream(['data: {"msg":"hello"}\n']),
     });
 
     const doneFn = vi.fn();
@@ -163,7 +163,10 @@ describe("SSEClient", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let resolveRead: any;
     const reader = {
-      read: () => new Promise<any>((r) => { resolveRead = r; }),
+      read: () =>
+        new Promise<any>((r) => {
+          resolveRead = r;
+        }),
       cancel: vi.fn(),
       releaseLock: vi.fn(),
     };

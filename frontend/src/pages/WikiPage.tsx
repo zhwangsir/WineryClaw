@@ -209,7 +209,10 @@ export default function WikiPage() {
               <Card
                 style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
                 title={<span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{note.title}</span>}
-                styles={{ header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" }, body: { padding: 24 } }}
+                styles={{
+                  header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" },
+                  body: { padding: 24 },
+                }}
                 actions={[
                   <Button
                     key="edit"

@@ -12,14 +12,7 @@ interface MarkdownRendererProps {
   className?: string;
 }
 
-function CodeBlock({
-  className,
-  children,
-  ...props
-}: {
-  className?: string;
-  children?: React.ReactNode;
-}) {
+function CodeBlock({ className, children, ...props }: { className?: string; children?: React.ReactNode }) {
   const isDark = useIsDark();
   const [copied, setCopied] = useState(false);
 
@@ -142,19 +135,13 @@ export default function MarkdownRenderer({ content, className }: MarkdownRendere
         return <li style={{ margin: "0.25em 0" }}>{children}</li>;
       },
       h1({ children }: { children?: React.ReactNode }) {
-        return (
-          <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0.8em 0 0.4em", lineHeight: 1.3 }}>{children}</h1>
-        );
+        return <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0.8em 0 0.4em", lineHeight: 1.3 }}>{children}</h1>;
       },
       h2({ children }: { children?: React.ReactNode }) {
-        return (
-          <h2 style={{ fontSize: 17, fontWeight: 600, margin: "0.7em 0 0.35em", lineHeight: 1.3 }}>{children}</h2>
-        );
+        return <h2 style={{ fontSize: 17, fontWeight: 600, margin: "0.7em 0 0.35em", lineHeight: 1.3 }}>{children}</h2>;
       },
       h3({ children }: { children?: React.ReactNode }) {
-        return (
-          <h3 style={{ fontSize: 15, fontWeight: 600, margin: "0.6em 0 0.3em", lineHeight: 1.3 }}>{children}</h3>
-        );
+        return <h3 style={{ fontSize: 15, fontWeight: 600, margin: "0.6em 0 0.3em", lineHeight: 1.3 }}>{children}</h3>;
       },
       blockquote({ children }: { children?: React.ReactNode }) {
         return (

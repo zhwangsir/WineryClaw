@@ -10,7 +10,13 @@ interface McpState {
 
   fetchServers: () => Promise<void>;
   fetchTools: () => Promise<void>;
-  connect: (data: { name: string; url?: string; command?: string; args?: string[]; env?: Record<string, string> }) => Promise<void>;
+  connect: (data: {
+    name: string;
+    url?: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }) => Promise<void>;
   callTool: (server: string, tool: string, params?: Record<string, unknown>) => Promise<unknown>;
 }
 

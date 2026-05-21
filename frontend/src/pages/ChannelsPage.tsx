@@ -137,7 +137,10 @@ export default function ChannelsPage() {
             <List.Item>
               <Card
                 style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-                styles={{ body: { padding: 32 }, header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" } }}
+                styles={{
+                  body: { padding: 32 },
+                  header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" },
+                }}
                 title={
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <StatusBadge status={ch.connected ? "connected" : "disconnected"} />

@@ -51,6 +51,5 @@ export interface ExecutePlanParams {
 }
 
 export const planApi = {
-  execute: (params: ExecutePlanParams) =>
-    api.post<PlanExecutionResult>("/brain/plan/execute", params),
+  execute: (params: ExecutePlanParams) => api.post<PlanExecutionResult>("/brain/plan/execute", params),
 };

@@ -192,7 +192,12 @@ export default function ChatPage() {
     if (files.length === 0) return;
 
     for (const file of files) {
-      if (file.type.startsWith("text/") || file.name.endsWith(".md") || file.name.endsWith(".json") || file.name.endsWith(".txt")) {
+      if (
+        file.type.startsWith("text/") ||
+        file.name.endsWith(".md") ||
+        file.name.endsWith(".json") ||
+        file.name.endsWith(".txt")
+      ) {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const content = ev.target?.result as string;
@@ -205,7 +210,10 @@ export default function ChatPage() {
         try {
           const result = await uploadApi.upload(file);
           if (result.ok && result.url) {
-            message.success({ content: `"${file.name}" uploaded (${(result.size! / 1024).toFixed(1)} KB)`, key: `upload-${file.name}` });
+            message.success({
+              content: `"${file.name}" uploaded (${(result.size! / 1024).toFixed(1)} KB)`,
+              key: `upload-${file.name}`,
+            });
             setInputValue((prev) => prev + (prev ? "\n\n" : "") + `[📎 ${file.name}](${result.url})`);
           } else {
             message.error({ content: `Upload failed: ${result.error}`, key: `upload-${file.name}` });

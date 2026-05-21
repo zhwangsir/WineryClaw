@@ -18,19 +18,18 @@ describe("system API", () => {
   });
 
   it("health calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await systemApi.health();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("metrics calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await systemApi.metrics();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
-
 });

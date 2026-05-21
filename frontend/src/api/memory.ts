@@ -4,8 +4,10 @@ import type { ConflictGroup, Memory, MemoryLineage } from "./types";
 export const memoryApi = {
   list: (level?: string, limit = 50) =>
     api
-      .get<{ memories: Memory[] }>(
-        `/brain/memory/recent${level || limit !== 50 ? `?${new URLSearchParams({ ...(level ? { level } : {}), limit: String(limit) }).toString()}` : ""}`,
+      .get<{
+        memories: Memory[];
+      }>(
+        `/brain/memory/recent${level || limit !== 50 ? `?${new URLSearchParams({ ...(level ? { level } : {}), limit: String(limit) }).toString()}` : ""}`
       )
       .then((r) => r.memories),
   store: (data: Partial<Memory>) => api.post<Memory>("/brain/memory/store", data),
@@ -15,8 +17,7 @@ export const memoryApi = {
     api
       .post<{ results: Memory[] }>("/brain/memory/query", { query })
       .then((r) => ({ memories: r.results, entities: [] as unknown[], facts: [] as unknown[] })),
-  delete: (id: string) =>
-    api.delete<{ ok: boolean }>(`/brain/memory/${id}`).then((r) => r.ok),
+  delete: (id: string) => api.delete<{ ok: boolean }>(`/brain/memory/${id}`).then((r) => r.ok),
 
   // M-Memory-1 endpoints
   /** List all L3 conflict groups (rows sharing a conflict_group UUID). */
@@ -25,13 +26,12 @@ export const memoryApi = {
   markCurrent: (id: string) =>
     api.post<{ ok: boolean; current_id?: string; conflict_group?: string; error?: string }>(
       `/brain/memory/conflicts/${id}/mark-current`,
-      {},
+      {}
     ),
   /** Fetch a memory with one-level provenance lineage. */
   lineage: (id: string) => api.get<MemoryLineage>(`/brain/memory/${id}`),
   /** Manually trigger the dreaming consolidation cycle.
    *  Uses a 120s per-request timeout: LLM calls on L2 memories can exceed the
    *  global 60s default when many rows need consolidation. */
-  runDreaming: () =>
-    api.post<{ phases: unknown; timestamp: string }>("/brain/dreaming/run", {}, { timeout: 120000 }),
+  runDreaming: () => api.post<{ phases: unknown; timestamp: string }>("/brain/dreaming/run", {}, { timeout: 120000 }),
 };

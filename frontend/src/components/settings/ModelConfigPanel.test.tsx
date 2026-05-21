@@ -187,7 +187,9 @@ describe("ModelConfigPanel", () => {
 
   it("edits an endpoint", async () => {
     render(<ModelConfigPanel />);
-    const editButtons = screen.getAllByRole("button").filter((b) => b.querySelector("[data-icon='edit']") || b.querySelector(".anticon-edit"));
+    const editButtons = screen
+      .getAllByRole("button")
+      .filter((b) => b.querySelector("[data-icon='edit']") || b.querySelector(".anticon-edit"));
     if (editButtons.length > 0) {
       fireEvent.click(editButtons[0]);
       await waitFor(() => {
@@ -199,7 +201,9 @@ describe("ModelConfigPanel", () => {
   it("deletes an endpoint", async () => {
     vi.mocked(saveModelConfig).mockResolvedValue(undefined);
     render(<ModelConfigPanel />);
-    const deleteButtons = screen.getAllByRole("button").filter((b) => b.querySelector("[data-icon='delete']") || b.querySelector(".anticon-delete"));
+    const deleteButtons = screen
+      .getAllByRole("button")
+      .filter((b) => b.querySelector("[data-icon='delete']") || b.querySelector(".anticon-delete"));
     if (deleteButtons.length > 0) {
       fireEvent.click(deleteButtons[0]);
       // Popconfirm confirm

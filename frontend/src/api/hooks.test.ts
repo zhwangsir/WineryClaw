@@ -18,11 +18,10 @@ describe("hooks API", () => {
   });
 
   it("registry calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await hooksApi.registry();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
-
 });

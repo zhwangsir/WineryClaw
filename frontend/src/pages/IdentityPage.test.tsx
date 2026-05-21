@@ -109,7 +109,9 @@ describe("IdentityPage", () => {
     if (submitBtn) fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(createUser).toHaveBeenCalledWith(expect.objectContaining({ name: "NewUser", workspaces: ["default", "dev"] }));
+      expect(createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "NewUser", workspaces: ["default", "dev"] })
+      );
     });
   });
 

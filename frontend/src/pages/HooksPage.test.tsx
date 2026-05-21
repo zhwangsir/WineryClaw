@@ -21,7 +21,11 @@ describe("HooksPage", () => {
 
   it("renders page shell", async () => {
     registry.mockResolvedValue([]);
-    render(<BrowserRouter><HooksPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <HooksPage />
+      </BrowserRouter>
+    );
     await waitFor(() => {
       expect(screen.getByText("Hooks")).toBeInTheDocument();
     });
@@ -29,7 +33,11 @@ describe("HooksPage", () => {
 
   it("renders hooks from registry", async () => {
     registry.mockResolvedValue(["pre_tool_call", "post_llm_call", "custom_hook"]);
-    render(<BrowserRouter><HooksPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <HooksPage />
+      </BrowserRouter>
+    );
     await waitFor(() => {
       expect(screen.getByText("pre_tool_call")).toBeInTheDocument();
     });
@@ -40,7 +48,11 @@ describe("HooksPage", () => {
 
   it("shows empty on error", async () => {
     registry.mockRejectedValue(new Error("fail"));
-    render(<BrowserRouter><HooksPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <HooksPage />
+      </BrowserRouter>
+    );
     await waitFor(() => {
       expect(screen.getByText("暂无 Hook 注册信息")).toBeInTheDocument();
     });

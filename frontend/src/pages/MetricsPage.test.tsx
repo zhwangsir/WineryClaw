@@ -78,9 +78,7 @@ describe("MetricsPage", () => {
   });
 
   it("shows loading state on button", async () => {
-    vi.mocked(metricsApi.query).mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({}), 50))
-    );
+    vi.mocked(metricsApi.query).mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({}), 50)));
     renderPage();
     const queryBtn = screen.getByRole("button", { name: /查询/i });
     fireEvent.click(queryBtn);

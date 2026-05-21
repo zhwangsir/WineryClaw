@@ -14,6 +14,8 @@ export const identityApi = {
   createUser: (data: { name: string; role: string; workspaces?: string[] }) =>
     api.post<{ user: IdentityUser }>("/api/identity/user", data).then((r) => r.user),
   checkWorkspaceAccess: (userId: string, workspaceId: string) =>
-    api.get<{ ok: boolean; access: boolean }>(`/api/identity/user/${userId}/workspaces/${workspaceId}`).then((r) => r.access),
+    api
+      .get<{ ok: boolean; access: boolean }>(`/api/identity/user/${userId}/workspaces/${workspaceId}`)
+      .then((r) => r.access),
   deleteUser: (id: string) => api.delete(`/api/identity/user/${id}`).then((r: any) => r.ok),
 };

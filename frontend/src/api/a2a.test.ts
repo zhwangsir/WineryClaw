@@ -18,27 +18,26 @@ describe("a2a API", () => {
   });
 
   it("listTasks calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await a2aApi.listTasks();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("sendTask calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await a2aApi.sendTask("test-id", "test-id", "type", "arg", "arg");
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("getTask calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await a2aApi.getTask("test-id");
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
-
 });

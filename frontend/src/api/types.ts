@@ -110,16 +110,16 @@ export interface Memory {
   createdAt: string;
   vectorScore?: number;
   // M-Memory-1 fields surfaced by /memory/recent and /memory/query
-  importance?: number;            // 0.0 - 1.0, decays per half-life
-  last_accessed_at?: string;      // ISO; resets on retrieve
+  importance?: number; // 0.0 - 1.0, decays per half-life
+  last_accessed_at?: string; // ISO; resets on retrieve
   access_count?: number;
-  effective_importance?: number;  // server-computed decayed value (for query rows)
-  provenance_source?: string;     // "chat" | "consolidation_l1_l2" | etc
-  provenance_refs?: string;       // JSON-encoded list of source memory IDs
-  superseded_by?: string | null;  // when L1 was rolled into an L2
+  effective_importance?: number; // server-computed decayed value (for query rows)
+  provenance_source?: string; // "chat" | "consolidation_l1_l2" | etc
+  provenance_refs?: string; // JSON-encoded list of source memory IDs
+  superseded_by?: string | null; // when L1 was rolled into an L2
   conflict_group?: string | null; // when in a contradiction set
-  is_current?: number;            // 0 | 1
-  final_score?: number;           // server-computed blended rank score
+  is_current?: number; // 0 | 1
+  final_score?: number; // server-computed blended rank score
 }
 
 // M-Memory-1: returned by /memory/conflicts and /memory/{id}

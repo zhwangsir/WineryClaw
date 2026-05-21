@@ -25,9 +25,33 @@ const defaultMock = {
       modelConfig: { modelId: "openai/gpt-4", baseUrl: "http://localhost", temperature: 0.7, maxTokens: 4096 },
     },
     { id: "a2", name: "Writer", role: "writer", enabled: false, isDefault: false, description: "", capabilities: [] },
-    { id: "a3", name: "Support", role: "support", enabled: true, isDefault: false, description: "Help desk", capabilities: ["chat", "reasoning"] },
-    { id: "a4", name: "Analyst", role: "analyst", enabled: true, isDefault: false, description: "Data", capabilities: ["tool_use"] },
-    { id: "a5", name: "CustomBot", role: "custom", enabled: true, isDefault: false, description: "Custom", capabilities: ["memory"] },
+    {
+      id: "a3",
+      name: "Support",
+      role: "support",
+      enabled: true,
+      isDefault: false,
+      description: "Help desk",
+      capabilities: ["chat", "reasoning"],
+    },
+    {
+      id: "a4",
+      name: "Analyst",
+      role: "analyst",
+      enabled: true,
+      isDefault: false,
+      description: "Data",
+      capabilities: ["tool_use"],
+    },
+    {
+      id: "a5",
+      name: "CustomBot",
+      role: "custom",
+      enabled: true,
+      isDefault: false,
+      description: "Custom",
+      capabilities: ["memory"],
+    },
   ],
   fetchAgents,
   createAgent,
@@ -401,7 +425,17 @@ describe("AgentsPage", () => {
   it("renders agent with unknown role and no capabilities", () => {
     vi.mocked(useAgentStore).mockReturnValue({
       ...defaultMock,
-      agents: [{ id: "a6", name: "Unknown", role: undefined, enabled: true, isDefault: false, description: "", capabilities: undefined }],
+      agents: [
+        {
+          id: "a6",
+          name: "Unknown",
+          role: undefined,
+          enabled: true,
+          isDefault: false,
+          description: "",
+          capabilities: undefined,
+        },
+      ],
     });
     render(<AgentsPage />);
     expect(screen.getByText("Unknown")).toBeInTheDocument();

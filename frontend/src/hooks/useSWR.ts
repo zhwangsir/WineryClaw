@@ -14,15 +14,11 @@ interface SWREntry<T> {
 const globalCache = new Map<string, SWREntry<unknown>>();
 
 export interface SWRConfig {
-  staleTime?: number;      // ms before data is considered stale (default: 30000)
-  dedupInterval?: number;  // ms to deduplicate concurrent requests (default: 2000)
+  staleTime?: number; // ms before data is considered stale (default: 30000)
+  dedupInterval?: number; // ms to deduplicate concurrent requests (default: 2000)
 }
 
-export function useSWR<T>(
-  key: string,
-  fetcher: () => Promise<T>,
-  config: SWRConfig = {}
-) {
+export function useSWR<T>(key: string, fetcher: () => Promise<T>, config: SWRConfig = {}) {
   const { staleTime = 30000 } = config;
   const mounted = useRef(false);
 
@@ -41,18 +37,20 @@ export function useSWR<T>(
     }
 
     // Execute fetch
-    const promise = fetcher().then((data) => {
-      globalCache.set(key, { data, timestamp: Date.now() });
-      return data;
-    }).catch((err) => {
-      // Remove failed promise so retry works
-      const entry = globalCache.get(key) as SWREntry<T> | undefined;
-      if (entry) {
-        const { promise: _, ...rest } = entry;
-        globalCache.set(key, rest);
-      }
-      throw err;
-    });
+    const promise = fetcher()
+      .then((data) => {
+        globalCache.set(key, { data, timestamp: Date.now() });
+        return data;
+      })
+      .catch((err) => {
+        // Remove failed promise so retry works
+        const entry = globalCache.get(key) as SWREntry<T> | undefined;
+        if (entry) {
+          const { promise: _, ...rest } = entry;
+          globalCache.set(key, rest);
+        }
+        throw err;
+      });
 
     globalCache.set(key, { data: cached?.data as T, timestamp: cached?.timestamp ?? 0, promise });
     return promise;
@@ -65,7 +63,9 @@ export function useSWR<T>(
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   return { execute, mutate };

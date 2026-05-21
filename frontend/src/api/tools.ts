@@ -5,7 +5,7 @@ export const toolsApi = {
   list: () =>
     api
       .get<{ tools: Omit<Tool, "id">[] }>("/api/tools")
-      .then((r) => r.tools.map((t) => ({ ...t, id: t.name } as Tool))),
+      .then((r) => r.tools.map((t) => ({ ...t, id: t.name }) as Tool)),
   execute: (tool: string, params: unknown) =>
     api.post<{ ok: boolean; result?: unknown; error?: string }>("/api/tools/execute", { tool, params }),
   enable: (tool: string) => api.post("/api/tools/enable", { tool }),

@@ -30,7 +30,11 @@ const baseInfo = {
   tools: [
     { name: "webrain_memory_query", description: "Semantic search across memory layers.", scope: "read" as const },
     { name: "webrain_rag_query", description: "Retrieve top-k document chunks.", scope: "read" as const },
-    { name: "webrain_memory_store", description: "Append a new memory entry. Requires authentication.", scope: "write" as const },
+    {
+      name: "webrain_memory_store",
+      description: "Append a new memory entry. Requires authentication.",
+      scope: "write" as const,
+    },
   ],
 };
 

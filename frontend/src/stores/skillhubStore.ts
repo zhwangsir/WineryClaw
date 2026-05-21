@@ -1,12 +1,7 @@
 import { create } from "zustand";
 import { message } from "antd";
 import { skillhubApi } from "../api/skillhub";
-import type {
-  SkillhubItem,
-  Skill,
-  SkillRegistry,
-  ImprovementCandidate,
-} from "../api/skillhub";
+import type { SkillhubItem, Skill, SkillRegistry, ImprovementCandidate } from "../api/skillhub";
 
 interface SkillhubState {
   // marketplace
@@ -199,9 +194,7 @@ export const useSkillhubStore = create<SkillhubState>((set, get) => ({
       const result = await skillhubApi.refresh(name);
       const errorCount = Object.keys(result.errors || {}).length;
       if (errorCount > 0) {
-        message.warning(
-          `刷新完成:${result.refreshed.length} 个成功,${errorCount} 个失败`,
-        );
+        message.warning(`刷新完成:${result.refreshed.length} 个成功,${errorCount} 个失败`);
       } else {
         message.success(`已刷新 ${result.refreshed.length} 个 registry`);
       }

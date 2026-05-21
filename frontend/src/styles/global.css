@@ -125,16 +125,8 @@ body {
   /* Notion's font stack: system first (renders fast, native feel),
      PingFang for Chinese, Inter as cross-platform fallback. */
   font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    "PingFang SC",
-    "Hiragino Sans GB",
-    "Microsoft YaHei",
-    "Inter",
-    "Helvetica Neue",
-    Arial,
-    sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter",
+    "Helvetica Neue", Arial, sans-serif;
   background: var(--c-page);
   color: var(--c-text);
   line-height: 1.5;
@@ -559,8 +551,14 @@ textarea:focus-visible,
  * the inline tail-of-message cursor.
  */
 @keyframes chatCursorBlink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
 
 /* ── Q12.1 — AntD Card actions footer in dark mode ─────────────────

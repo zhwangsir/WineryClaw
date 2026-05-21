@@ -33,13 +33,30 @@ export default function McpPage() {
       }
     >
       {/* Servers */}
-      <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16, color: "var(--c-text)", display: "flex", alignItems: "center", gap: 8 }}>
+      <div
+        style={{
+          fontWeight: 600,
+          fontSize: 16,
+          marginBottom: 16,
+          color: "var(--c-text)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
         <LinkOutlined /> MCP 服务器
       </div>
       {servers.length === 0 ? (
         <Empty description="暂无 MCP 服务器" style={{ marginBottom: 32 }} />
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16, marginBottom: 32 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gap: 16,
+            marginBottom: 32,
+          }}
+        >
           {servers.map((s) => (
             <Card
               key={s.name}
@@ -57,7 +74,10 @@ export default function McpPage() {
               {s.tools && s.tools.length > 0 && (
                 <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 4 }}>
                   {s.tools.map((t) => (
-                    <Tag key={t} style={{ fontSize: 10, margin: 0 }}><ToolOutlined style={{ marginRight: 2 }} />{t}</Tag>
+                    <Tag key={t} style={{ fontSize: 10, margin: 0 }}>
+                      <ToolOutlined style={{ marginRight: 2 }} />
+                      {t}
+                    </Tag>
                   ))}
                 </div>
               )}
@@ -67,7 +87,17 @@ export default function McpPage() {
       )}
 
       {/* Tools */}
-      <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16, color: "var(--c-text)", display: "flex", alignItems: "center", gap: 8 }}>
+      <div
+        style={{
+          fontWeight: 600,
+          fontSize: 16,
+          marginBottom: 16,
+          color: "var(--c-text)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
         <ThunderboltOutlined /> 可用工具
       </div>
       {tools.length === 0 ? (
@@ -80,9 +110,17 @@ export default function McpPage() {
           loading={loading}
           pagination={{ pageSize: 10 }}
           columns={[
-            { title: "名称", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500, fontSize: 13 }}>{v}</span> },
+            {
+              title: "名称",
+              dataIndex: "name",
+              render: (v: string) => <span style={{ fontWeight: 500, fontSize: 13 }}>{v}</span>,
+            },
             { title: "服务器", dataIndex: "server", render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag> },
-            { title: "描述", dataIndex: "description", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span> },
+            {
+              title: "描述",
+              dataIndex: "description",
+              render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span>,
+            },
           ]}
         />
       )}
@@ -102,7 +140,9 @@ export default function McpPage() {
             <Input placeholder="例如: http://localhost:3001/sse" />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block icon={<LinkOutlined />}>连接</Button>
+            <Button type="primary" htmlType="submit" block icon={<LinkOutlined />}>
+              连接
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>
