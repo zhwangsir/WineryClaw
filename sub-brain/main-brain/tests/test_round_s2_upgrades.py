@@ -1,4 +1,4 @@
-"""Round S (second batch): S5 Context Compression + S6 Proactive Intelligence 单元测试"""
+"""Round S (second batch): S5 Context Compression + S6 Proactive Intelligence + S7 Semantic Dedup 单元测试"""
 
 import asyncio
 import json
@@ -297,3 +297,186 @@ class TestProactiveIntelligence:
         assert "proactive_insights" in result
         assert result["proactive_insights"] == 0
         dreaming_engine.detect_proactive_insights.assert_awaited_once_with(5)
+
+
+# ---------------------------------------------------------------------------
+# S7: 语义去重测试
+# ---------------------------------------------------------------------------
+
+def _make_db_conn_mock(l2_rows, l3_refs_rows=None):
+    """返回可用作 `with self.memory._connect() as conn:` 的 mock。"""
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    # fetchall 依次返回 l2_rows、l3_refs_rows（再多的调用返回空列表）
+    mock_conn.execute.return_value.fetchall.side_effect = [
+        l2_rows,
+        l3_refs_rows if l3_refs_rows is not None else [],
+    ]
+    return mock_conn
+
+
+class TestSemanticDeduplication:
+    """_find_similar_l3 和 consolidate_l2_to_l3 去重路径的核心测试。"""
+
+    # ---- _find_similar_l3 单元测试 ----
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_dedup_disabled(self, dreaming_engine):
+        """dedup_enabled=False 时直接返回 None，不调用向量搜索。"""
+        dreaming_engine.dedup_enabled = False
+        dreaming_engine.memory._vector_search = AsyncMock()
+        result = await dreaming_engine._find_similar_l3("用户喜欢简洁代码")
+        assert result is None
+        dreaming_engine.memory._vector_search.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_candidates(self, dreaming_engine):
+        """向量搜索返回空列表时返回 None。"""
+        dreaming_engine.memory._vector_search = AsyncMock(return_value=[])
+        result = await dreaming_engine._find_similar_l3("用户喜欢简洁代码")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_below_threshold(self, dreaming_engine):
+        """最高相似度低于阈值时返回 None（不触发去重）。"""
+        dreaming_engine.dedup_threshold = 0.85
+        dreaming_engine.memory._vector_search = AsyncMock(
+            return_value=[{"id": "old-1", "content": "旧内容", "vector_score": 0.70}]
+        )
+        result = await dreaming_engine._find_similar_l3("新内容")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_match_when_above_threshold(self, dreaming_engine):
+        """最高相似度 >= 阈值时返回匹配行。"""
+        similar = {
+            "id": "old-1",
+            "content": "[fact] 用户在开发WeBrain",
+            "vector_score": 0.92,
+            "importance": 0.7,
+        }
+        dreaming_engine.memory._vector_search = AsyncMock(return_value=[similar])
+        result = await dreaming_engine._find_similar_l3("[fact] 用户正在做WeBrain项目")
+        assert result is not None
+        assert result["id"] == "old-1"
+
+    @pytest.mark.asyncio
+    async def test_graceful_degradation_on_vector_error(self, dreaming_engine):
+        """向量搜索抛异常时优雅降级，返回 None，不传播异常。"""
+        dreaming_engine.memory._vector_search = AsyncMock(side_effect=RuntimeError("索引损坏"))
+        result = await dreaming_engine._find_similar_l3("测试内容")
+        assert result is None
+
+    # ---- consolidate_l2_to_l3 去重集成测试 ----
+
+    @pytest.mark.asyncio
+    async def test_consolidate_deduplicates_and_increments_counter(self, dreaming_engine):
+        """发现相似 L3 时：不调用 store，更新已有行，facts_deduplicated=1。"""
+        similar = {
+            "id": "existing-1",
+            "content": "[fact] 旧内容",
+            "vector_score": 0.90,
+            "importance": 0.7,
+        }
+        dreaming_engine._find_similar_l3 = AsyncMock(return_value=similar)
+        dreaming_engine._extract_l3_facts = AsyncMock(
+            return_value=[{"kind": "fact", "statement": "新内容，比旧内容更详细"}]
+        )
+        dreaming_engine.memory.store = AsyncMock()
+        dreaming_engine.memory._store_embedding = AsyncMock()
+        mock_conn = _make_db_conn_mock(
+            l2_rows=[{"id": "l2-1", "content": "会话内容", "session_id": "s1", "created_at": "2024-01-01"}],
+        )
+        dreaming_engine.memory._connect = MagicMock(return_value=mock_conn)
+
+        result = await dreaming_engine.consolidate_l2_to_l3()
+
+        assert result["facts_deduplicated"] == 1
+        assert result["facts_created"] == 0
+        dreaming_engine.memory.store.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_consolidate_creates_new_when_no_similar(self, dreaming_engine):
+        """无相似 L3 时：正常调用 store，facts_created=1，facts_deduplicated=0。"""
+        dreaming_engine._find_similar_l3 = AsyncMock(return_value=None)
+        dreaming_engine._extract_l3_facts = AsyncMock(
+            return_value=[{"kind": "goal", "statement": "用户希望学习 Python"}]
+        )
+        dreaming_engine.memory.store = AsyncMock(return_value={"id": "new-1"})
+        mock_conn = _make_db_conn_mock(
+            l2_rows=[{"id": "l2-1", "content": "会话内容", "session_id": "s1", "created_at": "2024-01-01"}],
+        )
+        dreaming_engine.memory._connect = MagicMock(return_value=mock_conn)
+
+        result = await dreaming_engine.consolidate_l2_to_l3()
+
+        assert result["facts_created"] == 1
+        assert result["facts_deduplicated"] == 0
+        dreaming_engine.memory.store.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dedup_keeps_longer_content_new_fact(self, dreaming_engine):
+        """新事实更长时，UPDATE 使用新事实内容，并重新嵌入。"""
+        existing_content = "[fact] 旧"
+        new_statement = "新内容比旧内容更加详细丰富，包含更多信息"
+        new_content = f"[fact] {new_statement}"
+        similar = {
+            "id": "existing-1",
+            "content": existing_content,
+            "vector_score": 0.91,
+            "importance": 0.7,
+        }
+        dreaming_engine._find_similar_l3 = AsyncMock(return_value=similar)
+        dreaming_engine._extract_l3_facts = AsyncMock(
+            return_value=[{"kind": "fact", "statement": new_statement}]
+        )
+        dreaming_engine.memory.store = AsyncMock()
+        dreaming_engine.memory._store_embedding = AsyncMock()
+        mock_conn = _make_db_conn_mock(
+            l2_rows=[{"id": "l2-1", "content": "会话", "session_id": "s1", "created_at": "2024-01-01"}],
+        )
+        dreaming_engine.memory._connect = MagicMock(return_value=mock_conn)
+
+        await dreaming_engine.consolidate_l2_to_l3()
+
+        # 验证 UPDATE 使用新内容（更长）
+        all_calls = mock_conn.execute.call_args_list
+        update_call = next((c for c in all_calls if "UPDATE memories" in str(c)), None)
+        assert update_call is not None
+        update_args = update_call[0][1]  # positional args tuple: (content, importance, now, id)
+        assert update_args[0] == new_content  # merged = 新事实
+        # 内容变更 → 重新嵌入
+        dreaming_engine.memory._store_embedding.assert_awaited_once_with("existing-1", new_content)
+
+    @pytest.mark.asyncio
+    async def test_dedup_keeps_existing_content_when_longer(self, dreaming_engine):
+        """现有事实更长时，merged_content 取现有内容，不调用 _store_embedding。"""
+        existing_content = "[fact] 现有内容非常详细，包含了很多有价值的背景信息和细节"
+        new_statement = "简短新事实"
+        similar = {
+            "id": "existing-1",
+            "content": existing_content,
+            "vector_score": 0.91,
+            "importance": 0.7,
+        }
+        dreaming_engine._find_similar_l3 = AsyncMock(return_value=similar)
+        dreaming_engine._extract_l3_facts = AsyncMock(
+            return_value=[{"kind": "fact", "statement": new_statement}]
+        )
+        dreaming_engine.memory.store = AsyncMock()
+        dreaming_engine.memory._store_embedding = AsyncMock()
+        mock_conn = _make_db_conn_mock(
+            l2_rows=[{"id": "l2-1", "content": "会话", "session_id": "s1", "created_at": "2024-01-01"}],
+        )
+        dreaming_engine.memory._connect = MagicMock(return_value=mock_conn)
+
+        await dreaming_engine.consolidate_l2_to_l3()
+
+        all_calls = mock_conn.execute.call_args_list
+        update_call = next((c for c in all_calls if "UPDATE memories" in str(c)), None)
+        assert update_call is not None
+        update_args = update_call[0][1]
+        assert update_args[0] == existing_content  # merged = 现有内容
+        # 内容未变 → 无需重新嵌入
+        dreaming_engine.memory._store_embedding.assert_not_awaited()

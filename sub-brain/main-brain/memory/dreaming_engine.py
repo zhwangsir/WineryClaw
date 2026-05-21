@@ -10,6 +10,7 @@ Simulates sleep phases to consolidate memories:
 import collections
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Deque, Dict, List, Optional
@@ -25,6 +26,9 @@ class DreamingEngine:
     # S6: 主动洞察缓冲区 (Proactive Intelligence) — 存放 Dreaming 周期生成的洞察
     INSIGHT_BUFFER_MAX = 20
 
+    # S7: L3 去重——facts_created < MIN_FACTS_FOR_INSIGHT 时不调用去重 LLM
+    MIN_FACTS_FOR_INSIGHT = 3  # already used in S6; kept as single source of truth
+
     def __init__(self, memory_manager: Any, llm_config: Optional[Dict] = None):
         self.memory = memory_manager
         self.llm_config = llm_config or {
@@ -35,6 +39,11 @@ class DreamingEngine:
         # 使用 deque 自动淘汰最旧的条目，无需手动管理大小
         self._insight_buffer: Deque[Dict[str, Any]] = collections.deque(
             maxlen=self.INSIGHT_BUFFER_MAX
+        )
+        # S7: 语义去重参数 — 超过阈值的 L3 事实直接更新已有条目而非新建重复行
+        self.dedup_enabled: bool = os.environ.get("WEBRAIN_DEDUP_ENABLED", "1") != "0"
+        self.dedup_threshold: float = float(
+            os.environ.get("WEBRAIN_DEDUP_THRESHOLD", "0.85")
         )
 
     async def _llm_call(self, messages: List[Dict], max_tokens: int = 1024) -> str:
@@ -250,6 +259,30 @@ class DreamingEngine:
     L2_TO_L3_BATCH = 20  # Max L2 rows processed per run
     L3_FACT_KINDS = ("preference", "fact", "decision", "goal", "open_question")
 
+    async def _find_similar_l3(self, content: str) -> Optional[Dict[str, Any]]:
+        """S7: 语义去重检查 — 返回与 content 余弦相似度超过阈值的最近 L3 事实。
+
+        失败时静默降级（返回 None），绝不阻塞 L2→L3 整合主路径。
+        """
+        if not self.dedup_enabled:
+            return None
+        try:
+            candidates = await self.memory._vector_search(
+                content,
+                limit=3,
+                levels=["L3"],
+            )
+            if not candidates:
+                return None
+            # _vector_search 为每行附加 vector_score（余弦相似度 0-1）
+            top = candidates[0]
+            if top.get("vector_score", 0.0) >= self.dedup_threshold:
+                return top
+            return None
+        except Exception as e:
+            logger.debug("[Dreaming/S7] 去重检查失败（非致命）: %s", e)
+            return None
+
     async def consolidate_l2_to_l3(
         self,
         limit: Optional[int] = None,
@@ -266,6 +299,7 @@ class DreamingEngine:
             l2_processed: number of L2 rows we attempted
             facts_created: total L3 rows written
             facts_skipped_empty: L2 rows the LLM produced no facts for
+            facts_deduplicated: L3 facts merged into existing rows (S7)
         """
         batch = limit if limit is not None else self.L2_TO_L3_BATCH
         cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
@@ -302,11 +336,13 @@ class DreamingEngine:
         if not unprocessed:
             return {
                 "l2_processed": 0, "facts_created": 0, "facts_skipped_empty": 0,
+                "facts_deduplicated": 0,
                 "message": "No unprocessed L2 memories in lookback window",
             }
 
         facts_created = 0
         facts_skipped_empty = 0
+        facts_deduplicated = 0  # S7: semantic dedup counter
 
         for row in unprocessed:
             l2_id = row["id"]
@@ -328,6 +364,35 @@ class DreamingEngine:
                 # without needing a separate column. Provenance carries the
                 # structured form for future use.
                 content = f"[{kind}] {statement}"
+
+                # S7: 语义去重 — 若已有高度相似的 L3 事实，更新已有条目而非新建重复行
+                similar = await self._find_similar_l3(content)
+                if similar:
+                    existing_id = similar["id"]
+                    existing_content = similar.get("content", "")
+                    # 保留信息量更丰富的内容（取较长者）
+                    merged_content = content if len(content) > len(existing_content) else existing_content
+                    new_importance = min(1.0, (similar.get("importance") or 0.7) + 0.05)
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    with self.memory._connect() as conn:
+                        conn.execute(
+                            """UPDATE memories
+                               SET content=?, importance=?, last_accessed_at=?,
+                                   access_count=access_count+1
+                               WHERE id=?""",
+                            (merged_content, new_importance, now_iso, existing_id),
+                        )
+                        conn.commit()
+                    # 内容变化时同步更新向量索引
+                    if merged_content != existing_content:
+                        await self.memory._store_embedding(existing_id, merged_content)
+                    facts_deduplicated += 1
+                    logger.debug(
+                        "[Dreaming/S7] 已去重 L3 事实（相似度=%.3f，existing=%s）",
+                        similar.get("vector_score", 0.0), existing_id,
+                    )
+                    continue
+
                 await self.memory.store({
                     "level": "L3",
                     "content": content,
@@ -340,13 +405,15 @@ class DreamingEngine:
                 facts_created += 1
 
         logger.info(
-            "[Dreaming] L2→L3: processed %d L2 rows, created %d L3 facts, %d empty",
-            len(unprocessed), facts_created, facts_skipped_empty,
+            "[Dreaming] L2→L3: processed %d L2 rows, created %d L3 facts, "
+            "%d empty, %d deduplicated",
+            len(unprocessed), facts_created, facts_skipped_empty, facts_deduplicated,
         )
         return {
             "l2_processed": len(unprocessed),
             "facts_created": facts_created,
             "facts_skipped_empty": facts_skipped_empty,
+            "facts_deduplicated": facts_deduplicated,  # S7
         }
 
     async def _extract_l3_facts(self, l2_content: str) -> List[Dict[str, str]]:
@@ -688,9 +755,11 @@ class DreamingEngine:
         }
 
         logger.info(
-            "[Dreaming] Cycle complete: L1→L2=%d, L2→L3=%d facts, L3→L4=%d promoted, insights=%d",
+            "[Dreaming] Cycle complete: L1→L2=%d, L2→L3=%d facts (+%d deduped), "
+            "L3→L4=%d promoted, insights=%d",
             phase1.get("consolidated", 0),
             phase2.get("facts_created", 0),
+            phase2.get("facts_deduplicated", 0),
             phase3.get("promoted", 0),
             len(new_insights),
         )

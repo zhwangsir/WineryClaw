@@ -343,6 +343,16 @@ class ChatEngine:
         self.context_compress_threshold: int = int(os.environ.get("WEBRAIN_CONTEXT_COMPRESS_THRESHOLD", "12"))
         self.context_compress_keep_recent: int = int(os.environ.get("WEBRAIN_CONTEXT_COMPRESS_KEEP", "4"))
 
+        # S8: 持久化用户上下文 (Persistent User Context) — 将 L3/L4 中的 [preference] 和
+        # [goal] 事实无条件注入每次对话的系统提示，不依赖查询相关性。
+        # 与 S3 工作记忆互补：S3 保持当前会话事实，S8 保持跨会话的用户身份/偏好。
+        # 结果按 TTL 秒缓存，避免高频 DB 查询。
+        self.user_profile_enabled: bool = os.environ.get("WEBRAIN_USER_PROFILE_ENABLED", "1") != "0"
+        self.user_profile_top_k: int = int(os.environ.get("WEBRAIN_USER_PROFILE_TOP_K", "5"))
+        self.user_profile_ttl: float = float(os.environ.get("WEBRAIN_USER_PROFILE_TTL", "60"))
+        self._user_profile_cache: Optional[str] = None
+        self._user_profile_cached_at: float = 0.0
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -777,8 +787,42 @@ class ChatEngine:
             lines.append(f"- [{tid}] {desc}{tool_part}")
         return "\n".join(lines)
 
+    async def _load_user_profile(self) -> str:
+        """S8: 持久化用户上下文 — 从 L3/L4 加载 [preference]/[goal] 事实注入系统提示。
+
+        结果按 TTL 缓存，避免每轮对话都查 DB。失败时静默降级，返回空字符串。
+        """
+        if not self.user_profile_enabled:
+            return ""
+        import time
+        now = time.monotonic()
+        if (
+            self._user_profile_cache is not None
+            and (now - self._user_profile_cached_at) < self.user_profile_ttl
+        ):
+            return self._user_profile_cache
+        try:
+            results = await self.memory.query({
+                "query": "[preference] [goal]",
+                "levels": ["L3", "L4"],
+                "limit": self.user_profile_top_k,
+                "use_rerank": False,  # profile 不需要 cross-encoder re-ranking
+            })
+            profile_facts = [
+                r["content"]
+                for r in results
+                if r.get("content", "").startswith(("[preference]", "[goal]"))
+            ]
+            profile_text = "\n".join([f"- {f}" for f in profile_facts]) if profile_facts else ""
+            self._user_profile_cache = profile_text
+            self._user_profile_cached_at = now
+            return profile_text
+        except Exception as e:
+            logger.debug("S8 用户画像加载失败（非致命）: %s", e)
+            return ""
+
     async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "",
-                                    plan_block: str = "") -> str:
+                                    plan_block: str = "", user_profile_text: str = "") -> str:
         """Build system prompt from agent's system.md with template substitution."""
         agent = await self._fetch_agent_config(agent_id)
 
@@ -821,6 +865,10 @@ class ChatEngine:
         if plan_block and "{{plan}}" not in prompt:
             prompt = prompt + "\n\n{{plan}}"
 
+        # S8: 持久化用户上下文 — 若有 user_profile_text，在模板末尾追加（或替换槽位）
+        if user_profile_text and "{{user_profile}}" not in prompt:
+            prompt = prompt + "\n\n## 用户偏好与目标\n{{user_profile}}"
+
         rag_block = rag_text or "(no relevant documents)"
 
         prompt = prompt.replace("{{memory}}", memory_text)
@@ -831,6 +879,8 @@ class ChatEngine:
         # Empty string replacement when no plan — keeps the slot from leaking
         # into the rendered prompt as literal `{{plan}}`.
         prompt = prompt.replace("{{plan}}", plan_block)
+        # S8: 用户画像槽位替换；若无 profile，同样清理占位符
+        prompt = prompt.replace("{{user_profile}}", user_profile_text)
 
         return prompt
 
@@ -1324,7 +1374,9 @@ class ChatEngine:
 
         # Fetch agent config and build prompt
         agent_config = await self._fetch_agent_config(agent_id)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block)
+        # S8: 持久化用户上下文
+        user_profile_text = await self._load_user_profile()
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
@@ -1475,7 +1527,9 @@ class ChatEngine:
 
         # Fetch agent config and build prompt
         agent_config = await self._fetch_agent_config(agent_id)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block)
+        # S8: 持久化用户上下文
+        user_profile_text = await self._load_user_profile()
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},

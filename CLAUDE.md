@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-21, post Round S S5+S6):
-> **450** sub-brain unit + 1216 frontend unit + **421** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S8):
+> **450** sub-brain unit + 1216 frontend unit + **461** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -150,6 +150,11 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_CONTEXT_COMPRESS_ENABLED` | main-brain | `1` | Round S5: 上下文压缩。工具调用链超过阈值时自动压缩中间历史，防止上下文窗口溢出。设为 `0` 禁用。 |
 | `WEBRAIN_CONTEXT_COMPRESS_THRESHOLD` | main-brain | `12` | 触发上下文压缩的消息条数阈值。超过此数量时对中间消息进行 LLM 摘要压缩。 |
 | `WEBRAIN_CONTEXT_COMPRESS_KEEP` | main-brain | `4` | 压缩时保留的最近消息条数（不压缩的末尾窗口）。 |
+| `WEBRAIN_DEDUP_ENABLED` | main-brain | `1` | Round S7: 语义去重。L2→L3 提取新事实前先做向量相似度检查，与现有 L3 高度相似（超过阈值）则更新已有行而非新建重复条目。设为 `0` 禁用（禁后每次 Dreaming 都会创建潜在重复行）。 |
+| `WEBRAIN_DEDUP_THRESHOLD` | main-brain | `0.85` | L3 语义去重的余弦相似度阈值（0-1）。超过此值视为重复，触发合并而非新建。调低可减少误合并；调高可减少漏合并。 |
+| `WEBRAIN_USER_PROFILE_ENABLED` | main-brain | `1` | Round S8: 持久化用户上下文。将 L3/L4 中的 [preference]/[goal] 事实无条件注入每次对话的系统提示，使 AI 时刻感知用户风格偏好（不依赖查询相关性）。设为 `0` 禁用。 |
+| `WEBRAIN_USER_PROFILE_TOP_K` | main-brain | `5` | S8 用户画像最多注入多少条 [preference]/[goal] 事实。 |
+| `WEBRAIN_USER_PROFILE_TTL` | main-brain | `60` | S8 用户画像缓存有效期（秒）。到期后下次对话重新查 DB。 |
 
 ---
 
