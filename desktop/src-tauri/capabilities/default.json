@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0/capability",
+  "identifier": "default",
+  "description": "Capability for the main window. WeBrain runs the existing Vite-based webview; no special filesystem/network bindings beyond Tauri's default IPC are needed.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

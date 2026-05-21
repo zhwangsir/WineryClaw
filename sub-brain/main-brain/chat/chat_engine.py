@@ -1605,6 +1605,37 @@ class ChatEngine:
                         except Exception as e:
                             logger.warning(f"Anthropic stream parse error: {e}")
                             continue
+                elif ep.provider == "google":
+                    # Gemini SSE (?alt=sse on generateContent). Each event is
+                    # `data: <json>` lines separated by blank lines.
+                    # Schema: {"candidates":[{"content":{"parts":[{"text":"..."}]},
+                    #          "finishReason":"STOP"|"MAX_TOKENS"|...}]}
+                    #
+                    # We collapse the multi-part array into the first text part
+                    # (Gemini rarely splits a single chunk into multiple parts
+                    # for text-only outputs). When `finishReason` arrives we
+                    # emit `done` regardless of whether [DONE] sentinel showed up.
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data == "[DONE]":
+                            yield {"type": "done"}
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            cand = (chunk.get("candidates") or [{}])[0]
+                            parts = cand.get("content", {}).get("parts", []) or []
+                            for p in parts:
+                                t = p.get("text") or ""
+                                if t:
+                                    yield {"type": "content", "data": t}
+                            if cand.get("finishReason"):
+                                yield {"type": "done"}
+                                break
+                        except Exception as e:
+                            logger.warning(f"Gemini stream parse error: {e}")
+                            continue
                 else:
                     async for line in resp.aiter_lines():
                         if not line or not line.startswith("data: "):

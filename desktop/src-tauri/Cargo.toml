@@ -1,0 +1,27 @@
+[package]
+name = "webrain-desktop"
+version = "0.1.0"
+description = "WeBrain — local dual-brain AI integration platform desktop shell"
+authors = ["WeBrain Dev <dev@webrain.ai>"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "webrain_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+tauri = { version = "2.5", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "sync", "time"] }
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = []
+# `custom-protocol` is required when building a release bundle.
+custom-protocol = ["tauri/custom-protocol"]

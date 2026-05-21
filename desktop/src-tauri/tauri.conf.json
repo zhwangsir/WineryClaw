@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "WeBrain",
+  "version": "0.1.0",
+  "identifier": "ai.webrain.desktop",
+  "build": {
+    "beforeDevCommand": "cd ../../frontend && pnpm dev",
+    "beforeBuildCommand": "cd ../../frontend && pnpm build",
+    "devUrl": "http://localhost:8587",
+    "frontendDist": "../../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "WeBrain",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": null,
+      "dangerousDisableAssetCspModification": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "category": "Productivity",
+    "copyright": "© 2026 WeBrain",
+    "shortDescription": "Local dual-brain AI integration platform",
+    "longDescription": "WeBrain runs your AI assistant entirely on your own machine. Dual-brain architecture (reasoning + execution) with built-in memory, RAG, and tool calling."
+  }
+}

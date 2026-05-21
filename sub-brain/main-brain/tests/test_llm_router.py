@@ -344,3 +344,178 @@ class TestLLMHealthMonitor:
         router = MagicMock()
         monitor = LLMHealthMonitor(router, interval_sec=0.1)
         assert monitor._interval == 5.0
+
+
+# ---------------------------------------------------------------------------
+# Provider-specific streaming parsers (Sprint 0.3)
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamResp:
+    """Pretends to be an httpx.Response from `client.stream(...)`.
+
+    Used to drive ChatEngine._chat_completion_stream's SSE parsing
+    deterministically without a real HTTP server.
+    """
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    def raise_for_status(self) -> None:  # noqa: D401
+        return None
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _FakeStreamCtx:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    async def __aenter__(self) -> _FakeStreamResp:
+        return _FakeStreamResp(self._lines)
+
+    async def __aexit__(self, *exc) -> None:  # noqa: ANN001
+        return None
+
+
+class TestChatCompletionStreamGemini:
+    """Sprint 0.3 — Gemini SSE branch in _chat_completion_stream.
+
+    Pre-Sprint 0.3, only "anthropic" had a dedicated branch and everything
+    else fell through to the OpenAI-shaped parser. A Google/Gemini endpoint
+    in streaming mode would yield nothing because Gemini's chunk shape is
+    `{"candidates":[{"content":{"parts":[{"text":"..."}]}}]}`, not
+    `{"choices":[{"delta":{"content":"..."}}]}`.
+    """
+
+    def _engine_with_google_primary(self) -> ChatEngine:
+        mm = MagicMock()
+        mm.query = AsyncMock(return_value=[])
+        sb = MagicMock()
+        config = {
+            "endpoints": [
+                {
+                    "name": "gemini",
+                    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                    "model_id": "gemini-2.0-flash",
+                    "api_key": "GEMINI_TEST_KEY",
+                    "provider": "google",
+                    "priority": 10,
+                }
+            ]
+        }
+        return ChatEngine(mm, sb, llm_config=config)
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_yields_content_then_done(self) -> None:
+        engine = self._engine_with_google_primary()
+        # Two real Gemini SSE-shaped chunks, last carries finishReason
+        lines = [
+            'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}',
+            "",
+            'data: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}',
+            "",
+            'data: {"candidates":[{"content":{"parts":[{"text":"!"}]},"finishReason":"STOP"}]}',
+            "",
+        ]
+
+        def fake_stream(method, url, json=None, headers=None, timeout=None):
+            return _FakeStreamCtx(lines)
+
+        client = MagicMock()
+        client.stream = fake_stream
+        with patch.object(engine, "_get_client", return_value=client):
+            chunks = []
+            async for ev in engine._chat_completion_stream(
+                [{"role": "user", "content": "hi"}]
+            ):
+                chunks.append(ev)
+
+        contents = [c["data"] for c in chunks if c["type"] == "content"]
+        assert contents == ["Hello", " world", "!"]
+        # Must terminate with a single `done` event
+        assert chunks[-1] == {"type": "done"}
+        assert sum(1 for c in chunks if c["type"] == "done") == 1
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_handles_done_sentinel(self) -> None:
+        engine = self._engine_with_google_primary()
+        # Some Gemini clients emit `data: [DONE]` like OpenAI
+        lines = [
+            'data: {"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}',
+            "",
+            "data: [DONE]",
+        ]
+
+        def fake_stream(method, url, json=None, headers=None, timeout=None):
+            return _FakeStreamCtx(lines)
+
+        client = MagicMock()
+        client.stream = fake_stream
+        with patch.object(engine, "_get_client", return_value=client):
+            chunks = []
+            async for ev in engine._chat_completion_stream(
+                [{"role": "user", "content": "hi"}]
+            ):
+                chunks.append(ev)
+
+        assert chunks[0] == {"type": "content", "data": "hi"}
+        assert chunks[-1] == {"type": "done"}
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_skips_malformed_chunks(self) -> None:
+        """Malformed JSON in one event must not stop the stream — just warn."""
+        engine = self._engine_with_google_primary()
+        lines = [
+            'data: {"candidates":[{"content":{"parts":[{"text":"good"}]}}]}',
+            "",
+            "data: {invalid-json}",
+            "",
+            'data: {"candidates":[{"content":{"parts":[{"text":"after-err"}]},"finishReason":"STOP"}]}',
+            "",
+        ]
+
+        def fake_stream(method, url, json=None, headers=None, timeout=None):
+            return _FakeStreamCtx(lines)
+
+        client = MagicMock()
+        client.stream = fake_stream
+        with patch.object(engine, "_get_client", return_value=client):
+            chunks = []
+            async for ev in engine._chat_completion_stream(
+                [{"role": "user", "content": "hi"}]
+            ):
+                chunks.append(ev)
+
+        contents = [c["data"] for c in chunks if c["type"] == "content"]
+        assert contents == ["good", "after-err"]
+        assert chunks[-1] == {"type": "done"}
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_empty_parts_yields_nothing(self) -> None:
+        engine = self._engine_with_google_primary()
+        # Real Gemini does emit chunks with empty parts during long pauses
+        lines = [
+            'data: {"candidates":[{"content":{"parts":[]}}]}',
+            "",
+            'data: {"candidates":[{"content":{"parts":[{"text":"finally"}]},"finishReason":"STOP"}]}',
+            "",
+        ]
+
+        def fake_stream(method, url, json=None, headers=None, timeout=None):
+            return _FakeStreamCtx(lines)
+
+        client = MagicMock()
+        client.stream = fake_stream
+        with patch.object(engine, "_get_client", return_value=client):
+            chunks = []
+            async for ev in engine._chat_completion_stream(
+                [{"role": "user", "content": "hi"}]
+            ):
+                chunks.append(ev)
+
+        contents = [c["data"] for c in chunks if c["type"] == "content"]
+        assert contents == ["finally"]
+        assert chunks[-1] == {"type": "done"}
