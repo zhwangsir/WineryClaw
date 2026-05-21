@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-22, post Round S S5–S9):
-> **450** sub-brain unit + 1216 frontend unit + **474** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S10):
+> **450** sub-brain unit + 1216 frontend unit + **485** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -158,6 +158,9 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_KG_CONTEXT_ENABLED` | main-brain | `1` | Round S9: KG 上下文注入。每次对话时用消息关键词检索知识图谱，将命中实体及其一跳关系注入系统提示，使 AI 能利用跨会话积累的结构化实体知识。纯内存操作，延迟 <1ms。设为 `0` 禁用。 |
 | `WEBRAIN_KG_CONTEXT_TOP_K` | main-brain | `3` | S9 每次最多注入多少个 KG 实体。 |
 | `WEBRAIN_KG_CONTEXT_MAX_RELS` | main-brain | `3` | S9 每个实体最多展开多少条直接关联关系。 |
+| `WEBRAIN_CONV_ANCHOR_ENABLED` | main-brain | `1` | Round S10: 会话锚点。新会话第一条消息时，在向量空间检索近期相关 L2 对话摘要注入系统提示，帮助 AI 维持跨会话对话脉络（"上次我们在讨论..."）。后续消息不触发。设为 `0` 禁用。 |
+| `WEBRAIN_CONV_ANCHOR_TOP_K` | main-brain | `2` | S10 最多注入多少条近期相关对话摘要。 |
+| `WEBRAIN_CONV_ANCHOR_DAYS` | main-brain | `7` | S10 只检索最近多少天内的 L2 摘要（超出则过滤）。 |
 
 ---
 

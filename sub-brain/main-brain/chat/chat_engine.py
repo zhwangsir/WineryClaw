@@ -366,6 +366,15 @@ class ChatEngine:
         self.kg_context_top_k: int = int(os.environ.get("WEBRAIN_KG_CONTEXT_TOP_K", "3"))
         self.kg_context_max_rels: int = int(os.environ.get("WEBRAIN_KG_CONTEXT_MAX_RELS", "3"))
 
+        # S10: 会话锚点 (Conversation Anchor) — 新会话第一条消息时，检索近期相关的
+        # L2 对话摘要注入系统提示，帮助 AI 理解跨会话上下文（"上次我们在讨论..."）。
+        # 与 S3 工作记忆互补：S3 是当前会话内的短期记忆；S10 是跨会话的对话脉络。
+        self.conv_anchor_enabled: bool = os.environ.get("WEBRAIN_CONV_ANCHOR_ENABLED", "1") != "0"
+        self.conv_anchor_top_k: int = int(os.environ.get("WEBRAIN_CONV_ANCHOR_TOP_K", "2"))
+        self.conv_anchor_days: int = int(os.environ.get("WEBRAIN_CONV_ANCHOR_DAYS", "7"))
+        # 本进程内已"激活"的 session_id 集合 — 用于识别新会话（S10 只在首条消息触发）
+        self._anchored_sessions: set = set()
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -800,6 +809,47 @@ class ChatEngine:
             lines.append(f"- [{tid}] {desc}{tool_part}")
         return "\n".join(lines)
 
+    async def _load_conversation_anchor(self, session_id: str, user_message: str) -> str:
+        """S10: 会话锚点 — 新会话首条消息时检索近期相关 L2 对话摘要，注入系统提示。
+
+        只在当前进程中首次见到该 session_id 时触发（一次性，后续消息走 S3 工作记忆）。
+        失败时静默降级，返回空字符串，不影响正常对话。
+        """
+        if not self.conv_anchor_enabled:
+            return ""
+        if session_id in self._anchored_sessions:
+            return ""  # 已激活的会话：跳过
+        # 无论是否找到相关摘要，都将本 session 标记为"已激活"
+        self._anchored_sessions.add(session_id)
+        if not user_message.strip():
+            return ""
+        try:
+            from datetime import datetime, timezone, timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=self.conv_anchor_days)).isoformat()
+            results = await self.memory.query({
+                "query": user_message,
+                "levels": ["L2"],
+                "limit": self.conv_anchor_top_k + 3,  # 过取后过滤日期
+                "use_rerank": False,
+            })
+            # 过滤 cutoff 之内的摘要（memory.query 本身不支持日期过滤）
+            recent = [
+                r for r in results
+                if (r.get("created_at") or "") >= cutoff
+            ][:self.conv_anchor_top_k]
+            if not recent:
+                return ""
+            lines = ["[近期相关对话摘要]"]
+            for r in recent:
+                content = (r.get("content") or "").strip()
+                ts = (r.get("created_at") or "")[:10]  # 只保留日期部分
+                if content:
+                    lines.append(f"- ({ts}) {content[:200]}")  # 截断超长摘要
+            return "\n".join(lines) if len(lines) > 1 else ""
+        except Exception as e:
+            logger.debug("[ChatEngine/S10] 会话锚点加载失败（非致命）: %s", e)
+            return ""
+
     def _load_kg_context(self, user_message: str) -> str:
         """S9: KG 上下文注入 — 用消息内容在知识图谱中检索相关实体，注入系统提示。
 
@@ -890,7 +940,8 @@ class ChatEngine:
 
     async def _build_system_prompt(self, agent_id: str, memory_text: str, rag_text: str = "",
                                     plan_block: str = "", user_profile_text: str = "",
-                                    kg_context_text: str = "") -> str:
+                                    kg_context_text: str = "",
+                                    conv_anchor_text: str = "") -> str:
         """Build system prompt from agent's system.md with template substitution."""
         agent = await self._fetch_agent_config(agent_id)
 
@@ -941,6 +992,10 @@ class ChatEngine:
         if kg_context_text and "{{kg_context}}" not in prompt:
             prompt = prompt + "\n\n## 相关知识图谱实体\n{{kg_context}}"
 
+        # S10: 会话锚点 — 新会话首条消息携带近期相关对话摘要
+        if conv_anchor_text and "{{conv_anchor}}" not in prompt:
+            prompt = prompt + "\n\n## 相关历史对话\n{{conv_anchor}}"
+
         rag_block = rag_text or "(no relevant documents)"
 
         prompt = prompt.replace("{{memory}}", memory_text)
@@ -955,6 +1010,8 @@ class ChatEngine:
         prompt = prompt.replace("{{user_profile}}", user_profile_text)
         # S9: KG 实体槽位替换；若无 KG 上下文，清理占位符防止泄漏到最终提示
         prompt = prompt.replace("{{kg_context}}", kg_context_text)
+        # S10: 会话锚点槽位替换；空时清理占位符
+        prompt = prompt.replace("{{conv_anchor}}", conv_anchor_text)
 
         return prompt
 
@@ -1452,7 +1509,9 @@ class ChatEngine:
         user_profile_text = await self._load_user_profile()
         # S9: KG 实体上下文（同步，零延迟）
         kg_context_text = self._load_kg_context(user_input)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text)
+        # S10: 会话锚点（新会话首条消息时检索相关 L2 摘要，后续消息直接跳过）
+        conv_anchor_text = await self._load_conversation_anchor(session_id, user_input)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text, conv_anchor_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
@@ -1607,7 +1666,9 @@ class ChatEngine:
         user_profile_text = await self._load_user_profile()
         # S9: KG 实体上下文（同步，零延迟）
         kg_context_text = self._load_kg_context(user_input)
-        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text)
+        # S10: 会话锚点（新会话首条消息时检索相关 L2 摘要，后续消息直接跳过）
+        conv_anchor_text = await self._load_conversation_anchor(session_id, user_input)
+        system_prompt = await self._build_system_prompt(agent_id, memory_text, rag_text, plan_block, user_profile_text, kg_context_text, conv_anchor_text)
         messages: List[Dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input},
