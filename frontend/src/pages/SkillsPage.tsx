@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
 import { Button, Tag, Table, Drawer, Form, Input, Select, message, Statistic, Popconfirm, Space } from "antd";
-import { ThunderboltOutlined, ReloadOutlined, PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import {
+  ThunderboltOutlined,
+  ReloadOutlined,
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  PlayCircleOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { skillsApi, type Skill, type SkillStats } from "../api/skills";
 import { EmptyState } from "../components/common/EmptyState";
@@ -62,8 +69,14 @@ export default function SkillsPage() {
       description: values.description,
       code: values.code,
       language: values.language,
-      triggerPatterns: values.triggerPatterns?.split(",").map((s: string) => s.trim()).filter(Boolean),
-      tags: values.tags?.split(",").map((s: string) => s.trim()).filter(Boolean),
+      triggerPatterns: values.triggerPatterns
+        ?.split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean),
+      tags: values.tags
+        ?.split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean),
     };
     try {
       if (editingSkill) {
@@ -103,7 +116,11 @@ export default function SkillsPage() {
     setInvokeLoading(true);
     try {
       let params = {};
-      try { params = JSON.parse(invokeParams); } catch { /* ignore */ }
+      try {
+        params = JSON.parse(invokeParams);
+      } catch {
+        /* ignore */
+      }
       const result = await skillsApi.invoke(invokeSkillId, params);
       setInvokeResult(JSON.stringify(result, null, 2));
     } catch (e: any) {
@@ -187,11 +204,7 @@ export default function SkillsPage() {
   ];
 
   return (
-    <PageShell
-      title="技能"
-      subtitle={`已注册 ${skills.length} 个技能`}
-      icon={<ThunderboltOutlined />}
-    >
+    <PageShell title="技能" subtitle={`已注册 ${skills.length} 个技能`} icon={<ThunderboltOutlined />}>
       <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 24 }}>
           {stats && (
@@ -222,7 +235,10 @@ export default function SkillsPage() {
       <Drawer
         title={editingSkill ? "Edit Skill" : "Create Skill"}
         open={drawerOpen}
-        onClose={() => { setDrawerOpen(false); setEditingSkill(null); }}
+        onClose={() => {
+          setDrawerOpen(false);
+          setEditingSkill(null);
+        }}
         width={520}
         destroyOnClose
       >
@@ -234,11 +250,13 @@ export default function SkillsPage() {
             <Input placeholder="What does this skill do?" />
           </Form.Item>
           <Form.Item name="language" label="Language" rules={[{ required: true }]} initialValue="python">
-            <Select options={[
-              { label: "Python", value: "python" },
-              { label: "JavaScript", value: "javascript" },
-              { label: "TypeScript", value: "typescript" },
-            ]} />
+            <Select
+              options={[
+                { label: "Python", value: "python" },
+                { label: "JavaScript", value: "javascript" },
+                { label: "TypeScript", value: "typescript" },
+              ]}
+            />
           </Form.Item>
           <Form.Item name="code" label="Code" rules={[{ required: true }]}>
             <TextArea rows={8} placeholder="def run(params): ..." />

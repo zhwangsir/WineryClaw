@@ -35,15 +35,33 @@ type TabKey = "marketplace" | "installed" | "improvements" | "drafts";
 export default function SkillhubPage() {
   const {
     // marketplace
-    skills, loading, fetchSkills, search, install, refresh,
+    skills,
+    loading,
+    fetchSkills,
+    search,
+    install,
+    refresh,
     // installed
-    installed, installedLoading, fetchInstalled, uninstall,
+    installed,
+    installedLoading,
+    fetchInstalled,
+    uninstall,
     // registries
-    registries, registriesLoading, fetchRegistries, addRegistry, removeRegistry,
+    registries,
+    registriesLoading,
+    fetchRegistries,
+    addRegistry,
+    removeRegistry,
     // candidates
-    candidates, candidatesLoading, fetchCandidates, improve,
+    candidates,
+    candidatesLoading,
+    fetchCandidates,
+    improve,
     // drafts
-    drafts, draftsLoading, fetchDrafts, promoteDraft,
+    drafts,
+    draftsLoading,
+    fetchDrafts,
+    promoteDraft,
   } = useSkillhubStore();
 
   const [activeTab, setActiveTab] = useState<TabKey>("marketplace");
@@ -77,11 +95,7 @@ export default function SkillhubPage() {
   };
 
   return (
-    <PageShell
-      title="技能市场"
-      subtitle="Skillhub · 安装 · 自我改进 · 草稿审核"
-      icon={<AppstoreAddOutlined />}
-    >
+    <PageShell title="技能市场" subtitle="Skillhub · 安装 · 自我改进 · 草稿审核" icon={<AppstoreAddOutlined />}>
       <Tabs
         activeKey={activeTab}
         onChange={(k) => setActiveTab(k as TabKey)}
@@ -113,8 +127,7 @@ export default function SkillhubPage() {
             key: "installed",
             label: (
               <span>
-                <CheckOutlined /> Installed{" "}
-                <Tag style={{ marginLeft: 4 }}>{installed.length}</Tag>
+                <CheckOutlined /> Installed <Tag style={{ marginLeft: 4 }}>{installed.length}</Tag>
               </span>
             ),
             children: (
@@ -193,7 +206,7 @@ export default function SkillhubPage() {
           const ok = await improve(
             improveModalState.candidate.skill.id,
             improveModalState.code,
-            improveModalState.reason,
+            improveModalState.reason
           );
           if (ok) setImproveModalState({ open: false, code: "", reason: "" });
         }}
@@ -223,8 +236,17 @@ interface MarketplaceTabProps {
 }
 
 function MarketplaceTab({
-  skills, loading, q, onQChange, onSearch, onInstall, onRefreshAll,
-  registries, registriesLoading, onAddRegistryClick, onRemoveRegistry,
+  skills,
+  loading,
+  q,
+  onQChange,
+  onSearch,
+  onInstall,
+  onRefreshAll,
+  registries,
+  registriesLoading,
+  onAddRegistryClick,
+  onRemoveRegistry,
 }: MarketplaceTabProps) {
   return (
     <>
@@ -272,9 +294,7 @@ function MarketplaceTab({
               {
                 title: "描述",
                 dataIndex: "description",
-                render: (v: string) => (
-                  <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span>
-                ),
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span>,
               },
               {
                 title: "版本",
@@ -284,9 +304,7 @@ function MarketplaceTab({
               {
                 title: "来源",
                 dataIndex: "author",
-                render: (v: string) => (
-                  <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v || "—"}</span>
-                ),
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v || "—"}</span>,
               },
               {
                 title: "操作",
@@ -312,7 +330,10 @@ function MarketplaceTab({
 }
 
 function RegistryPanel({
-  registries, loading, onAddClick, onRemove,
+  registries,
+  loading,
+  onAddClick,
+  onRemove,
 }: {
   registries: SkillRegistry[];
   loading: boolean;
@@ -369,7 +390,10 @@ function RegistryPanel({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function InstalledTab({
-  installed, loading, onUninstall, onReload,
+  installed,
+  loading,
+  onUninstall,
+  onReload,
 }: {
   installed: Skill[];
   loading: boolean;
@@ -379,7 +403,9 @@ function InstalledTab({
   return (
     <>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={onReload}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={onReload}>
+          刷新
+        </Button>
       </Space>
 
       {installed.length === 0 && !loading ? (
@@ -447,7 +473,10 @@ function InstalledTab({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ImprovementsTab({
-  candidates, loading, onReload, onImproveClick,
+  candidates,
+  loading,
+  onReload,
+  onImproveClick,
 }: {
   candidates: ImprovementCandidate[];
   loading: boolean;
@@ -457,7 +486,9 @@ function ImprovementsTab({
   return (
     <>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={onReload}>刷新候选</Button>
+        <Button icon={<ReloadOutlined />} onClick={onReload}>
+          刷新候选
+        </Button>
         <span style={{ color: "var(--c-text-3)", fontSize: 12 }}>
           这些技能已达到自学习阈值,可手动触发改进或等待后台调度
         </span>
@@ -473,7 +504,11 @@ function ImprovementsTab({
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "技能", dataIndex: ["skill", "name"], render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
+              {
+                title: "技能",
+                dataIndex: ["skill", "name"],
+                render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span>,
+              },
               {
                 title: "失败次数",
                 dataIndex: ["primaryFailureMode", "count"],
@@ -495,12 +530,7 @@ function ImprovementsTab({
                 title: "操作",
                 key: "action",
                 render: (_: unknown, c: ImprovementCandidate) => (
-                  <Button
-                    size="small"
-                    type="primary"
-                    icon={<ThunderboltOutlined />}
-                    onClick={() => onImproveClick(c)}
-                  >
+                  <Button size="small" type="primary" icon={<ThunderboltOutlined />} onClick={() => onImproveClick(c)}>
                     手动改进
                   </Button>
                 ),
@@ -518,7 +548,11 @@ function ImprovementsTab({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DraftsTab({
-  drafts, loading, onReload, onPreview, onPromote,
+  drafts,
+  loading,
+  onReload,
+  onPreview,
+  onPromote,
 }: {
   drafts: Skill[];
   loading: boolean;
@@ -529,7 +563,9 @@ function DraftsTab({
   return (
     <>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={onReload}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={onReload}>
+          刷新
+        </Button>
         <span style={{ color: "var(--c-text-3)", fontSize: 12 }}>
           这些是 agent 在执行新任务时自动打包的草稿,审核后晋升即可运行
         </span>
@@ -545,22 +581,30 @@ function DraftsTab({
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "草稿名", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-              { title: "描述", dataIndex: "description", render: (v: string) => <span style={{ fontSize: 12 }}>{v || "—"}</span> },
+              {
+                title: "草稿名",
+                dataIndex: "name",
+                render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span>,
+              },
+              {
+                title: "描述",
+                dataIndex: "description",
+                render: (v: string) => <span style={{ fontSize: 12 }}>{v || "—"}</span>,
+              },
               { title: "语言", dataIndex: "language", render: (v: string) => <Tag>{v}</Tag> },
               {
                 title: "创建时间",
                 dataIndex: "createdAt",
-                render: (v: string) => (
-                  <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span>
-                ),
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span>,
               },
               {
                 title: "操作",
                 key: "action",
                 render: (_: unknown, d: Skill) => (
                   <Space>
-                    <Button size="small" onClick={() => onPreview(d)}>查看</Button>
+                    <Button size="small" onClick={() => onPreview(d)}>
+                      查看
+                    </Button>
                     <Popconfirm
                       title={`将草稿 "${d.name}" 晋升为正式技能?`}
                       onConfirm={() => onPromote(d.id)}
@@ -587,7 +631,9 @@ function DraftsTab({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function AddRegistryModal({
-  open, onClose, onSubmit,
+  open,
+  onClose,
+  onSubmit,
 }: {
   open: boolean;
   onClose: () => void;
@@ -615,11 +661,7 @@ function AddRegistryModal({
       cancelText="取消"
     >
       <Form form={form} layout="vertical" initialValues={{ enabled: true, priority: 50 }}>
-        <Form.Item
-          label="名称"
-          name="name"
-          rules={[{ required: true, message: "必填" }]}
-        >
+        <Form.Item label="名称" name="name" rules={[{ required: true, message: "必填" }]}>
           <Input placeholder="my-registry" />
         </Form.Item>
         <Form.Item
@@ -642,7 +684,10 @@ function AddRegistryModal({
 }
 
 function ImproveModal({
-  state, onClose, onChange, onSubmit,
+  state,
+  onClose,
+  onChange,
+  onSubmit,
 }: {
   state: { open: boolean; candidate?: ImprovementCandidate; code: string; reason: string };
   onClose: () => void;
@@ -669,23 +714,14 @@ function ImproveModal({
           />
         </Form.Item>
         <Form.Item label="改进原因" extra="将记入 ~/.webrain/skills/improved/<id>/v<N>/reason.txt">
-          <Input.TextArea
-            value={state.reason}
-            onChange={(e) => onChange({ reason: e.target.value })}
-            rows={3}
-          />
+          <Input.TextArea value={state.reason} onChange={(e) => onChange({ reason: e.target.value })} rows={3} />
         </Form.Item>
       </Form>
     </Modal>
   );
 }
 
-function DraftPreviewModal({
-  draft, onClose,
-}: {
-  draft: Skill | null;
-  onClose: () => void;
-}) {
+function DraftPreviewModal({ draft, onClose }: { draft: Skill | null; onClose: () => void }) {
   return (
     <Modal
       title={draft ? `草稿预览:${draft.name}` : ""}
@@ -698,18 +734,20 @@ function DraftPreviewModal({
         <>
           <p style={{ color: "var(--c-text-3)", fontSize: 12 }}>{draft.description || "(无描述)"}</p>
           <Space direction="vertical" size={4} style={{ marginBottom: 12 }}>
-            <span style={{ fontSize: 12 }}>ID: <code>{draft.id}</code></span>
-            <span style={{ fontSize: 12 }}>语言: <Tag>{draft.language}</Tag></span>
             <span style={{ fontSize: 12 }}>
-              触发模式: {draft.triggerPatterns.map((p, i) => <Tag key={i}>{p}</Tag>)}
+              ID: <code>{draft.id}</code>
+            </span>
+            <span style={{ fontSize: 12 }}>
+              语言: <Tag>{draft.language}</Tag>
+            </span>
+            <span style={{ fontSize: 12 }}>
+              触发模式:{" "}
+              {draft.triggerPatterns.map((p, i) => (
+                <Tag key={i}>{p}</Tag>
+              ))}
             </span>
           </Space>
-          <Input.TextArea
-            value={draft.code}
-            rows={16}
-            readOnly
-            style={{ fontFamily: "monospace", fontSize: 12 }}
-          />
+          <Input.TextArea value={draft.code} rows={16} readOnly style={{ fontFamily: "monospace", fontSize: 12 }} />
         </>
       )}
     </Modal>

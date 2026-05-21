@@ -50,12 +50,24 @@ export default function EcosystemPage() {
             columns={[
               { title: "名称", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
               { title: "类型", dataIndex: "type", render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag> },
-              { title: "所有者", dataIndex: "owner", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span> },
-              { title: "共享给", dataIndex: "sharedWith", render: (v: string[]) => (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {v?.map((s) => <Tag key={s} style={{ fontSize: 10, margin: 0 }}>{s}</Tag>)}
-                </div>
-              )},
+              {
+                title: "所有者",
+                dataIndex: "owner",
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span>,
+              },
+              {
+                title: "共享给",
+                dataIndex: "sharedWith",
+                render: (v: string[]) => (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {v?.map((s) => (
+                      <Tag key={s} style={{ fontSize: 10, margin: 0 }}>
+                        {s}
+                      </Tag>
+                    ))}
+                  </div>
+                ),
+              },
               {
                 title: "创建时间",
                 dataIndex: "createdAt",
@@ -72,7 +84,13 @@ export default function EcosystemPage() {
                 title: "操作",
                 key: "action",
                 render: (_: unknown, record: { id: string; name: string }) => (
-                  <Popconfirm title="确认删除" description={`删除资源 "${record.name}"？`} onConfirm={() => deleteResource(record.id)} okText="删除" cancelText="取消">
+                  <Popconfirm
+                    title="确认删除"
+                    description={`删除资源 "${record.name}"？`}
+                    onConfirm={() => deleteResource(record.id)}
+                    okText="删除"
+                    cancelText="取消"
+                  >
                     <Button type="text" size="small" danger icon={<DeleteOutlined />} />
                   </Popconfirm>
                 ),
@@ -99,7 +117,9 @@ export default function EcosystemPage() {
             <Input placeholder="所有者" />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>注册</Button>
+            <Button type="primary" htmlType="submit" block>
+              注册
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>

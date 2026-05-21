@@ -74,13 +74,7 @@ export default function PluginsPage() {
       title: "Status",
       key: "status",
       width: 120,
-      render: (_: unknown, p: Plugin) => (
-        <Switch
-          
-          checked={p.enabled}
-          onChange={(v) => toggle(p, v)}
-        />
-      ),
+      render: (_: unknown, p: Plugin) => <Switch checked={p.enabled} onChange={(v) => toggle(p, v)} />,
     },
     {
       title: "Permissions",
@@ -129,11 +123,7 @@ export default function PluginsPage() {
   ];
 
   return (
-    <PageShell
-      title="插件"
-      subtitle={`已加载 ${plugins.length} 个插件`}
-      icon={<AppstoreOutlined />}
-    >
+    <PageShell title="插件" subtitle={`已加载 ${plugins.length} 个插件`} icon={<AppstoreOutlined />}>
       <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
         <Button icon={<ReloadOutlined />} onClick={fetchPlugins} loading={loading}>
           Refresh
@@ -142,14 +132,7 @@ export default function PluginsPage() {
       {plugins.length === 0 && !loading ? (
         <EmptyState description="No plugins loaded" />
       ) : (
-        <Table
-          dataSource={plugins}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          
-        />
+        <Table dataSource={plugins} columns={columns} rowKey="id" loading={loading} pagination={false} />
       )}
     </PageShell>
   );
