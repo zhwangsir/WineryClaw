@@ -116,7 +116,16 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
     : "";
 
   return (
-    <div style={{ display: "flex", gap: 12, flexDirection: isUser ? "row-reverse" : "row", alignItems: "flex-start", minWidth: 0, maxWidth: "100%" }}>
+    <div
+      style={{
+        display: "flex",
+        gap: 12,
+        flexDirection: isUser ? "row-reverse" : "row",
+        alignItems: "flex-start",
+        minWidth: 0,
+        maxWidth: "100%",
+      }}
+    >
       {/* Avatar */}
       <div
         style={{
@@ -226,7 +235,9 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                     ))}
                   </ol>
                   {msg.plan.reasoning && (
-                    <div style={{ marginTop: 6, fontSize: 11, color: isDark ? "#71717a" : "#737373", fontStyle: "italic" }}>
+                    <div
+                      style={{ marginTop: 6, fontSize: 11, color: isDark ? "#71717a" : "#737373", fontStyle: "italic" }}
+                    >
                       {msg.plan.reasoning}
                     </div>
                   )}
@@ -243,8 +254,12 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                         borderRadius: 4,
                         border: `1px solid ${isDark ? "#22c55e" : "#16a34a"}`,
                         background: executing
-                          ? (isDark ? "rgba(34,197,94,0.10)" : "rgba(34,197,94,0.08)")
-                          : (isDark ? "rgba(34,197,94,0.15)" : "rgba(34,197,94,0.12)"),
+                          ? isDark
+                            ? "rgba(34,197,94,0.10)"
+                            : "rgba(34,197,94,0.08)"
+                          : isDark
+                            ? "rgba(34,197,94,0.15)"
+                            : "rgba(34,197,94,0.12)",
                         color: isDark ? "#86efac" : "#15803d",
                         fontSize: 11,
                         cursor: executing ? "wait" : "pointer",
@@ -290,7 +305,9 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                             <span style={{ fontWeight: 500 }}>{r.description}</span>
                             <span style={{ fontSize: 10, opacity: 0.6 }}>
                               · {r.attempts.length} 次尝试
-                              {r.attempts.length > 0 && r.attempts.some((a) => a.strategy === "augmented") && " · 已换策略"}
+                              {r.attempts.length > 0 &&
+                                r.attempts.some((a) => a.strategy === "augmented") &&
+                                " · 已换策略"}
                             </span>
                           </div>
                           {r.final_output && (
