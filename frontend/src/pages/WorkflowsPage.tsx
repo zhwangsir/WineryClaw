@@ -50,7 +50,7 @@ export default function WorkflowsPage() {
 
   const handleRun = async (values: { inputs: string }) => {
     if (!selectedWorkflow) return;
-    let inputs: Record<string, unknown> = {};
+    let inputs: Record<string, unknown>;
     try {
       inputs = values.inputs ? JSON.parse(values.inputs) : {};
     } catch {
