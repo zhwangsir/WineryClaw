@@ -7,10 +7,12 @@ Simulates sleep phases to consolidate memories:
 - Deep Sleep: L3 → L4 (skill pattern extraction)
 """
 
+import collections
 import json
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import httpx
 
@@ -20,12 +22,20 @@ logger = logging.getLogger("webrain.dreaming")
 class DreamingEngine:
     """Consolidates memories across L1-L4 hierarchies using LLM."""
 
+    # S6: 主动洞察缓冲区 (Proactive Intelligence) — 存放 Dreaming 周期生成的洞察
+    INSIGHT_BUFFER_MAX = 20
+
     def __init__(self, memory_manager: Any, llm_config: Optional[Dict] = None):
         self.memory = memory_manager
         self.llm_config = llm_config or {
             "base_url": "http://localhost:1234/v1",
             "model_id": "minimax/minimax-m2.7",
         }
+        # S6: 滚动缓冲区存放最近 INSIGHT_BUFFER_MAX 条主动洞察
+        # 使用 deque 自动淘汰最旧的条目，无需手动管理大小
+        self._insight_buffer: Deque[Dict[str, Any]] = collections.deque(
+            maxlen=self.INSIGHT_BUFFER_MAX
+        )
 
     async def _llm_call(self, messages: List[Dict], max_tokens: int = 1024) -> str:
         """Call LLM with multi-endpoint fallback."""
@@ -524,6 +534,112 @@ class DreamingEngine:
             "qualifying": len(qualifying),
         }
 
+    # ========== S6: 主动洞察检测 (Proactive Intelligence) ==========
+    # 在 L2→L3 提取后，分析新增 L3 事实中的行为模式，主动生成洞察通知。
+    # 洞察存储在内存缓冲区中，前端可通过 /proactive/insights 轮询获取。
+    # 仅在本周期创建了足够多的 L3 事实时才运行，避免无意义 LLM 调用。
+
+    MIN_FACTS_FOR_INSIGHT = 3   # 本轮至少创建这么多 L3 才运行洞察检测
+    INSIGHT_LOOK_BACK = 30      # 从最近 N 条 L3 中发现模式
+
+    async def detect_proactive_insights(self, facts_created: int) -> List[Dict[str, Any]]:
+        """分析最近 L3 事实，检测行为模式并生成主动洞察通知。
+
+        仅在本周期 facts_created >= MIN_FACTS_FOR_INSIGHT 时运行。
+        洞察写入 self._insight_buffer（deque，自动滚动淘汰旧条目）。
+
+        Returns:
+            本轮新生成的洞察列表（可为空）。
+        """
+        if facts_created < self.MIN_FACTS_FOR_INSIGHT:
+            return []
+
+        try:
+            with self.memory._connect() as conn:
+                rows = conn.execute(
+                    """SELECT content FROM memories
+                       WHERE level = 'L3' AND source = 'dreaming_l2_to_l3'
+                         AND (is_current = 1 OR is_current IS NULL)
+                         AND archived = 0
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (self.INSIGHT_LOOK_BACK,),
+                ).fetchall()
+        except Exception as e:
+            logger.warning("[Dreaming] S6 无法读取 L3 事实: %s", e)
+            return []
+
+        if not rows:
+            return []
+
+        facts_text = "\n".join(f"- {r['content']}" for r in rows)
+        prompt = (
+            "你是一个洞察分析助手。请从以下用户知识库事实列表中识别 1-2 条真正有价值的洞察或建议，"
+            "帮助用户更好地利用 WeBrain 系统。\n\n"
+            "仅返回 JSON 数组，格式：\n"
+            '[{"title": "洞察标题（≤20字）", "content": "具体说明（≤80字）", '
+            '"category": "habit|goal|knowledge|productivity"}]\n\n'
+            "规则：\n"
+            "- 仅在发现真正有意义的规律时输出，不要强行生成\n"
+            "- 不要重复已经显而易见的事实\n"
+            "- 如无洞察，返回 []\n\n"
+            f"事实列表：\n{facts_text}"
+        )
+
+        response = await self._llm_call(
+            [
+                {"role": "system", "content": "你是一个智能分析助手。只输出 JSON，不要有其他文字。"},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=400,
+        )
+
+        if not response or not response.strip():
+            return []
+
+        # 宽松解析 — 模型可能包裹 ``` 或有前缀文字
+        text = response.strip()
+        for prefix in ("```json", "```"):
+            if prefix in text:
+                text = text.split(prefix, 1)[-1].split("```", 1)[0].strip()
+                break
+
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            logger.debug("[Dreaming] S6 洞察解析失败: %r", text[:200])
+            return []
+
+        if not isinstance(raw, list):
+            return []
+
+        new_insights: List[Dict[str, Any]] = []
+        now = datetime.now(timezone.utc).isoformat()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            content = str(item.get("content", "")).strip()
+            category = str(item.get("category", "info")).strip()
+            if not title or not content:
+                continue
+            insight: Dict[str, Any] = {
+                "id": str(uuid.uuid4()),
+                "title": title,
+                "content": content,
+                "category": category,
+                "type": "info",
+                "read": False,
+                "createdAt": now,
+            }
+            self._insight_buffer.append(insight)
+            new_insights.append(insight)
+
+        if new_insights:
+            logger.info(
+                "[Dreaming] S6 主动洞察: 生成 %d 条新洞察", len(new_insights)
+            )
+        return new_insights
+
     # ========== Full Cycle ==========
     # Note (Round E1, 2026-05-20): the legacy `consolidate_l3_to_l4` skill-
     # generation method was REMOVED. It pre-dated M-Memory-1's L4 design,
@@ -557,6 +673,10 @@ class DreamingEngine:
         phase2 = await self.consolidate_l2_to_l3()
         phase3 = await self.promote_l3_to_l4()
 
+        # S6: 主动洞察检测 — 在 L3 提取后分析行为模式，生成主动通知
+        facts_created = phase2.get("facts_created", 0)
+        new_insights = await self.detect_proactive_insights(facts_created)
+
         result = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "phases": {
@@ -564,12 +684,14 @@ class DreamingEngine:
                 "rem_sleep": phase2,
                 "deep_sleep": phase3,
             },
+            "proactive_insights": len(new_insights),
         }
 
         logger.info(
-            "[Dreaming] Cycle complete: L1→L2=%d, L2→L3=%d facts, L3→L4=%d promoted",
+            "[Dreaming] Cycle complete: L1→L2=%d, L2→L3=%d facts, L3→L4=%d promoted, insights=%d",
             phase1.get("consolidated", 0),
             phase2.get("facts_created", 0),
             phase3.get("promoted", 0),
+            len(new_insights),
         )
         return result

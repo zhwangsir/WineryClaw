@@ -4,6 +4,8 @@ import { useSystemStore } from "./systemStore";
 vi.mock("../api/system", () => ({
   systemApi: {
     health: vi.fn(),
+    proactiveInsights: vi.fn().mockResolvedValue({ insights: [] }),
+    markInsightRead: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 

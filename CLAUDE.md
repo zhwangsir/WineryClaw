@@ -147,6 +147,9 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_WORKING_MEMORY_ENABLED` | main-brain | `1` | Round S3: 会话工作记忆。每轮对话后异步提取 3-5 条关键事实，注入下轮系统提示，防止长对话中重要信息丢失。 |
 | `WEBRAIN_WORKING_MEMORY_MAX` | main-brain | `10` | 每个会话最大工作记忆条数（超出后滚动淘汰旧条目）。 |
 | `WEBRAIN_TOOL_CACHE_TTL` | main-brain | `300` | Round S4: 只读工具结果缓存 TTL（秒）。同一会话内相同参数的 file_read / http_request GET 命中缓存时跳过子脑调用。 |
+| `WEBRAIN_CONTEXT_COMPRESS_ENABLED` | main-brain | `1` | Round S5: 上下文压缩。工具调用链超过阈值时自动压缩中间历史，防止上下文窗口溢出。设为 `0` 禁用。 |
+| `WEBRAIN_CONTEXT_COMPRESS_THRESHOLD` | main-brain | `12` | 触发上下文压缩的消息条数阈值。超过此数量时对中间消息进行 LLM 摘要压缩。 |
+| `WEBRAIN_CONTEXT_COMPRESS_KEEP` | main-brain | `4` | 压缩时保留的最近消息条数（不压缩的末尾窗口）。 |
 
 ---
 

@@ -334,6 +334,15 @@ class ChatEngine:
         self._tool_cache: Dict[str, Tuple[str, float]] = {}  # cache_key → (result, timestamp)
         self.tool_cache_ttl: float = float(os.environ.get("WEBRAIN_TOOL_CACHE_TTL", "300"))
 
+        # S5: 上下文压缩 (Context Compression) — 防止多工具调用链撑爆上下文窗口。
+        # 当 messages 列表超过阈值时，将中间的工具调用往返历史压缩为摘要，
+        # 保留系统提示、首条用户消息和最近 N 条消息。
+        # 默认开启；过度激进的压缩可能损失精度，可通过 WEBRAIN_CONTEXT_COMPRESS_THRESHOLD
+        # 调大阈值来减少触发频率。
+        self.context_compress_enabled: bool = os.environ.get("WEBRAIN_CONTEXT_COMPRESS_ENABLED", "1") != "0"
+        self.context_compress_threshold: int = int(os.environ.get("WEBRAIN_CONTEXT_COMPRESS_THRESHOLD", "12"))
+        self.context_compress_keep_recent: int = int(os.environ.get("WEBRAIN_CONTEXT_COMPRESS_KEEP", "4"))
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1158,6 +1167,63 @@ class ChatEngine:
             return ""
         return "\n".join([f"- {f}" for f in facts])
 
+    # S5: 上下文压缩 — 压缩长工具调用链中间历史
+    async def _compress_messages(self, messages: List[Dict]) -> List[Dict]:
+        """当 messages 超过阈值时，将中间工具调用往返历史压缩为摘要。
+
+        保留结构:
+          messages[0]         — 系统提示（不压缩）
+          messages[1]         — 原始用户输入（不压缩）
+          [摘要 placeholder]  — 压缩中间历史的文本摘要
+          messages[-KEEP:]    — 最近 KEEP 条（保持连续性）
+
+        降级策略: LLM 失败或摘要为空时返回原列表，主流程不受影响。
+        """
+        if not self.context_compress_enabled:
+            return messages
+        keep = self.context_compress_keep_recent
+        if len(messages) <= self.context_compress_threshold:
+            return messages
+
+        system_msg = messages[0]
+        user_msg = messages[1]
+        middle = messages[2:-keep] if len(messages) > 2 + keep else []
+        recent = messages[-keep:]
+
+        if not middle:
+            return messages
+
+        try:
+            history_text = "\n".join(
+                f"[{m.get('role', '?')}]: {str(m.get('content') or '')[:300]}"
+                for m in middle
+            )
+            result = await self._chat_completion(
+                [{"role": "user", "content": (
+                    "请将以下工具调用历史压缩为不超过 200 字的简洁摘要，"
+                    "保留关键工具名、重要返回结果和关键状态信息，去除重复和无关内容：\n\n"
+                    f"{history_text}"
+                )}],
+                max_tokens=300,
+                temperature=0.0,
+            )
+            summary = result["choices"][0]["message"].get("content", "").strip()
+            if not summary:
+                return messages
+            compressed = [
+                system_msg,
+                user_msg,
+                {"role": "user", "content": f"[工具调用历史摘要]\n{summary}"},
+                {"role": "assistant", "content": "已了解工具调用历史，继续处理。"},
+            ] + recent
+            logger.debug(
+                "S5 上下文压缩: %d 条消息 → %d 条", len(messages), len(compressed)
+            )
+            return compressed
+        except Exception as e:
+            logger.debug("S5 上下文压缩失败（非致命）: %s", e)
+            return messages
+
     # -----------------------------------------------------------------------
     # Tool execution
     # -----------------------------------------------------------------------
@@ -1276,6 +1342,10 @@ class ChatEngine:
         iteration = 0
         while iteration < MAX_TOOL_ITERATIONS:
             iteration += 1
+
+            # S5: 上下文压缩 — 第二轮起，若 messages 超过阈值则压缩中间历史
+            if iteration > 1:
+                messages = await self._compress_messages(messages)
 
             # LLM call
             result = await self._chat_completion(messages, tools=available_tools)
@@ -1423,6 +1493,10 @@ class ChatEngine:
         iteration = 0
         while iteration < MAX_TOOL_ITERATIONS:
             iteration += 1
+
+            # S5: 上下文压缩 — 第二轮起（流式路径在 iteration=1 流式输出，不压缩）
+            if iteration > 1:
+                messages = await self._compress_messages(messages)
 
             # First iteration: try streaming
             if iteration == 1:

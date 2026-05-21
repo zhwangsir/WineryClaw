@@ -41,23 +41,17 @@ async function post(page: Page, path: string, body: unknown) {
 }
 
 async function get(page: Page, path: string) {
-  return page.evaluate(
-    async (url) => {
-      const r = await fetch(url);
-      return { status: r.status, body: await r.json().catch(() => null) };
-    },
-    `${API}${path}`
-  );
+  return page.evaluate(async (url) => {
+    const r = await fetch(url);
+    return { status: r.status, body: await r.json().catch(() => null) };
+  }, `${API}${path}`);
 }
 
 async function del(page: Page, path: string) {
-  return page.evaluate(
-    async (url) => {
-      const r = await fetch(url, { method: "DELETE" });
-      return { status: r.status, body: await r.json().catch(() => null) };
-    },
-    `${API}${path}`
-  );
+  return page.evaluate(async (url) => {
+    const r = await fetch(url, { method: "DELETE" });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  }, `${API}${path}`);
 }
 
 async function put(page: Page, path: string, body: unknown) {
@@ -347,18 +341,25 @@ test("C6: 记忆存储表单 UI — 通过表单写入记忆并确认 API 成功
 
   // 弹出 Modal/Drawer
   await page.waitForTimeout(400);
-  const contentArea = page.locator("textarea, input[type='text']").filter({
-    hasNotText: /语义搜索/,
-  }).first();
+  const contentArea = page
+    .locator("textarea, input[type='text']")
+    .filter({
+      hasNotText: /语义搜索/,
+    })
+    .first();
 
   // 找到内容输入框（不是搜索框）
   const modalContentInput = page.locator(".ant-modal textarea, .ant-drawer textarea").first();
-  if (await modalContentInput.count() > 0) {
+  if ((await modalContentInput.count()) > 0) {
     const ts = Date.now();
     await modalContentInput.fill(`UI 表单写入测试 ${ts}`);
     // 找到提交按钮
-    const submitBtn = page.locator(".ant-modal button:has-text('确认'), .ant-modal button:has-text('保存'), .ant-modal button[type='submit']").first();
-    if (await submitBtn.count() > 0) {
+    const submitBtn = page
+      .locator(
+        ".ant-modal button:has-text('确认'), .ant-modal button:has-text('保存'), .ant-modal button[type='submit']"
+      )
+      .first();
+    if ((await submitBtn.count()) > 0) {
       await submitBtn.click();
       await page.waitForTimeout(500);
       // 提交后 Modal 应关闭（不崩溃）
@@ -441,9 +442,7 @@ test("D3: Wiki API 搜索 — GET /brain/wiki/search?q= 返回匹配笔记", asy
   expect(res.status).toBe(200);
   const results = res.body?.results ?? [];
   expect(results.length).toBeGreaterThan(0);
-  const found = results.some(
-    (n: any) => n.title?.includes(`${ts}`) || n.content?.includes(keyword)
-  );
+  const found = results.some((n: any) => n.title?.includes(`${ts}`) || n.content?.includes(keyword));
   expect(found).toBe(true);
 });
 
@@ -534,13 +533,10 @@ test("F1: 聊天会话 — 历史记录 API 返回消息列表", async ({ page }
   const firstSession = sessionList.find((s: any) => s.id);
   if (!firstSession) return;
 
-  const history = await page.evaluate(
-    async (url) => {
-      const r = await fetch(url);
-      return { status: r.status, body: await r.json().catch(() => null) };
-    },
-    `${API}/brain/chat/history?session_id=${firstSession.id}&limit=5`
-  );
+  const history = await page.evaluate(async (url) => {
+    const r = await fetch(url);
+    return { status: r.status, body: await r.json().catch(() => null) };
+  }, `${API}/brain/chat/history?session_id=${firstSession.id}&limit=5`);
   expect(history.status).toBe(200);
   // 历史消息应有内容
   const msgs = history.body?.messages ?? [];
@@ -771,21 +767,17 @@ test("I4: 主题持久化 — 切换深/浅色后重载，主题属性保持", a
   await page.waitForTimeout(500);
 
   // 获取当前主题
-  const initialTheme = await page.evaluate(() =>
-    document.documentElement.getAttribute("data-theme")
-  );
+  const initialTheme = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
 
   // 点击主题切换按钮
   const themeIcon = page.locator('[data-icon="sun"], [data-icon="moon"]').first();
-  if (await themeIcon.count() > 0) {
+  if ((await themeIcon.count()) > 0) {
     // 点击父按钮
     const btn = themeIcon.locator("xpath=ancestor::button").first();
     await btn.click({ timeout: 3000 }).catch(() => themeIcon.click());
     await page.waitForTimeout(300);
 
-    const afterToggle = await page.evaluate(() =>
-      document.documentElement.getAttribute("data-theme")
-    );
+    const afterToggle = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
     // 主题应已切换
     expect(afterToggle).not.toBe(initialTheme);
 
@@ -794,14 +786,12 @@ test("I4: 主题持久化 — 切换深/浅色后重载，主题属性保持", a
     await page.waitForTimeout(500);
 
     // 重载后主题应保持切换后的状态
-    const afterReload = await page.evaluate(() =>
-      document.documentElement.getAttribute("data-theme")
-    );
+    const afterReload = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
     expect(afterReload).toBe(afterToggle);
 
     // 切回原始主题
     const themeIcon2 = page.locator('[data-icon="sun"], [data-icon="moon"]').first();
-    if (await themeIcon2.count() > 0) {
+    if ((await themeIcon2.count()) > 0) {
       const btn2 = themeIcon2.locator("xpath=ancestor::button").first();
       await btn2.click({ timeout: 3000 }).catch(() => themeIcon2.click());
     }
@@ -970,14 +960,17 @@ test("X3: 通道完整流水线 — 连接→注入消息→读取消息", async
   const ts = Date.now();
 
   // 连接 memory 通道
-  const connect = await page.evaluate(async ({ url }) => {
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channel: "memory", config: {} }),
-    });
-    return { status: r.status, body: await r.json().catch(() => null) };
-  }, { url: `${API}/channels/connect` });
+  const connect = await page.evaluate(
+    async ({ url }) => {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: "memory", config: {} }),
+      });
+      return { status: r.status, body: await r.json().catch(() => null) };
+    },
+    { url: `${API}/channels/connect` }
+  );
 
   expect([200, 201]).toContain(connect.status);
   const channelId = connect.body?.channel_id;
@@ -996,9 +989,7 @@ test("X3: 通道完整流水线 — 连接→注入消息→读取消息", async
       const msgs = await get(page, `/channels/${channelId}/messages`);
       expect(msgs.status).toBe(200);
       const messages = msgs.body?.messages ?? [];
-      const found = messages.some((m: any) =>
-        m.content?.includes(`${ts}`) || m.text?.includes(`${ts}`)
-      );
+      const found = messages.some((m: any) => m.content?.includes(`${ts}`) || m.text?.includes(`${ts}`));
       expect(found).toBe(true);
     }
   }

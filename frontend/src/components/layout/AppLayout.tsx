@@ -11,7 +11,7 @@ interface AppLayoutProps {
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
-  const { fetchHealth } = useSystemStore();
+  const { fetchHealth, startInsightPolling, stopInsightPolling } = useSystemStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -19,6 +19,12 @@ export function AppLayout({ children }: AppLayoutProps) {
     const i = setInterval(fetchHealth, 30000);
     return () => clearInterval(i);
   }, [fetchHealth]);
+
+  // S6: 启动主动洞察轮询（挂载时启动，卸载时停止）
+  useEffect(() => {
+    startInsightPolling();
+    return () => stopInsightPolling();
+  }, [startInsightPolling, stopInsightPolling]);
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 

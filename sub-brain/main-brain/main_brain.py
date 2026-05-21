@@ -1421,6 +1421,37 @@ async def insights(days: int = 7):
     return result
 
 
+# ========== S6: Proactive Insights (主动洞察) ==========
+@app.get("/proactive/insights")
+async def proactive_insights():
+    """返回 Dreaming 周期检测到的主动洞察列表。
+
+    洞察由 DreamingEngine.detect_proactive_insights() 在每次 run_cycle() 后生成，
+    存储在内存缓冲区（最近 20 条）。前端通过轮询此端点来更新通知面板。
+
+    Returns:
+        {"insights": [...]}  每条 insight 含 id, title, content, category,
+                             type, read, createdAt 字段。
+    """
+    dreaming = _state.get("dreaming")
+    if not dreaming:
+        return {"insights": []}
+    return {"insights": list(dreaming._insight_buffer)}
+
+
+@app.delete("/proactive/insights/{insight_id}")
+async def mark_proactive_insight_read(insight_id: str):
+    """将指定洞察标记为已读（前端 UI 使用）。"""
+    dreaming = _state.get("dreaming")
+    if not dreaming:
+        return {"ok": False, "error": "Dreaming not available"}
+    for item in dreaming._insight_buffer:
+        if item.get("id") == insight_id:
+            item["read"] = True
+            return {"ok": True}
+    return {"ok": False, "error": "Insight not found"}
+
+
 # ========== Bridge Execution ==========
 @app.post("/brain/execute")
 async def brain_execute(request: Dict[str, Any]):
