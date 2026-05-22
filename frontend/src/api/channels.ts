@@ -37,15 +37,10 @@ export const channelsApi = {
   setAutoReply: (id: string, enabled: boolean) =>
     api.post<{ ok: boolean; auto_reply: boolean }>(`/api/channels/${id}/auto-reply`, { enabled }),
   // M5.1 (v2.30) — per-channel policy
-  getPolicy: (id: string) =>
-    api.get<{ ok: boolean; policy: ChannelPolicy | null }>(`/api/channels/${id}/policy`),
+  getPolicy: (id: string) => api.get<{ ok: boolean; policy: ChannelPolicy | null }>(`/api/channels/${id}/policy`),
   setPolicy: (id: string, policy: ChannelPolicy) =>
-    api.put<{ ok: boolean; policy: ChannelPolicy; error?: string }>(
-      `/api/channels/${id}/policy`,
-      { policy }
-    ),
-  clearPolicy: (id: string) =>
-    api.delete<{ ok: boolean; policy: null }>(`/api/channels/${id}/policy`),
+    api.put<{ ok: boolean; policy: ChannelPolicy; error?: string }>(`/api/channels/${id}/policy`, { policy }),
+  clearPolicy: (id: string) => api.delete<{ ok: boolean; policy: null }>(`/api/channels/${id}/policy`),
   policyAudit: (id: string, limit = 50) =>
     api.get<{ ok: boolean; count: number; entries: PolicyAuditEntry[] }>(
       `/api/channels/${id}/policy/audit?limit=${limit}`
