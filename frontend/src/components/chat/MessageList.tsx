@@ -1,5 +1,5 @@
-import { Button, Empty } from "antd";
-import { DownOutlined } from "@ant-design/icons";
+import { Button } from "antd";
+import { DownOutlined, MessageOutlined } from "@ant-design/icons";
 import { useIsDark } from "../../hooks/useTheme";
 import type { ChatMessage } from "../../api/types";
 import MessageBubble from "./MessageBubble";
@@ -49,15 +49,43 @@ export default function MessageList({
         }}
       >
         {messages.length === 0 ? (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
-                <span style={{ color: C.text3, fontSize: 14, fontWeight: 300 }}>
-                  输入消息开始对话，或拖拽文件到此处
-                </span>
-              }
+          // v2.44 — chat-themed icon instead of antd Empty's inbox SVG.
+          // Inbox is wrong for "start a chat" (which is the opposite of
+          // "your mailbox is empty"). Use a message bubble + softer
+          // hierarchy. The composition mirrors ChatSidebar's empty state
+          // so the two empty zones feel from the same product family.
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "column",
+              gap: 12,
+              opacity: 0.85,
+            }}
+          >
+            <MessageOutlined
+              style={{
+                fontSize: 36,
+                color: C.text3,
+                background: "var(--c-hover)",
+                padding: 16,
+                borderRadius: "50%",
+              }}
             />
+            <div
+              style={{
+                color: C.text3,
+                fontSize: 14,
+                fontWeight: 300,
+                textAlign: "center",
+                lineHeight: 1.6,
+              }}
+            >
+              <div>输入消息开始对话</div>
+              <div style={{ fontSize: 12, marginTop: 2 }}>或拖拽文件到此处</div>
+            </div>
           </div>
         ) : (
           messages.map((msg) => <MessageBubble key={msg.id} msg={msg} isDark={isDark} highlight={highlight} />)

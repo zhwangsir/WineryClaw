@@ -9,7 +9,23 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import Executor as _Executor
 from typing import Any, AsyncGenerator, Dict, Iterator, List, Optional, Tuple
+
+
+def _resolve_ml_executor(memory: Any) -> Optional[_Executor]:
+    """v2.44a — extract a real ML Executor from a memory_manager handle.
+
+    `getattr(memory, "ml_executor", None)` is unsafe in test setups that
+    pass a `MagicMock` as memory — MagicMock returns more MagicMocks for
+    arbitrary attributes, which then poisons `loop.run_in_executor(...)`.
+    We return only genuine Executor instances; everything else (including
+    None and MagicMock) falls back to the default event-loop executor.
+    """
+    candidate = getattr(memory, "ml_executor", None)
+    if isinstance(candidate, _Executor):
+        return candidate
+    return None
 
 import httpx
 
@@ -974,8 +990,10 @@ class ChatEngine:
                     self._tool_embedding_signature = sig
 
                 # Embed the user query OFF the event loop.
+                # v2.44a — route ML encode via shared ml_executor when available.
+                ml_ex = _resolve_ml_executor(self.memory)
                 q_vec_arr = await loop.run_in_executor(
-                    None,
+                    ml_ex,
                     lambda: embedder.encode([q], convert_to_numpy=True, show_progress_bar=False),
                 )
                 q_vec = q_vec_arr[0]
@@ -994,7 +1012,7 @@ class ChatEngine:
                 if to_embed_texts:
                     # Batch encode OFF the event loop.
                     vecs = await loop.run_in_executor(
-                        None,
+                        ml_ex,
                         lambda: embedder.encode(
                             to_embed_texts, convert_to_numpy=True, show_progress_bar=False
                         ),
@@ -1521,8 +1539,10 @@ class ChatEngine:
             if embedder is None:
                 return ""
             loop = asyncio.get_event_loop()
+            # v2.44a — route via shared ml_executor when available.
+            ml_ex = _resolve_ml_executor(self.memory)
             current_vec = await loop.run_in_executor(
-                None, lambda: embedder.encode([user_message], show_progress_bar=False)[0]
+                ml_ex, lambda: embedder.encode([user_message], show_progress_bar=False)[0]
             )
             last_vec = self._last_user_embedding.get(session_id)
             # 记下本轮 embedding 给下轮用,然后看是否能比对上轮

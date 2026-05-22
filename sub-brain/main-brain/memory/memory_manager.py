@@ -429,6 +429,14 @@ class MemoryManager:
         # check (backward compatible default). Wire via set_conflict_detector
         # after construction so we don't introduce a circular import.
         self._conflict_detector: Optional[Any] = None
+        # v2.44a (Sprint 0.7 step 5) — named ML thread pool injected at
+        # lifespan startup. When None, run_in_executor falls back to the
+        # event loop's default pool (preserves behavior for tests and any
+        # caller that constructs MemoryManager directly). When set, the
+        # CPU-bound rerank.predict + embedder.encode calls run on this
+        # dedicated pool so they don't fight SQLite IO for default-pool
+        # slots. Wire via set_ml_executor() after construction.
+        self._ml_executor: Optional[Any] = None
         self._init_db()
         self._load_vector_index()  # build index from existing DB vectors
 
@@ -441,6 +449,25 @@ class MemoryManager:
         a stub that returns canned verdicts.
         """
         self._conflict_detector = detector
+
+    def set_ml_executor(self, executor: Optional[Any]) -> None:
+        """v2.44a — inject a dedicated ThreadPoolExecutor for ML calls
+        (rerank + embedder). Passing None reverts to default-pool
+        behavior, which is what unit tests with bare MemoryManager
+        instances want.
+
+        Production main_brain.py lifespan creates a single
+        `ThreadPoolExecutor(max_workers=2, thread_name_prefix="webrain-ml")`
+        and calls this once. The executor is then read inside
+        _embed_async / rerank / encode paths.
+        """
+        self._ml_executor = executor
+
+    @property
+    def ml_executor(self) -> Optional[Any]:
+        """Read-only access for ChatEngine + other modules that share
+        the same ML thread pool."""
+        return self._ml_executor
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -1197,17 +1224,22 @@ class MemoryManager:
         the default thread executor so the loop stays responsive.
         """
         loop = asyncio.get_running_loop()
+        # v2.44a — route through self._ml_executor when set (prod), else
+        # fall back to default pool (tests / direct construction). The
+        # named pool isolates CPU-bound rerank from SQLite IO so they
+        # don't contend for default-pool slots under concurrent load.
+        ex = self._ml_executor
         # Off-load the (potentially cold) model load to a thread —
         # _get_reranker is internally thread-safe via the double-checked
         # lock above.
-        reranker = await loop.run_in_executor(None, _get_reranker)
+        reranker = await loop.run_in_executor(ex, _get_reranker)
         if reranker is None or len(candidates) == 0:
             return candidates[:limit]
 
         try:
             pairs = [(query, c.get("content", "")[:512]) for c in candidates]
             # Predict is the CPU-bound bit — off-load it too.
-            scores = await loop.run_in_executor(None, reranker.predict, pairs)
+            scores = await loop.run_in_executor(ex, reranker.predict, pairs)
 
             scored = []
             for cand, score in zip(candidates, scores):
@@ -1527,7 +1559,10 @@ class MemoryManager:
         try:
             # Round E1: get_running_loop is the correct call in async ctx
             loop = asyncio.get_running_loop()
-            vec = await loop.run_in_executor(None, lambda: model.encode(text).tolist())
+            # v2.44a — route through self._ml_executor when injected.
+            vec = await loop.run_in_executor(
+                self._ml_executor, lambda: model.encode(text).tolist()
+            )
             return vec
         except Exception:
             return None

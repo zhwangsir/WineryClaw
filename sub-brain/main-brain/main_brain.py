@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -147,6 +148,24 @@ async def lifespan(app: FastAPI) -> None:
     logger.info(f"LLM config loaded with {len(llm_config.get('endpoints', []))} endpoint(s)")
 
     _state["memory"] = MemoryManager(db_path=str(data_dir / "memory.db"), llm_config=llm_config)
+
+    # v2.44a (Sprint 0.7 step 5) — dedicated thread pool for ML inference
+    # (sentence-transformers embedder + cross-encoder reranker). Pre-v2.44a
+    # these CPU-bound calls all ran on asyncio's default executor and
+    # contended with SQLite IO + httpx requests for the same slots. With
+    # max_workers=2 the pool is wide enough to overlap one embed + one
+    # rerank (chat hot path) but narrow enough that we don't accidentally
+    # encourage 32-way concurrent torch inference (which would thrash
+    # CPU caches and increase tail latency under load).
+    _state["ml_executor"] = ThreadPoolExecutor(
+        max_workers=int(os.environ.get("WEBRAIN_ML_EXECUTOR_WORKERS", "2")),
+        thread_name_prefix="webrain-ml",
+    )
+    _state["memory"].set_ml_executor(_state["ml_executor"])
+    logger.info(
+        "ML executor ready (workers=%d, thread_name_prefix='webrain-ml')",
+        _state["ml_executor"]._max_workers,
+    )
 
     # Warm the local sentence-transformers embedder in the background so the
     # FIRST L3 store doesn't pay a ~20s model load cost (smoke trial
@@ -431,8 +450,24 @@ async def lifespan(app: FastAPI) -> None:
     for key in list(_state.keys()):
         if key.startswith("_"):
             continue
+        # Skip the ml_executor here — it doesn't have a `.close()` and
+        # gets shut down explicitly below with a wait so any in-flight
+        # ML calls finish cleanly.
+        if key == "ml_executor":
+            continue
         if hasattr(_state[key], "close"):
             await _state[key].close()
+    # v2.44a — shutdown ML executor LAST so any ongoing rerank / embed
+    # calls finish before we drop refs. wait=True blocks until current
+    # tasks complete; cancel_futures=False because cancelling an
+    # in-flight torch.forward is a great way to leave the model in a
+    # bad state.
+    if "ml_executor" in _state:
+        try:
+            _state["ml_executor"].shutdown(wait=True, cancel_futures=False)
+            logger.info("ML executor shut down cleanly.")
+        except Exception as e:
+            logger.warning(f"ML executor shutdown raised (non-fatal): {e}")
     _state.clear()
     logger.info("Main Brain shutdown complete.")
 
