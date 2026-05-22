@@ -279,8 +279,36 @@ function MarketplaceTab({
         onToggle={onToggleRegistry}
       />
 
+      {/* v2.41 — suppress the redundant lower empty state when the
+          RegistryPanel above already says "尚未配置任何 registry". Stacking
+          two empty illustrations on top of each other looked broken — the
+          user only needs ONE next-step message. When registries DO exist
+          but returned zero skills, show a more actionable hint pointing at
+          the 刷新 button rather than the generic Empty illustration. */}
       {skills.length === 0 && !loading ? (
-        <Empty description="无技能 — 添加一个 registry 后刷新试试" />
+        registries.length === 0 ? null : (
+          <Card
+            style={{
+              borderRadius: 12,
+              marginTop: 16,
+              textAlign: "center",
+              padding: "40px 24px",
+              background: "var(--c-card)",
+              border: "1px dashed var(--c-border-light)",
+            }}
+            styles={{ body: { padding: 0 } }}
+          >
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                <span style={{ color: "var(--c-text-2)" }}>
+                  这些 registry 还没有可安装的技能 — 试试点击右上角的{" "}
+                  <ReloadOutlined style={{ verticalAlign: "middle" }} /> 刷新拉取最新索引
+                </span>
+              }
+            />
+          </Card>
+        )
       ) : (
         <Card style={{ borderRadius: 12, marginTop: 16 }} styles={{ body: { padding: 24 } }}>
           <Table

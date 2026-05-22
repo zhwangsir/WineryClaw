@@ -22,7 +22,7 @@ import { useConfigStore } from "../stores/configStore";
 import MessageList from "../components/chat/MessageList";
 import ChatInput from "../components/chat/ChatInput";
 import { ragApi } from "../api/rag";
-import { uploadApi } from "../api/upload";
+import { uploadApi, ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_BYTES, validateUploadCandidate } from "../api/upload";
 import { chatApi } from "../api/chat";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import "./UserHomePage.css";
@@ -238,11 +238,15 @@ export default function UserHomePage(): JSX.Element {
       body: (
         <div style={{ fontSize: 13, lineHeight: 1.7, color: "var(--c-text-2)" }}>
           <p style={{ marginTop: 0 }}>
-            右侧的「知识库」栏可以拖拽 <code>.txt / .md / .pdf / .docx / .json</code> 文件上传。
+            右侧的「知识库」栏可以拖拽 <code>.txt / .md / .json / .csv / 源代码</code> 等文本格式文件上传 (单文件最大{" "}
+            {Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB)。
           </p>
           <p>
             上传后会自动切片 + embedding 索引。之后你和 AI 对话时,相关片段会自动作为 RAG context 注入,AI
             回答下面会显示参考 [1] [2] 标注。
+          </p>
+          <p style={{ color: "var(--c-text-3)", fontSize: 11 }}>
+            注:.pdf / .docx 等二进制格式需要先在 RAG indexer 里接对应解析器才能正确索引,当前暂不支持。
           </p>
         </div>
       ),
@@ -429,12 +433,24 @@ export default function UserHomePage(): JSX.Element {
   };
 
   // RAG upload — wired to /api/upload + /brain/rag/index_file
+  // v2.41: accept list + pre-validation now mirror v2.38's backend
+  // allowlist (ALLOWED_UPLOAD_EXTENSIONS). Before v2.41 the home page
+  // dropzone advertised .pdf / .docx, then the v2.38 backend rejected
+  // them with a confusing 200-payload error — surface the rejection
+  // BEFORE the round-trip instead.
   const uploadProps: UploadProps = {
     name: "file",
     multiple: true,
     showUploadList: false,
-    accept: ".txt,.md,.pdf,.docx,.json",
+    accept: [...ALLOWED_UPLOAD_EXTENSIONS].sort().join(","),
     beforeUpload: async (file) => {
+      // v2.41 — client-side allowlist + size pre-check. Mirrors the
+      // RAGUploadDropzone fail-fast logic so the home page UX matches.
+      const reason = validateUploadCandidate(file as File);
+      if (reason) {
+        message.error(`${file.name}: ${reason}`);
+        return false; // skip uploadApi entirely
+      }
       // Round N3 — stable per-upload id so we can track this row through
       // upload → index → ready/error transitions even when the user drops
       // multiple files with the same name (e.g. two report.pdfs).
@@ -667,7 +683,14 @@ export default function UserHomePage(): JSX.Element {
                 <InboxOutlined />
               </p>
               <p className="ant-upload-text">拖拽文件到这里上传</p>
-              <p className="ant-upload-hint">支持 .txt .md .pdf .docx .json — 上传后自动索引</p>
+              {/* v2.41 — hint text now lists the formats v2.38 backend
+                  actually accepts (UTF-8 text only). Binary formats
+                  like .pdf / .docx need a parser in the indexer first
+                  before being added to ALLOWED_UPLOAD_EXTENSIONS. */}
+              <p className="ant-upload-hint">
+                支持 .txt / .md / .json / .csv / 源代码 等文本格式 — 单文件最大{" "}
+                {Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB,上传后自动索引
+              </p>
             </Dragger>
           ) : (
             <Upload {...uploadProps} className="user-home__dragger-collapsed">

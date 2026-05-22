@@ -113,10 +113,30 @@ describe("SkillhubPage", () => {
     expect(fetchSkills).toHaveBeenCalledTimes(2);
   });
 
-  it("shows empty hint when marketplace is empty", () => {
-    vi.mocked(useSkillhubStore).mockReturnValue(createMockStore({ skills: [] }));
+  it("v2.41: skills empty + registries empty → only RegistryPanel empty state (no double)", () => {
+    // Before v2.41 a SECOND <Empty> stacked under the RegistryPanel's own
+    // "尚未配置任何 registry" — two illustrations on top of each other read
+    // as a broken page. Now we only show the actionable RegistryPanel hint.
+    vi.mocked(useSkillhubStore).mockReturnValue(createMockStore({ skills: [], registries: [] }));
     render(<SkillhubPage />);
-    expect(screen.getByText(/无技能/)).toBeInTheDocument();
+    // RegistryPanel's own empty illustration is the single source of truth.
+    expect(screen.getByText("尚未配置任何 registry")).toBeInTheDocument();
+    // The redundant marketplace-empty state must NOT render.
+    expect(screen.queryByText(/无技能/)).toBeNull();
+  });
+
+  it("v2.41: skills empty BUT registries configured → actionable 'try refresh' card", () => {
+    vi.mocked(useSkillhubStore).mockReturnValue(
+      createMockStore({
+        skills: [],
+        registries: [{ name: "test-hub", url: "file:///path", enabled: true, priority: 100 }],
+      })
+    );
+    render(<SkillhubPage />);
+    // New contextual hint nudges the user toward the refresh button instead
+    // of a generic "无技能" line.
+    expect(screen.getByText(/这些 registry 还没有可安装的技能/)).toBeInTheDocument();
+    expect(screen.getByText(/刷新拉取最新索引/)).toBeInTheDocument();
   });
 
   it("shows registry panel + add button", () => {
