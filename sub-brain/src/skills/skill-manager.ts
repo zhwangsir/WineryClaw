@@ -15,6 +15,7 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { runJsSkill } from "./runtime/run-js-skill.js";
+import { runJsVmSkill } from "./runtime/run-js-vm-skill.js";
 import { runPythonSkill } from "./runtime/run-python-skill.js";
 
 // --------------------------------------------------------------------------------
@@ -66,6 +67,20 @@ export interface Skill {
   // --- OpenClaw-style source provenance ---
   source?: SkillSource;
   hubRegistry?: string;         // e.g. "agentskills.io"
+
+  /**
+   * v2.37 (M6.1 收尾): JavaScript skills only — when true, the skill is
+   * executed via the vm-context sandbox (`runJsVmSkill`) instead of the
+   * standard worker_threads runtime. Inside the sandbox `require`,
+   * `process`, `eval`, and `new Function` are all unreachable, so the
+   * skill cannot read host files / make outbound HTTP / shell out.
+   *
+   * Default false to preserve M6a behavior for the 30+ existing built-in
+   * skills that legitimately need `child_process` / `fs`. Set to true on
+   * AI-generated or community-submitted skills — anything you wouldn't
+   * trust with full Node access.
+   */
+  sandbox?: boolean;
 }
 
 export interface SkillInvocation {
@@ -358,7 +373,14 @@ export class SkillManager {
         result = error;
       }
     } else if (skill.language === "javascript" || skill.language === "typescript") {
-      const r = await runJsSkill({ code: skill.code, params });
+      // v2.37: dispatch to vm-context sandbox if the skill is marked
+      // untrusted/AI-generated. See `Skill.sandbox` field documentation
+      // for the threat model. The vm runtime is significantly more
+      // restrictive — no require/process/eval — so legacy built-ins
+      // that need child_process/fs continue using the worker runtime.
+      const r = skill.sandbox
+        ? await runJsVmSkill({ code: skill.code, params })
+        : await runJsSkill({ code: skill.code, params });
       if (r.ok) {
         result = r.result;
         success = true;

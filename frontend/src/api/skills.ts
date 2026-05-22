@@ -14,6 +14,9 @@ export interface Skill {
   updatedAt: string;
   version: number;
   tags: string[];
+  /** v2.37: when true, the skill is executed via vm-context sandbox
+   * (no require / process / eval / new Function). Default false. */
+  sandbox?: boolean;
 }
 
 export interface SkillStats {

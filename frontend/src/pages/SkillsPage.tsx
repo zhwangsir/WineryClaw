@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Button, Tag, Table, Drawer, Form, Input, Select, message, Statistic, Popconfirm, Space } from "antd";
+import { Button, Tag, Table, Drawer, Form, Input, Select, message, Statistic, Popconfirm, Space, Tooltip } from "antd";
 import {
   ThunderboltOutlined,
   ReloadOutlined,
@@ -146,8 +146,22 @@ export default function SkillsPage() {
       title: "语言",
       dataIndex: "language",
       key: "language",
-      width: 100,
-      render: (v: string) => <Tag>{v}</Tag>,
+      width: 140,
+      // v2.37: when `sandbox: true`, render a small lock badge next to
+      // the language tag so users can see at-a-glance which JS skills
+      // run under the vm-context sandbox (no require / process / eval).
+      render: (v: string, s: Skill) => (
+        <Space size={4}>
+          <Tag>{v}</Tag>
+          {s.sandbox === true && (
+            <Tooltip title="此 skill 运行在 vm-context 沙箱中:不能 require / process / eval / new Function">
+              <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                🔒 sandbox
+              </Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
     },
     {
       title: "使用",
