@@ -251,7 +251,11 @@ jobs:
       - name: Install frontend deps
         run: cd frontend && pnpm install --frozen-lockfile
       - name: Install desktop deps
-        run: cd desktop && pnpm install --frozen-lockfile
+        # desktop/ has no committed pnpm-lock.yaml (only @tauri-apps/cli
+        # as a devDep — small footprint, low drift risk). --frozen-lockfile
+        # would error here. Use a plain install. When/if we add more deps
+        # we'll commit a lockfile and add the frozen flag back.
+        run: cd desktop && pnpm install
       - name: Tauri build (.deb only)
         # `tauri build --bundles deb` skips rpm / appimage. The frontend
         # build is triggered via Tauri's beforeBuildCommand
