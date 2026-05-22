@@ -104,25 +104,19 @@ describe("v2.38 validateUploadCandidate", () => {
   });
 
   it("rejects file over MAX_UPLOAD_BYTES", () => {
-    const reason = validateUploadCandidate(
-      makeFile("big.txt", MAX_UPLOAD_BYTES + 1)
-    );
+    const reason = validateUploadCandidate(makeFile("big.txt", MAX_UPLOAD_BYTES + 1));
     expect(reason).not.toBeNull();
     expect(reason!).toMatch(/文件过大/);
     expect(reason!).toMatch(/50 MB/);
   });
 
   it("accepts file exactly at MAX_UPLOAD_BYTES (boundary)", () => {
-    expect(
-      validateUploadCandidate(makeFile("atcap.txt", MAX_UPLOAD_BYTES))
-    ).toBeNull();
+    expect(validateUploadCandidate(makeFile("atcap.txt", MAX_UPLOAD_BYTES))).toBeNull();
   });
 
   it("extension check fires BEFORE size check (cheap-first)", () => {
     // Oversized .exe must surface as extension-rejected, not size-rejected.
-    const reason = validateUploadCandidate(
-      makeFile("huge.exe", MAX_UPLOAD_BYTES + 1)
-    );
+    const reason = validateUploadCandidate(makeFile("huge.exe", MAX_UPLOAD_BYTES + 1));
     expect(reason!).toMatch(/不支持的扩展名/);
     expect(reason!).not.toMatch(/文件过大/);
   });

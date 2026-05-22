@@ -21,12 +21,7 @@ import { useCallback, useRef, useState } from "react";
 import { Alert, Button, List, Space, Tag, Tooltip, Upload, message } from "antd";
 import { DeleteOutlined, InboxOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
-import {
-  ALLOWED_UPLOAD_EXTENSIONS,
-  MAX_UPLOAD_BYTES,
-  uploadApi,
-  validateUploadCandidate,
-} from "../../api/upload";
+import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_BYTES, uploadApi, validateUploadCandidate } from "../../api/upload";
 
 const { Dragger } = Upload;
 
@@ -201,8 +196,8 @@ export default function RAGUploadDropzone({ onIndexed }: Props) {
             allowlist (前端 ALLOWED_UPLOAD_EXTENSIONS + 后端
             ALLOWED_EXTENSIONS)。 */}
         <p className="ant-upload-hint" style={{ fontSize: 12, color: "var(--c-text-3)" }}>
-          支持 .txt / .md / .json / .csv / 源代码 等文本格式 — 单文件最大{" "}
-          {Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB,保存到 ~/.webrain/uploads/ 并自动索引
+          支持 .txt / .md / .json / .csv / 源代码 等文本格式 — 单文件最大 {Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}{" "}
+          MB,保存到 ~/.webrain/uploads/ 并自动索引
         </p>
       </Dragger>
 

@@ -11,8 +11,7 @@ import RAGUploadDropzone from "./RAGUploadDropzone";
 // ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_BYTES) — only stub uploadApi.
 // Without importActual, the dropzone's pre-check would receive undefined.
 vi.mock("../../api/upload", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../api/upload")>("../../api/upload");
+  const actual = await vi.importActual<typeof import("../../api/upload")>("../../api/upload");
   return {
     ...actual,
     uploadApi: {
@@ -166,9 +165,7 @@ describe("RAGUploadDropzone", () => {
 
 describe("v2.38 RAG upload allowlist contract", () => {
   it("frontend ALLOWED_UPLOAD_EXTENSIONS mirrors backend allowlist", async () => {
-    const { ALLOWED_UPLOAD_EXTENSIONS } = await vi.importActual<
-      typeof import("../../api/upload")
-    >("../../api/upload");
+    const { ALLOWED_UPLOAD_EXTENSIONS } = await vi.importActual<typeof import("../../api/upload")>("../../api/upload");
     const expected = new Set([
       ".txt",
       ".md",
