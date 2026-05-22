@@ -1,5 +1,12 @@
 import { Card, Tabs } from "antd";
-import { SettingOutlined, RobotOutlined, GlobalOutlined, InfoCircleOutlined, SafetyOutlined } from "@ant-design/icons";
+import {
+  SettingOutlined,
+  RobotOutlined,
+  GlobalOutlined,
+  InfoCircleOutlined,
+  SafetyOutlined,
+  AuditOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import ModelConfigPanel from "../components/settings/ModelConfigPanel";
 import GlobalConfigPanel from "../components/settings/GlobalConfigPanel";
@@ -7,6 +14,26 @@ import AboutPanel from "../components/settings/AboutPanel";
 import LLMHealthPanel from "../components/settings/LLMHealthPanel";
 import MCPInfoPanel from "../components/settings/MCPInfoPanel";
 import ApiTokenPanel from "../components/settings/ApiTokenPanel";
+// v2.32 (P1 #8): surface v2.16/v2.17/v2.29 backend features into UI.
+import PrivacyPanel from "../components/settings/PrivacyPanel";
+import NetworkLedgerPanel from "../components/settings/NetworkLedgerPanel";
+import MCPAuditPanel from "../components/settings/MCPAuditPanel";
+
+const tabLabel = (Icon: typeof SettingOutlined, text: string) => (
+  <span
+    style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      fontSize: 14,
+      fontWeight: 400,
+      color: "var(--c-text)",
+    }}
+  >
+    <Icon />
+    {text}
+  </span>
+);
 
 export default function SettingsPage() {
   return (
@@ -19,21 +46,7 @@ export default function SettingsPage() {
           items={[
             {
               key: "model",
-              label: (
-                <span
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: 14,
-                    fontWeight: 400,
-                    color: "var(--c-text)",
-                  }}
-                >
-                  <RobotOutlined />
-                  模型
-                </span>
-              ),
+              label: tabLabel(RobotOutlined, "模型"),
               children: (
                 <>
                   <ModelConfigPanel />
@@ -44,59 +57,32 @@ export default function SettingsPage() {
             },
             {
               key: "general",
-              label: (
-                <span
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: 14,
-                    fontWeight: 400,
-                    color: "var(--c-text)",
-                  }}
-                >
-                  <GlobalOutlined />
-                  通用
-                </span>
-              ),
+              label: tabLabel(GlobalOutlined, "通用"),
               children: <GlobalConfigPanel />,
             },
             {
               key: "security",
-              label: (
-                <span
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: 14,
-                    fontWeight: 400,
-                    color: "var(--c-text)",
-                  }}
-                >
-                  <SafetyOutlined />
-                  安全
-                </span>
+              label: tabLabel(SafetyOutlined, "安全"),
+              children: (
+                <>
+                  <ApiTokenPanel />
+                  <PrivacyPanel />
+                </>
               ),
-              children: <ApiTokenPanel />,
+            },
+            {
+              key: "audit",
+              label: tabLabel(AuditOutlined, "审计"),
+              children: (
+                <>
+                  <NetworkLedgerPanel />
+                  <MCPAuditPanel />
+                </>
+              ),
             },
             {
               key: "about",
-              label: (
-                <span
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: 14,
-                    fontWeight: 400,
-                    color: "var(--c-text)",
-                  }}
-                >
-                  <InfoCircleOutlined />
-                  关于
-                </span>
-              ),
+              label: tabLabel(InfoCircleOutlined, "关于"),
               children: <AboutPanel />,
             },
           ]}
