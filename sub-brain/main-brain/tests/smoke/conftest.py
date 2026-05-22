@@ -163,6 +163,14 @@ def _spawn_main_brain(
     # for 20s on a doomed httpx call. 2s is well under our per-test 30s
     # budget while still proving the wiring fires.
     env["WEBRAIN_CONFLICT_LLM_TIMEOUT_S"] = "2"
+    # v2.24: smoke tests count mock-LLM calls to verify wiring. Algorithmic
+    # enhancements that fire EXTRA LLM calls during chat (HyDE pre-search,
+    # reflection rewrite, etc.) inflate the count and break exact-match
+    # assertions. Disable them in smoke; their behavior is covered by unit
+    # tests. HyDE: pre-2026-05-22 chat made 1 call, now makes 2 → test
+    # "Expected exactly one new mock-LLM call; got 2" → fail.
+    env["WEBRAIN_HYDE_ENABLED"] = "0"
+    env["WEBRAIN_REFLECTION_ENABLED"] = "0"
     # Force HOME to tmp so persisted files don't leak
     env["HOME"] = str(tmp_data_dir)
     # Redirect main-brain's data dir to the same tmp so memory.db,
