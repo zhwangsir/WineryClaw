@@ -121,7 +121,19 @@ class NetworkLedger:
                 with open(self.path, "a", encoding="utf-8") as fp:
                     fp.write(line)
         except OSError as e:
-            logger.warning("Failed to append network_ledger entry: %s", e)
+            # v2.22: rate-limit this warning. In tests (esp. main-brain pytest
+            # with tmp HOME that pytest cleans between modules) the parent dir
+            # can vanish, producing ~hundreds of identical noisy lines per run.
+            # Log once at warning, then escalate to debug-only.
+            if not getattr(self, "_warned_oserror", False):
+                logger.warning(
+                    "Failed to append network_ledger entry to %s: %s — suppressing further warnings",
+                    self.path,
+                    e,
+                )
+                self._warned_oserror = True
+            else:
+                logger.debug("network_ledger append OSError: %s", e)
 
     def record_success(
         self,

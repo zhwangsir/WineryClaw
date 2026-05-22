@@ -181,8 +181,13 @@ describe("SkillsPage", () => {
   it("refreshes data", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
+    // v2.22: wrap the click-then-assert in waitFor — CI workers can race
+    // here where the mount-time `list` fetch is in-flight when click fires,
+    // so the spy sees only the click call. waitFor polls until both fire.
     fireEvent.click(screen.getByText("刷新"));
-    expect(skillsApi.list).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(skillsApi.list).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("shows error when create fails", async () => {
