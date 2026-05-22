@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
-import { join } from "path";
+import { join, resolve, sep } from "path";
 import { tmpdir } from "os";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
@@ -44,6 +44,22 @@ describe("uploads routes", () => {
     const writtenPath = join(uploadsDir, body.name);
     expect(existsSync(writtenPath)).toBe(true);
     expect(readFileSync(writtenPath, "utf-8")).toBe("hello world");
+  });
+
+  it("v2.34: POST /upload returns absolute_path inside uploadsDir", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/upload",
+      payload: { filename: "doc.md", data: Buffer.from("x").toString("base64") },
+    });
+    const body = res.json();
+    expect(typeof body.absolute_path).toBe("string");
+    // Resolved path must be absolute AND nested under uploadsDir (path
+    // separator at the boundary, not just startsWith).
+    const root = resolve(uploadsDir);
+    expect(body.absolute_path.startsWith(root + sep)).toBe(true);
+    // File should actually exist at that absolute path.
+    expect(existsSync(body.absolute_path)).toBe(true);
   });
 
   it("POST /upload defaults type to application/octet-stream", async () => {

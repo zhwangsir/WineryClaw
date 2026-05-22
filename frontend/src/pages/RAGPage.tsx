@@ -27,6 +27,7 @@ import {
 } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useRagStore } from "../stores/ragStore";
+import RAGUploadDropzone from "../components/rag/RAGUploadDropzone";
 
 export default function RAGPage() {
   const {
@@ -92,8 +93,15 @@ export default function RAGPage() {
         </Col>
       </Row>
 
+      {/* v2.34: drag-drop region for the common case (drop file from
+          Finder/Explorer). The path-input flow below still works for
+          users who want to index existing files in-place. */}
+      <Card title="拖拽上传 + 自动索引" style={{ marginBottom: 24 }}>
+        <RAGUploadDropzone onIndexed={fetchStats} />
+      </Card>
+
       {/* Index controls */}
-      <Card title="索引操作" style={{ marginBottom: 24 }}>
+      <Card title="索引操作 (按路径)" style={{ marginBottom: 24 }}>
         <Space wrap>
           <Input
             placeholder="文件绝对路径 (e.g. /Users/x/notes/foo.md)"

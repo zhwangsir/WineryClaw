@@ -1,9 +1,13 @@
 import { api } from "./client";
+import { ragApi } from "./rag";
 
 export interface UploadResult {
   ok: boolean;
   url?: string;
   name?: string;
+  /** v2.34: server-resolved absolute path. Pass directly to
+   * /brain/rag/index_file when the upload should also be indexed. */
+  absolute_path?: string;
   size?: number;
   type?: string;
   error?: string;
@@ -31,5 +35,40 @@ export const uploadApi = {
       data,
       type: file.type,
     });
+  },
+
+  /**
+   * v2.34: chained upload-then-index helper for the RAG drag-drop UX.
+   * Uploads via /api/upload, then if the server returned an absolute_path,
+   * calls /brain/rag/index_file. Failures at the index step do NOT roll
+   * back the upload — the file is still on disk, user can retry-index.
+   */
+  uploadAndIndex: async (
+    file: File
+  ): Promise<{
+    upload: UploadResult;
+    indexed: boolean;
+    chunks?: number;
+    error?: string;
+  }> => {
+    const upload = await uploadApi.upload(file);
+    if (!upload.ok || !upload.absolute_path) {
+      return { upload, indexed: false, error: upload.error || "upload failed" };
+    }
+    try {
+      const idx = await ragApi.indexFile(upload.absolute_path);
+      return {
+        upload,
+        indexed: !!idx.ok,
+        chunks: idx.chunks_count,
+        error: idx.ok ? undefined : idx.error || "index failed",
+      };
+    } catch (e) {
+      return {
+        upload,
+        indexed: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
   },
 };

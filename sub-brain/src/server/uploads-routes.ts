@@ -43,6 +43,11 @@ export function registerUploadsRoutes(app: FastifyInstance, deps: UploadsRouteDe
       ok: true,
       url: `/uploads/${uniqueName}`,
       name: uniqueName,
+      // v2.34: absolute path so the caller (e.g. RAG drag-drop UI) can
+      // pass it directly to /brain/rag/index_file without guessing where
+      // the uploads dir is. pathResolve normalizes any "." / ".." in the
+      // configured uploadsDir.
+      absolute_path: pathResolve(filePath),
       size: buffer.length,
       type: body.type || "application/octet-stream",
     };
