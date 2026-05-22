@@ -153,6 +153,19 @@ export class ChannelAutoReply {
       return;
     }
 
+    // v2.37.1 — reserve the rate-limit slot AT decision-allow time, not
+    // post-send. Previously we only pushed the timestamp after a successful
+    // send(), which meant N concurrent inbound from different senders would
+    // all see the same zero-count window and all slip through — the cap was
+    // effectively a no-op under concurrency. Reserving up-front means a
+    // failed chatFn/send "eats" a slot, but over-counting is safer than
+    // under-counting for an outbound budget guard.
+    const now = Date.now();
+    const cutoff = now - 3_600_000;
+    const trimmed = recent.filter((t) => t >= cutoff);
+    trimmed.push(now);
+    recentReplyTimestamps.set(channelId, trimmed);
+
     // Honor policy-mandated reply delay (human-like pacing).
     if (decision.delayMs > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, decision.delayMs));
@@ -182,14 +195,8 @@ export class ChannelAutoReply {
         console.error(`[auto-reply] send failed for ${channelId}:`, sendResult.error);
         return;
       }
-      // Record the timestamp ONLY when a reply actually went out, so the
-      // rate-limit window reflects real outbound traffic (not blocked /
-      // failed attempts). Trim the window to last hour to bound memory.
-      const now = Date.now();
-      const cutoff = now - 3_600_000;
-      const trimmed = recent.filter((t) => t >= cutoff);
-      trimmed.push(now);
-      recentReplyTimestamps.set(channelId, trimmed);
+      // Rate-limit slot was already reserved at decision-allow time above;
+      // a failed send consumes the slot (conservative over-count).
     } catch (err: any) {
       console.error(`[auto-reply] send threw for ${channelId}:`, err?.message || err);
     }

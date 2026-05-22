@@ -9,7 +9,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelAutoReply } from "../src/channels/channel-auto-reply.js";
+import {
+  ChannelAutoReply,
+  recentPolicyAudit,
+  _resetPolicyState,
+} from "../src/channels/channel-auto-reply.js";
 import type { ChannelManager, InboundMessage } from "../src/channels/channel-manager.js";
 
 interface FakeChannelRow {
@@ -219,5 +223,138 @@ describe("ChannelAutoReply", () => {
     await ar.handleInbound("c1", "telegram", makeInbound({ content: "hi" }));
     await new Promise((r) => setImmediate(r));
     expect(chatFn.mock.calls[0][0].agent_id).toBe("agent-customer-service");
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // v2.30 / v2.37 — Channel Policy integration tests.
+  //
+  // These exercise the FULL inbound → evaluatePolicy → chat path with
+  // real ChannelPolicy objects, proving each of the 7 policy dimensions
+  // actually blocks the message (no LLM call) when the rule triggers.
+  // ─────────────────────────────────────────────────────────────────────
+
+  describe("Channel Policy (v2.30) — pipeline integration", () => {
+    beforeEach(() => {
+      // Reset the module-level policy audit + rate-limit ring so each test
+      // starts from a clean slate. v2.37.1: switched from `require()` (broke
+      // under vitest's ESM loader with MODULE_NOT_FOUND) to a static ESM
+      // import resolved at the top of the file.
+      _resetPolicyState();
+    });
+
+    it("senderBlock: chatFn NOT called when sender is on blocklist", async () => {
+      const { mgr } = makeFakeManager([
+        { id: "c1", name: "tg", type: "telegram", connected: true, auto_reply: true },
+      ]);
+      (mgr.getPolicy as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        senderBlock: ["spam"],
+      });
+      const ar = new ChannelAutoReply({ channelManager: mgr, chatFn });
+      await ar.handleInbound(
+        "c1",
+        "telegram",
+        makeInbound({ sender: "spammer@x.com" })
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      expect(chatFn).not.toHaveBeenCalled();
+    });
+
+    it("senderAllow: chatFn called when sender matches whitelist", async () => {
+      chatFn.mockResolvedValue({ reply: "hi" });
+      const { mgr } = makeFakeManager([
+        { id: "c1", name: "tg", type: "telegram", connected: true, auto_reply: true },
+      ]);
+      (mgr.getPolicy as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        senderAllow: ["alice"],
+      });
+      const ar = new ChannelAutoReply({ channelManager: mgr, chatFn });
+      await ar.handleInbound("c1", "telegram", makeInbound({ sender: "alice" }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(chatFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("keywordBlock: chatFn NOT called when content has banned keyword", async () => {
+      const { mgr } = makeFakeManager([
+        { id: "c1", name: "tg", type: "telegram", connected: true, auto_reply: true },
+      ]);
+      (mgr.getPolicy as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        keywordBlock: ["AdVert"],  // Test case-insensitive
+      });
+      const ar = new ChannelAutoReply({ channelManager: mgr, chatFn });
+      await ar.handleInbound(
+        "c1",
+        "telegram",
+        makeInbound({ content: "buy our advert now!" })
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      expect(chatFn).not.toHaveBeenCalled();
+    });
+
+    it("policy.agentId overrides defaultAgentId", async () => {
+      chatFn.mockResolvedValue({ reply: "x" });
+      const { mgr } = makeFakeManager([
+        { id: "c1", name: "tg", type: "telegram", connected: true, auto_reply: true },
+      ]);
+      (mgr.getPolicy as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        agentId: "agent-vip",
+      });
+      const ar = new ChannelAutoReply({
+        channelManager: mgr,
+        chatFn,
+        defaultAgentId: "agent-default",
+      });
+      await ar.handleInbound("c1", "telegram", makeInbound());
+      await new Promise((r) => setTimeout(r, 50));
+      expect(chatFn.mock.calls[0][0].agent_id).toBe("agent-vip");
+    });
+
+    it("audit ring buffer captures both allowed AND blocked decisions", async () => {
+      const { mgr } = makeFakeManager([
+        { id: "c1", name: "tg", type: "telegram", connected: true, auto_reply: true },
+      ]);
+      // Block messages containing "spam", allow others.
+      (mgr.getPolicy as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        keywordBlock: ["spam"],
+      });
+      chatFn.mockResolvedValue({ reply: "ok" });
+      const ar = new ChannelAutoReply({ channelManager: mgr, chatFn });
+
+      // Send 2 messages: one allowed, one blocked.
+      await ar.handleInbound("c1", "telegram", makeInbound({ content: "hello" }));
+      await ar.handleInbound(
+        "c1",
+        "telegram",
+        makeInbound({ content: "this is spam" })
+      );
+      await new Promise((r) => setTimeout(r, 50));
+
+      const entries = recentPolicyAudit("c1", 10);
+      expect(entries.length).toBe(2);
+      const allowed = entries.filter((e) => e.allowed);
+      const blocked = entries.filter((e) => !e.allowed);
+      expect(allowed.length).toBe(1);
+      expect(blocked.length).toBe(1);
+      expect(blocked[0].reason).toMatch(/keywordBlock/);
+    });
+
+    it("maxRepliesPerHour rate-limits beyond cap", async () => {
+      chatFn.mockResolvedValue({ reply: "ok" });
+      const { mgr } = makeFakeManager([
+        { id: "c1", name: "tg", type: "telegram", connected: true, auto_reply: true },
+      ]);
+      (mgr.getPolicy as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        maxRepliesPerHour: 2,
+      });
+      const ar = new ChannelAutoReply({ channelManager: mgr, chatFn });
+
+      // 3 distinct senders so the inFlight serialization doesn't block us.
+      for (const sender of ["a", "b", "c"]) {
+        await ar.handleInbound("c1", "telegram", makeInbound({ sender, content: "x" }));
+      }
+      await new Promise((r) => setTimeout(r, 100));
+
+      // First 2 chat calls allowed; 3rd should be rate-limited (no chat).
+      expect(chatFn.mock.calls.length).toBe(2);
+    });
   });
 });
