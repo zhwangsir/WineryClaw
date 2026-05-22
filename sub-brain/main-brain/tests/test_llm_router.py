@@ -475,7 +475,11 @@ class TestChatCompletionStreamGemini:
             ):
                 chunks.append(ev)
 
-        assert chunks[0] == {"type": "content", "data": "hi"}
+        # v2.26: first event from chat_completion_stream is now the
+        # `endpoint_committed` envelope (failover-winner signal). Content
+        # follows immediately after.
+        assert chunks[0]["type"] == "endpoint_committed"
+        assert chunks[1] == {"type": "content", "data": "hi"}
         assert chunks[-1] == {"type": "done"}
 
     @pytest.mark.asyncio

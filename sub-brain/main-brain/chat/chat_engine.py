@@ -2737,91 +2737,228 @@ class ChatEngine:
     # -----------------------------------------------------------------------
     # Streaming LLM call
     # -----------------------------------------------------------------------
+    async def _stream_one_endpoint(
+        self,
+        ep: Any,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        max_tokens: int,
+        temperature: Optional[float],
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream from a single endpoint, yielding `{type, data}` chunks.
+
+        v2.26 — extracted from `_chat_completion_stream` so the outer loop can
+        retry across endpoints with first-chunk failover. Raises (does NOT yield)
+        on connection-level failures so the outer loop can decide whether to
+        recover by trying the next endpoint or surface the error.
+        """
+        url, payload, headers = self._build_request(
+            ep, messages, tools, max_tokens, temperature, stream=True
+        )
+        client = self._get_client()
+        async with client.stream("POST", url, json=payload, headers=headers, timeout=ep.timeout) as resp:
+            resp.raise_for_status()
+            if ep.provider == "anthropic":
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        yield {"type": "done"}
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        if chunk.get("type") == "content_block_delta":
+                            text = chunk.get("delta", {}).get("text", "")
+                            if text:
+                                yield {"type": "content", "data": text}
+                        elif chunk.get("type") == "message_stop":
+                            yield {"type": "done"}
+                            break
+                    except Exception as e:
+                        logger.warning(f"Anthropic stream parse error: {e}")
+                        continue
+            elif ep.provider == "google":
+                # Gemini SSE (?alt=sse on generateContent). Each event is
+                # `data: <json>` lines separated by blank lines.
+                # Schema: {"candidates":[{"content":{"parts":[{"text":"..."}]},
+                #          "finishReason":"STOP"|"MAX_TOKENS"|...}]}
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        yield {"type": "done"}
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        cand = (chunk.get("candidates") or [{}])[0]
+                        parts = cand.get("content", {}).get("parts", []) or []
+                        for p in parts:
+                            t = p.get("text") or ""
+                            if t:
+                                yield {"type": "content", "data": t}
+                        if cand.get("finishReason"):
+                            yield {"type": "done"}
+                            break
+                    except Exception as e:
+                        logger.warning(f"Gemini stream parse error: {e}")
+                        continue
+            else:
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        yield {"type": "done"}
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0].get("delta", {})
+                        if delta.get("reasoning_content"):
+                            yield {"type": "reasoning", "data": delta["reasoning_content"]}
+                        if delta.get("content"):
+                            yield {"type": "content", "data": delta["content"]}
+                        elif delta.get("tool_calls"):
+                            yield {"type": "tool_call_delta", "data": delta["tool_calls"]}
+                        elif chunk["choices"][0].get("finish_reason") == "tool_calls":
+                            yield {"type": "tool_calls_ready", "data": chunk}
+                    except Exception as e:
+                        logger.warning(f"Stream parse error: {e}")
+                        continue
+
     async def _chat_completion_stream(self, messages: List[Dict], tools: Optional[List[Dict]] = None,
                                        max_tokens: int = 2048, temperature: Optional[float] = None) -> AsyncGenerator[Dict[str, Any], None]:
-        ep = self.router.get_primary()
-        if not ep:
+        """Stream chat completion with first-chunk failover (v2.26).
+
+        Walks endpoints in priority-desc order. For each endpoint:
+          - Open the SSE stream and pull chunks.
+          - If the call fails BEFORE the first chunk is yielded (HTTP 4xx/5xx,
+            connection refused, raise_for_status, etc.) — log it, mark the
+            endpoint failed, and try the NEXT endpoint. The frontend sees no
+            error; failover is transparent.
+          - If the call fails AFTER the first chunk has already been streamed
+            — yield a `{type: "error"}` chunk and stop. Mid-stream switching
+            would confuse the consumer (partial reply already shown) so we
+            commit to the first endpoint that successfully started streaming.
+          - If the stream completes normally — return.
+        If all endpoints fail before any chunk is emitted → yield error.
+        Respects v2.17 privacy-mode filter (skips remote endpoints when ON).
+        """
+        if not self.router.endpoints:
             yield {"type": "error", "data": "No LLM endpoint available"}
             return
 
-        url, payload, headers = self._build_request(ep, messages, tools, max_tokens, temperature, stream=True)
+        # Mirror _chat_completion's privacy filter.
+        try:
+            from audit.privacy_mode import get_privacy_state, is_local_url
 
-        client = self._get_client()
-        async with client.stream("POST", url, json=payload, headers=headers, timeout=ep.timeout) as resp:
-                resp.raise_for_status()
-                if ep.provider == "anthropic":
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            yield {"type": "done"}
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            if chunk.get("type") == "content_block_delta":
-                                text = chunk.get("delta", {}).get("text", "")
-                                if text:
-                                    yield {"type": "content", "data": text}
-                            elif chunk.get("type") == "message_stop":
-                                yield {"type": "done"}
-                                break
-                        except Exception as e:
-                            logger.warning(f"Anthropic stream parse error: {e}")
-                            continue
-                elif ep.provider == "google":
-                    # Gemini SSE (?alt=sse on generateContent). Each event is
-                    # `data: <json>` lines separated by blank lines.
-                    # Schema: {"candidates":[{"content":{"parts":[{"text":"..."}]},
-                    #          "finishReason":"STOP"|"MAX_TOKENS"|...}]}
-                    #
-                    # We collapse the multi-part array into the first text part
-                    # (Gemini rarely splits a single chunk into multiple parts
-                    # for text-only outputs). When `finishReason` arrives we
-                    # emit `done` regardless of whether [DONE] sentinel showed up.
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            yield {"type": "done"}
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            cand = (chunk.get("candidates") or [{}])[0]
-                            parts = cand.get("content", {}).get("parts", []) or []
-                            for p in parts:
-                                t = p.get("text") or ""
-                                if t:
-                                    yield {"type": "content", "data": t}
-                            if cand.get("finishReason"):
-                                yield {"type": "done"}
-                                break
-                        except Exception as e:
-                            logger.warning(f"Gemini stream parse error: {e}")
-                            continue
-                else:
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            yield {"type": "done"}
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            delta = chunk["choices"][0].get("delta", {})
-                            if delta.get("reasoning_content"):
-                                yield {"type": "reasoning", "data": delta["reasoning_content"]}
-                            if delta.get("content"):
-                                yield {"type": "content", "data": delta["content"]}
-                            elif delta.get("tool_calls"):
-                                yield {"type": "tool_call_delta", "data": delta["tool_calls"]}
-                            elif chunk["choices"][0].get("finish_reason") == "tool_calls":
-                                yield {"type": "tool_calls_ready", "data": chunk}
-                        except Exception as e:
-                            logger.warning(f"Stream parse error: {e}")
-                            continue
+            privacy_on = get_privacy_state().is_on()
+        except Exception:
+            privacy_on = False
+            is_local_url = lambda _u: True  # noqa: E731 — defensive fallback
+
+        last_error: Optional[Exception] = None
+        last_endpoint_name: Optional[str] = None
+        tried = 0
+        for ep in self.router.iter_failover():
+            if privacy_on and not is_local_url(ep.base_url):
+                logger.info(
+                    "Privacy mode ON: skipping remote endpoint %s (%s) for stream",
+                    ep.name,
+                    ep.base_url,
+                )
+                continue
+            tried += 1
+            last_endpoint_name = ep.name
+            t0 = time.time()
+            first_chunk_emitted = False
+            try:
+                async for chunk in self._stream_one_endpoint(
+                    ep, messages, tools, max_tokens, temperature
+                ):
+                    if not first_chunk_emitted:
+                        first_chunk_emitted = True
+                        latency_ms = (time.time() - t0) * 1000.0
+                        # Mark TTFB (time-to-first-byte) success so the router's
+                        # health stats reflect this endpoint did serve content.
+                        self.router.mark_success(ep.name, latency_ms)
+                        # Surface which endpoint won the failover race so the
+                        # frontend can show "responded via X" if it cares.
+                        yield {
+                            "type": "endpoint_committed",
+                            "data": {
+                                "endpoint": ep.name,
+                                "model": ep.model_id,
+                                "ttfb_ms": round(latency_ms, 1),
+                            },
+                        }
+                    yield chunk
+                # Normal completion.
+                return
+            except Exception as e:
+                err_msg = f"{type(e).__name__}: {e}"
+                self.router.mark_failure(ep.name, err_msg)
+                last_error = e
+                if first_chunk_emitted:
+                    # Mid-stream failure: we already committed to this endpoint
+                    # (consumer saw partial content). Surface the error and stop;
+                    # switching endpoints now would yield a contradictory second
+                    # reply.
+                    logger.warning(
+                        "LLM stream %s failed mid-stream (%s) — cannot fail over",
+                        ep.name,
+                        err_msg,
+                    )
+                    yield {
+                        "type": "error",
+                        "data": (
+                            f"stream interrupted on {ep.name}: {err_msg}"
+                        ),
+                    }
+                    return
+                # First-chunk failure: log + audit, then try next endpoint.
+                logger.warning(
+                    "LLM stream %s failed before first chunk (%s) — failing over to next",
+                    ep.name,
+                    err_msg,
+                )
+                try:
+                    from audit.network_ledger import get_ledger
+
+                    get_ledger().record(
+                        event="llm_call_stream",
+                        endpoint=ep.name,
+                        base_url=ep.base_url,
+                        model=ep.model_id,
+                        success=False,
+                        latency_ms=(time.time() - t0) * 1000.0,
+                        request_bytes=None,
+                        response_bytes=None,
+                        error=err_msg,
+                    )
+                except Exception:
+                    pass
+                continue
+
+        # All endpoints exhausted before any chunk was emitted.
+        if tried == 0 and privacy_on:
+            yield {
+                "type": "error",
+                "data": (
+                    "Privacy mode is ON but no local endpoint is configured. "
+                    "Either turn privacy mode OFF or add a local endpoint."
+                ),
+            }
+            return
+        yield {
+            "type": "error",
+            "data": (
+                f"All {tried} LLM endpoint(s) failed before first chunk; "
+                f"last endpoint {last_endpoint_name!r} raised "
+                f"{type(last_error).__name__ if last_error else 'unknown'}: {last_error}"
+            ),
+        }
 
     # -----------------------------------------------------------------------
     # Round S: AI 能力升级 — 四大新方法
