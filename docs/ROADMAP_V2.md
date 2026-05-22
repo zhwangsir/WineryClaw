@@ -140,9 +140,14 @@ v2 release 必须同时满足：
        目标)。cProfile 定位真瓶颈是每次 chat 重新 `httpx.AsyncClient()`
        创建 SSL context (`load_verify_locations` 占 65% CPU),改走共享
        client 后 chat() cumtime 5.14s → 0.39s。
-- [ ] Axis 1 并发 30 P95 ≤ 800ms — 2026-05-23 v2.45 实测 **960 ms**
-       (5184 → 960, 5.4x 改善)。距离目标 20% 内,可在后续 round 继续
-       close (剩余开销主要在 asyncio 调度 + embedder 推理)。
+- [x] **Axis 1 并发 30 P95 ≤ 800ms** — ✅ v2.48 达成 **697-784 ms**
+       (917 → 697, 24% 进一步改善超过预测)。诊断关键 (Karpathy 诚实
+       记录):workers 2→4→8 A/B 反直觉变差 (GIL 不释放 + cache thrash);
+       stub embedder 后 conc 30 P95 仍 754ms,证明 embedder 只占 18%,
+       不是主导。真原因是 awaited assistant L1 store 在 30 chat 临界
+       路径上经单线程 writer 串行 → 把它改成 fire-and-forget 链 (与
+       active_memory 一起,保留 process_conversation 顺序不变性) 一发
+       入魂。
 - [x] M6b 桌面壳可在 macOS 一键启动（.app/.dmg 已就绪；Linux 在
        desktop-linux CI 中验证 `tauri build --bundles deb`,实际 boot
        smoke 未做 — 用户当前主用 macOS+Web,Linux GA 验证延后）
@@ -151,8 +156,10 @@ v2 release 必须同时满足：
        / e2e 89 / smoke 53;v2.44 写迁移期间无回归）
 - [x] PROJECT_STATE.md 文档零漂移（v2.18 已同步至 §20）
 
-**当前进度**: 三大 axis **接口主指标全部达成**;算法侧 recall + 性能侧
-P95 仍是 open item (v2.44 架构就位但需 profiling 才能拿到 win)。
+**当前进度**: 三大 axis **接口主指标 + 性能项全部达成**;唯一剩余 open
+item 是算法侧 recall@5 ≥ 0.85 (当前 0.625,差 26%,需要 S 系列继续
+打磨 + cross-encoder 微调或真实用户对话 fixture)。30 天 webrain-keeper
+soak 是日历等候,不是代码任务。
 
 ---
 

@@ -1819,4 +1819,39 @@ SSL setup 延迟变 <5ms,从"在测试 poll 之后命中 mock"提前到"poll
 - recall@5 ≥ 0.85 仍是算法侧 (S 系列 + cross-encoder 微调),
   与 v2.45 perf 工作正交,本 sprint 不动。
 
+### 22.6 v2.48 (2026-05-23) — Axis 1 conc 30 P95 GA 目标达成
+
+**结论:Axis 1 两个性能验收项全部达成。**
+
+| Metric          | Pre-v2.48 | Post-v2.48 | Target | Status |
+|-----------------|----------:|-----------:|-------:|:-------|
+| Seq P95         |    41 ms  |  **33-36 ms** | ≤ 80 ms | ✅ PASS |
+| Conc 30 P95     |   917 ms  | **697-784 ms** | ≤ 800 ms | ✅ PASS |
+
+**诊断过程 — Karpathy 公开课**:
+
+1. 第一直觉 (workers bump):2→4→8 A/B 反而越多越糟 (v2.48-dev `d88d4d8`)。
+   原因:sentence-transformers `model.encode` 在 torch CPU/float32
+   路径下不释放 GIL,3+ 线程 cache thrash。
+2. 第二直觉 (embedder 主导):架构师 sub-agent 推回,要求先 profile-stub
+   验证。stub `_local_embedding` 后实测 conc 30 P95 = 754ms,证明
+   embedder 只占 ~163ms (18%),不是主导。
+3. 真原因:每个 chat 临界路径上 await 2 次 `memory.store` (user L1 +
+   assistant L1)。30 chat × 2 写 = 60 个串行经单线程 writer 的
+   `_write_async` 调用,~10ms 每个 → ~600ms 尾。
+
+**修复 — surgical**:把 assistant L1 store 改为 fire-and-forget,与
+active_memory.process_conversation 链在同一 task 内顺序执行
+(保留 "L1 先,process_conversation 后" 的不变性,只是搬到背景里跑)。
+user L1 仍 await 同步保存 (契约保留)。新增 `_fire_persist_assistant_and_extract_async`
+helper,替换 3 个调用点。`session_summarize` + `working_memory` 继续各自 FF。
+
+**测试基建副作用修缮**:`test_chat_latency_benchmark.py` 的
+`with patch("httpx.AsyncClient.post", ...)` 原本是 per-call 范围。
+v2.48 加速后 30 并发 chat 的 patch 栈 unwind 顺序变得敏感,泄漏到
+真实 endpoint 失败。改为整个 test function 共享一次 patch (与
+v2.46 `test_chat_profile.py` 保持一致)。
+
+**残余 GA item 仅 1 个**:`recall@5 ≥ 0.85` (算法侧,与 perf 正交)。
+
 ---
