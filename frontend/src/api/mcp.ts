@@ -66,8 +66,7 @@ export const mcpApi = {
     api.post(`/api/mcp/${server}/tool`, { tool, params }),
 
   // Builtin catalog (v2.8) — recommended MCP servers with one-click install.
-  listCatalog: () =>
-    api.get<{ catalog: McpCatalogEntry[]; count: number }>("/api/mcp/catalog").then((r) => r.catalog),
+  listCatalog: () => api.get<{ catalog: McpCatalogEntry[]; count: number }>("/api/mcp/catalog").then((r) => r.catalog),
   installFromCatalog: (id: string, body: { env?: Record<string, string>; pathArg?: string }) =>
     api.post<{ ok: boolean; error?: string; tools?: string[] }>(`/api/mcp/install/${id}`, body),
 

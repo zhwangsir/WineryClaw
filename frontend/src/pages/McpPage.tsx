@@ -162,11 +162,16 @@ export default function McpPage() {
                             }}
                             styles={{ body: { padding: 14 } }}
                           >
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "flex-start",
+                                gap: 8,
+                              }}
+                            >
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-                                  {entry.name}
-                                </div>
+                                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{entry.name}</div>
                                 <div
                                   style={{
                                     fontSize: 12,
@@ -282,7 +287,11 @@ export default function McpPage() {
                       dataIndex: "name",
                       render: (v: string) => <span style={{ fontWeight: 500, fontSize: 13 }}>{v}</span>,
                     },
-                    { title: "服务器", dataIndex: "server", render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag> },
+                    {
+                      title: "服务器",
+                      dataIndex: "server",
+                      render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag>,
+                    },
                     {
                       title: "描述",
                       dataIndex: "description",
