@@ -91,9 +91,54 @@ export class SkillHubClient {
   // Config
   // --------------------------------------------------------------------------
 
+  /**
+   * v2.35 (P1 #9): on first launch the user's `~/.webrain/registries.json`
+   * doesn't exist, and SkillhubPage shows "尚未配置任何 registry" empty
+   * state — confusing because they don't know what URL to type.
+   *
+   * Seed a tiny default list when the file is missing. The seed lives at
+   * the *bottom* of the priority so any user-added registry overrides it
+   * — this is purely "starter content so the page isn't empty".
+   *
+   * The seed entries are `enabled: false` by default so we don't make
+   * any network requests until the user explicitly turns them on. They
+   * appear in the UI as visible-but-inactive choices.
+   */
+  private _seedDefaults(): SkillHubConfig {
+    return {
+      registries: [
+        {
+          name: "webrain-community",
+          url: "https://github.com/zhwangsir/webrain-skills/raw/main/index.json",
+          enabled: false,
+          priority: 50,
+        },
+        {
+          name: "local-bundled",
+          // file:// URL pointing at sub-brain's bundled builtins. Loaded
+          // lazily when enabled — no network round-trip.
+          url: "file://./skills/builtins/index.json",
+          enabled: false,
+          priority: 100,
+        },
+      ],
+    };
+  }
+
   private _loadConfig(): SkillHubConfig {
     if (!existsSync(REGISTRIES_PATH)) {
-      return { registries: [] };
+      // v2.35: seed defaults so the page isn't empty on first launch.
+      const seed = this._seedDefaults();
+      try {
+        if (!existsSync(WEBRAIN_DIR)) mkdirSync(WEBRAIN_DIR, { recursive: true });
+        writeFileSync(REGISTRIES_PATH, JSON.stringify(seed, null, 2));
+        console.log(
+          `[skillhub] Seeded ${seed.registries.length} default registries at ${REGISTRIES_PATH}`
+        );
+      } catch (err) {
+        console.warn("[skillhub] Could not persist seed registries:", err);
+      }
+      return seed;
     }
     try {
       const raw = readFileSync(REGISTRIES_PATH, "utf-8");

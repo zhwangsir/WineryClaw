@@ -78,6 +78,29 @@ describe("SkillHubClient", () => {
     expect(regs[0].name).toBe(TEST_REGISTRY_NAME);
   });
 
+  it("v2.35: missing registries.json seeds default registries (disabled, low priority)", () => {
+    // Delete the file the beforeEach hook just wrote, so this test
+    // exercises the empty-state code path.
+    if (existsSync(REGISTRIES_PATH)) rmSync(REGISTRIES_PATH, { force: true });
+
+    const fresh = new SkillHubClient();
+    const regs = fresh.listRegistries();
+    expect(regs.length).toBeGreaterThanOrEqual(2);
+    // All seeded registries must be disabled by default — no surprise
+    // network requests on first launch.
+    for (const r of regs) {
+      expect(r.enabled).toBe(false);
+    }
+    // The file was persisted so a second SkillHubClient sees the same seed.
+    expect(existsSync(REGISTRIES_PATH)).toBe(true);
+    const persisted = JSON.parse(readFileSync(REGISTRIES_PATH, "utf-8"));
+    expect(persisted.registries.length).toBe(regs.length);
+    // Seed names must be stable so docs / scripts can reference them.
+    const names = regs.map((r) => r.name).sort();
+    expect(names).toContain("webrain-community");
+    expect(names).toContain("local-bundled");
+  });
+
   it("addRegistry persists to disk and rejects duplicates", () => {
     const r1 = client.addRegistry({ name: "another", url: "https://example.com", enabled: true });
     expect(r1.ok).toBe(true);
