@@ -112,44 +112,51 @@ async def test_chat_profile_under_concurrency(temp_dir, mock_llm_config, capsys)
     mock_post.return_value.raise_for_status = MagicMock()
     mock_post.return_value.json = MagicMock(return_value=plain_resp)
 
+    # v2.48 — lift `with patch(...)` out of `_one_chat`. The per-call
+    # patch was a latent race that v2.48's deferred-L1 chat speedup
+    # exposed: 30 concurrent _one_chat tasks each enter/exit their own
+    # patch context on the same global attribute. Patch stack unwind
+    # is not asyncio-safe, leaving httpx.AsyncClient.post pointing at
+    # the real (unreachable) endpoint for some chats. Same fix as
+    # test_chat_latency_benchmark.py.
     async def _one_chat(seq: int) -> float:
-        with patch("httpx.AsyncClient.post", mock_post):
-            t0 = time.perf_counter()
-            await chat.chat(
-                f"profile-{seq}",
-                session_id=f"prof-{seq}",
-                context={"tools_enabled": False},
-            )
-            return (time.perf_counter() - t0) * 1000.0
+        t0 = time.perf_counter()
+        await chat.chat(
+            f"profile-{seq}",
+            session_id=f"prof-{seq}",
+            context={"tools_enabled": False},
+        )
+        return (time.perf_counter() - t0) * 1000.0
 
-    # Warmup — runs OUTSIDE the profiler so cold-start costs don't
-    # dominate. We're after the steady-state hot path.
-    for i in range(N_WARMUP):
-        await _one_chat(i)
+    with patch("httpx.AsyncClient.post", mock_post):
+        # Warmup — runs OUTSIDE the profiler so cold-start costs don't
+        # dominate. We're after the steady-state hot path.
+        for i in range(N_WARMUP):
+            await _one_chat(i)
 
-    profiler = cProfile.Profile()
+        profiler = cProfile.Profile()
 
-    async def _go() -> List[float]:
-        starts = [time.perf_counter() for _ in range(N_SAMPLES)]
-        tasks = []
-        for i in range(N_SAMPLES):
-            async def _ts(idx=i, s=starts[i]):
-                await _one_chat(N_WARMUP + idx)
-                return (time.perf_counter() - s) * 1000.0
+        async def _go() -> List[float]:
+            starts = [time.perf_counter() for _ in range(N_SAMPLES)]
+            tasks = []
+            for i in range(N_SAMPLES):
+                async def _ts(idx=i, s=starts[i]):
+                    await _one_chat(N_WARMUP + idx)
+                    return (time.perf_counter() - s) * 1000.0
 
-            tasks.append(_ts())
-        return await asyncio.gather(*tasks)
+                tasks.append(_ts())
+            return await asyncio.gather(*tasks)
 
-    # Note: cProfile only sees calls on the asyncio thread — the
-    # writer thread and ml-executor threads run in parallel and
-    # appear as a single _run_one wrapper call each. To get visibility
-    # into them too we'd need threading.setprofile. For now the asyncio
-    # thread's perspective is what we want: it shows the ENTRY points
-    # of cross-thread calls (Future.result, asyncio.wait_for, etc.) so
-    # we can quantify the bridging overhead vs the actual work.
-    profiler.enable()
-    samples = await _go()
-    profiler.disable()
+        # Note: cProfile only sees calls on the asyncio thread — the
+        # writer thread and ml-executor threads run in parallel and
+        # appear as a single _run_one wrapper call each. To get visibility
+        # into them too we'd need threading.setprofile. For now the asyncio
+        # thread's perspective is what we want: it shows the ENTRY points
+        # of cross-thread calls (Future.result, asyncio.wait_for, etc.) so
+        # we can quantify the bridging overhead vs the actual work.
+        profiler.enable()
+        samples = await _go()
+        profiler.disable()
 
     # Save raw .pstats for offline analysis.
     pstats_path = Path(temp_dir) / "chat_profile.pstats"
