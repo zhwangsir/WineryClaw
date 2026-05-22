@@ -6,21 +6,45 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 import SettingsPage from "./SettingsPage";
 
-// v2.38: SettingsPage mounts ALL child panels — each fires its own GET on
-// mount. We stub api.client at the top level with an URL-pattern dispatcher
-// that returns harmless empty data for any endpoint. Without this, each
-// panel's useEffect would throw an unhandled rejection.
+// v2.38: this test's job is to verify v2.32's NEW panels (Privacy /
+// NetworkLedger / MCPAudit) mount in the right tabs. The unrelated panels
+// (Model / Health / MCPInfo / Global / About / ApiToken) fire their own
+// useEffect-mounted API calls — those panels each have their own dedicated
+// unit tests and aren't what we're verifying here. Stub them with
+// lightweight placeholders so their internals don't run during this test.
+// Vitest treats useEffect-triggered unhandled rejections as test failures
+// (exit code 1), so silent crashes from out-of-scope panels were turning
+// this green test red on CI.
+vi.mock("../components/settings/ModelConfigPanel", () => ({
+  default: () => <div data-testid="stub-ModelConfigPanel" />,
+}));
+vi.mock("../components/settings/LLMHealthPanel", () => ({
+  default: () => <div data-testid="stub-LLMHealthPanel" />,
+}));
+vi.mock("../components/settings/MCPInfoPanel", () => ({
+  default: () => <div data-testid="stub-MCPInfoPanel" />,
+}));
+vi.mock("../components/settings/GlobalConfigPanel", () => ({
+  default: () => <div data-testid="stub-GlobalConfigPanel" />,
+}));
+vi.mock("../components/settings/AboutPanel", () => ({
+  default: () => <div data-testid="stub-AboutPanel" />,
+}));
+vi.mock("../components/settings/ApiTokenPanel", () => ({
+  default: () => <div data-testid="stub-ApiTokenPanel" />,
+}));
+
+// Stub api.client for the v2.32 panels we DO want to render (so they
+// fetch successfully and mount their Card title — which is what we
+// assert on for tab-routing verification).
 vi.mock("../api/client", () => {
   const get = vi.fn(async (url: string) => {
-    // Privacy
     if (url.startsWith("/brain/privacy/status")) {
       return { mode: "off", local_endpoints: [], remote_endpoints: [] };
     }
-    // Network ledger
     if (url.startsWith("/brain/audit/network_ledger")) {
       return { count: 0, total: 0, entries: [], path: "/tmp/n.jsonl" };
     }
-    // MCP audit ledger
     if (url.startsWith("/brain/audit/mcp_ledger")) {
       return {
         count: 0,
@@ -29,10 +53,6 @@ vi.mock("../api/client", () => {
         stats: { total: 0, by_tool: {}, by_scope: {}, success: 0, failure: 0 },
       };
     }
-    // Model / health / mcp info / global / about / api-token endpoints
-    // — return undefined-shaped data; each panel handles its own
-    // null-checks. The point of THIS test is page+tab integration, not
-    // per-panel internals.
     return {};
   });
   return {
