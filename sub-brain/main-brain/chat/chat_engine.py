@@ -651,6 +651,52 @@ class ChatEngine:
             os.environ.get("WEBRAIN_NEGATIVE_FEEDBACK_ENABLED", "1") != "0"
         )
 
+        # S36: 用户角色推断 (Role Inference) — 基于本会话累积关键词分布推断
+        # 用户主要身份: DEVELOPER / MANAGER / STUDENT / CREATOR / GENERAL。
+        # 帮助 AI 调整回答风格(技术深度 / 抽象高度 / 启发性 / 创意感)。
+        # 零成本(关键词计数 + 阈值)。
+        self.role_inference_enabled: bool = (
+            os.environ.get("WEBRAIN_ROLE_INFERENCE_ENABLED", "1") != "0"
+        )
+        try:
+            self.role_inference_min_signals: int = int(
+                os.environ.get("WEBRAIN_ROLE_INFERENCE_MIN", "3")
+            )
+        except ValueError:
+            self.role_inference_min_signals = 3
+        # 会话级角色信号累计 {session_id: {DEVELOPER: int, MANAGER: int, ...}}
+        self._role_counters: Dict[str, Dict[str, int]] = {}
+
+        # S37: 情绪倾向标注 (Sentiment) — 单条消息扫描情绪关键词:
+        # 焦虑 / 困惑 / 期待 / 中性。提示 AI 镜像/缓冲适当情感语气。
+        # 零成本(关键词匹配)。
+        self.sentiment_enabled: bool = (
+            os.environ.get("WEBRAIN_SENTIMENT_ENABLED", "1") != "0"
+        )
+
+        # S38: 多语种切换检测 (Lang Switch) — 比较当前消息与上一条用户消息的
+        # 中文字符占比,若 >= 50% vs < 50% 视为语言切换,提示 AI 切换回复语言。
+        # 零成本(字符分类计数)。
+        self.lang_switch_enabled: bool = (
+            os.environ.get("WEBRAIN_LANG_SWITCH_ENABLED", "1") != "0"
+        )
+
+        # S39: 任务清单化触发 (Task Listing) — 用户消息含 "列出/罗列/总结一下/
+        # 做个清单/list/summarize" 等关键词时,提示 AI 把答案组织为 bullet/numbered
+        # list 而非段落。零成本(关键词匹配)。
+        self.task_listing_enabled: bool = (
+            os.environ.get("WEBRAIN_TASK_LISTING_ENABLED", "1") != "0"
+        )
+
+        # S40: 输出格式偏好 (Output Format) — 跟踪本会话用户对"代码/表格/列表/
+        # markdown/json" 的偏好关键词,累计后提示 AI 在模糊请求时倾向使用该格式。
+        # 零成本(关键词计数)。
+        self.output_format_enabled: bool = (
+            os.environ.get("WEBRAIN_OUTPUT_FORMAT_ENABLED", "1") != "0"
+        )
+        # 会话级输出格式偏好 {session_id: {code: int, table: int, list: int, ...}}
+        self._format_counters: Dict[str, Dict[str, int]] = {}
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1897,6 +1943,214 @@ class ChatEngine:
                 )
         return ""
 
+    # ── S36: User Role Inference ────────────────────────────────────────
+    # 角色关键词字典 — 类级常量,避免每次调用重建。
+    _ROLE_KEYWORDS: Dict[str, List[str]] = {
+        "DEVELOPER": [
+            "代码", "api", "函数", "git", "部署", "debug", "调试",
+            "接口", "类", "方法", "异常", "重构", "测试", "ci",
+            "数据库", "sql", "json", "性能", "并发", "线程",
+        ],
+        "MANAGER": [
+            "团队", "流程", "进度", "汇报", "绩效", "资源",
+            "优先级", "计划", "kpi", "okr", "战略", "管理",
+            "协调", "决策", "目标", "里程碑",
+        ],
+        "STUDENT": [
+            "学习", "作业", "考试", "老师", "笔记", "复习", "不懂",
+            "题目", "课程", "教材", "提交", "毕业", "成绩",
+            "怎么做", "教教我",
+        ],
+        "CREATOR": [
+            "设计", "创作", "文案", "灵感", "作品", "构思", "审美",
+            "排版", "色彩", "插画", "视频剪辑", "脚本", "标题",
+            "品牌", "营销文案",
+        ],
+    }
+
+    def _record_role_signal(self, session_id: str, user_message: str) -> None:
+        """S36: 在 chat() 入口扫描关键词,累加角色计数器。"""
+        if not self.role_inference_enabled or not user_message:
+            return
+        lower = user_message.lower()
+        counters = self._role_counters.setdefault(
+            session_id, {k: 0 for k in self._ROLE_KEYWORDS}
+        )
+        for role, kws in self._ROLE_KEYWORDS.items():
+            for kw in kws:
+                if kw in lower:
+                    counters[role] = counters.get(role, 0) + 1
+
+    def _compute_role_inference_line(self, session_id: str) -> str:
+        """S36: 基于累积信号推断主要身份,返回行为提示。
+
+        最高分必须 >= min_signals 且 >= 第二名 2 倍才确定角色,
+        否则视为 GENERAL 不注入。
+        """
+        if not self.role_inference_enabled:
+            return ""
+        c = self._role_counters.get(session_id, {})
+        if not c:
+            return ""
+        sorted_roles = sorted(c.items(), key=lambda x: -x[1])
+        top_role, top_score = sorted_roles[0]
+        if top_score < self.role_inference_min_signals:
+            return ""
+        # 至少比第二名高 2 倍才算明显
+        second_score = sorted_roles[1][1] if len(sorted_roles) > 1 else 0
+        if top_score < 2 * max(second_score, 1):
+            return ""
+        hints = {
+            "DEVELOPER": "技术深入,可使用代码块和精确技术术语",
+            "MANAGER": "聚焦目标价值与决策影响,避免过深技术细节",
+            "STUDENT": "解释概念时多举例,使用循序渐进结构",
+            "CREATOR": "保持启发性语言,留有创作发挥空间",
+        }
+        hint = hints.get(top_role, "")
+        return f"[角色推断: {top_role}({top_score} 个累积信号) — {hint}]"
+
+    # ── S37: Sentiment Tracking ─────────────────────────────────────────
+    _SENTIMENT_KEYWORDS: Dict[str, List[str]] = {
+        "ANXIOUS": [
+            "急", "着急", "赶", "来不及", "快点", "紧急", "紧迫", "马上",
+            "deadline", "asap", "urgent",
+        ],
+        "CONFUSED": [
+            "?", "？", "不懂", "迷糊", "搞不清", "不明白", "云里雾里",
+            "wtf", "wait", "??",
+        ],
+        "POSITIVE": [
+            "期待", "好棒", "喜欢", "感谢", "谢谢", "太好了", "完美",
+            "thanks", "great", "awesome",
+        ],
+    }
+
+    def _compute_sentiment_line(self, user_message: str) -> str:
+        """S37: 扫描情绪关键词,触发情绪 → 行为提示。
+
+        优先级: ANXIOUS > CONFUSED > POSITIVE(因为焦虑最需即时缓冲)。
+        无匹配返回空字符串(中性)。
+        """
+        if not self.sentiment_enabled or not user_message:
+            return ""
+        lower = user_message.lower()
+        for sentiment in ("ANXIOUS", "CONFUSED", "POSITIVE"):
+            for kw in self._SENTIMENT_KEYWORDS[sentiment]:
+                if kw in lower:
+                    hint = {
+                        "ANXIOUS": "用户情绪紧迫,请直接给关键答案,省略铺垫",
+                        "CONFUSED": "用户感到困惑,请放慢节奏从概念基础开始解释",
+                        "POSITIVE": "用户情绪正向,保持同等热情语气",
+                    }[sentiment]
+                    return f"[情绪信号: {sentiment} — {hint}]"
+        return ""
+
+    # ── S38: Multi-language Switch Detection ────────────────────────────
+    @staticmethod
+    def _zh_char_ratio(text: str) -> float:
+        """计算字符串中中文字符的占比(范围 CJK Unified Ideographs)。"""
+        if not text:
+            return 0.0
+        total = 0
+        zh = 0
+        for ch in text:
+            if ch.isspace():
+                continue
+            total += 1
+            # 简单 CJK 范围检测
+            cp = ord(ch)
+            if 0x4E00 <= cp <= 0x9FFF:
+                zh += 1
+        if total == 0:
+            return 0.0
+        return zh / total
+
+    def _compute_lang_switch_line(
+        self, session_id: str, user_message: str
+    ) -> str:
+        """S38: 比较当前消息与上一条用户消息的中文占比,若跨过 50% 视为切换。"""
+        if not self.lang_switch_enabled or not user_message:
+            return ""
+        history = self._user_msg_history.get(session_id, [])
+        if not history:
+            return ""
+        prev = history[-1]
+        curr_ratio = self._zh_char_ratio(user_message)
+        prev_ratio = self._zh_char_ratio(prev)
+        # 切换判定:一方 >= 0.5 另一方 < 0.5
+        if curr_ratio >= 0.5 and prev_ratio < 0.5:
+            return "[语言切换: 用户切换到中文 — 请用中文回复]"
+        if curr_ratio < 0.5 and prev_ratio >= 0.5:
+            return "[语言切换: 用户切换到英文 — 请用英文回复]"
+        return ""
+
+    # ── S39: Task Listing Trigger ───────────────────────────────────────
+    def _compute_task_listing_line(self, user_message: str) -> str:
+        """S39: 检测用户是否要求列出/总结/罗列,触发结构化输出提示。"""
+        if not self.task_listing_enabled or not user_message:
+            return ""
+        lower = user_message.lower()
+        keywords = [
+            "列出", "罗列", "总结一下", "做个清单", "做一个清单",
+            "帮我列", "给我个清单", "list", "summarize", "enumerate",
+            "bullet", "要点",
+        ]
+        for kw in keywords:
+            if kw in lower:
+                return (
+                    "[结构化输出: 用户要求列表/总结式回答,"
+                    "请使用 bullet 或 numbered list 而非段落]"
+                )
+        return ""
+
+    # ── S40: Output Format Preference ───────────────────────────────────
+    _FORMAT_KEYWORDS: Dict[str, List[str]] = {
+        "code": ["代码", "code block", "```", "function", "snippet", "脚本"],
+        "table": ["表格", "table", "对比表", "比较一下"],
+        "list": ["列表", "list", "bullet", "要点", "清单"],
+        "markdown": ["markdown", "md 格式", "标题层级"],
+        "json": ["json", "json 格式", "结构化数据"],
+    }
+
+    def _record_format_signal(self, session_id: str, user_message: str) -> None:
+        """S40: 累计本会话用户对各种格式的偏好关键词。"""
+        if not self.output_format_enabled or not user_message:
+            return
+        lower = user_message.lower()
+        counters = self._format_counters.setdefault(
+            session_id, {k: 0 for k in self._FORMAT_KEYWORDS}
+        )
+        for fmt, kws in self._FORMAT_KEYWORDS.items():
+            for kw in kws:
+                if kw in lower:
+                    counters[fmt] = counters.get(fmt, 0) + 1
+                    break  # 一种格式累 1 次即可
+
+    def _compute_output_format_line(self, session_id: str) -> str:
+        """S40: 若某格式累计 >= 2 次,作为用户偏好提示给 AI。
+
+        模糊请求时倾向使用该格式;明确格式请求由 S39 等其他信号处理。
+        """
+        if not self.output_format_enabled:
+            return ""
+        c = self._format_counters.get(session_id, {})
+        if not c:
+            return ""
+        top_fmt, top_score = max(c.items(), key=lambda x: x[1])
+        if top_score < 2:
+            return ""
+        names = {
+            "code": "代码块",
+            "table": "表格",
+            "list": "列表",
+            "markdown": "Markdown",
+            "json": "JSON",
+        }
+        return (
+            f"[格式偏好: 用户本会话已 {top_score} 次倾向 {names[top_fmt]} 格式,"
+            f"在模糊请求时优先使用]"
+        )
+
     def _compute_knowledge_gap_hint(self, relevant: List[Dict]) -> str:
         """S16: 知识缺口检测 — 检测记忆上下文是否严重不足，返回行为指令行。
 
@@ -2880,8 +3134,30 @@ class ChatEngine:
         neg_feedback_line = self._compute_negative_feedback_line(user_input)
         if neg_feedback_line:
             memory_text = f"{memory_text}\n{neg_feedback_line}"
+        # S38: 多语种切换检测 — 必须在 user_input 记入历史之前比较
+        lang_switch_line = self._compute_lang_switch_line(session_id, user_input)
+        if lang_switch_line:
+            memory_text = f"{memory_text}\n{lang_switch_line}"
         # S32 (cont.): 最后把当前 user_input 记入历史(下轮用)
         self._record_user_message(session_id, user_input)
+        # S36: 用户角色推断 — 累积信号 + 推断
+        self._record_role_signal(session_id, user_input)
+        role_line = self._compute_role_inference_line(session_id)
+        if role_line:
+            memory_text = f"{memory_text}\n{role_line}"
+        # S37: 情绪倾向标注
+        sentiment_line = self._compute_sentiment_line(user_input)
+        if sentiment_line:
+            memory_text = f"{memory_text}\n{sentiment_line}"
+        # S39: 任务清单化触发
+        task_listing_line = self._compute_task_listing_line(user_input)
+        if task_listing_line:
+            memory_text = f"{memory_text}\n{task_listing_line}"
+        # S40: 输出格式偏好 — 累计 + 推断
+        self._record_format_signal(session_id, user_input)
+        format_line = self._compute_output_format_line(session_id)
+        if format_line:
+            memory_text = f"{memory_text}\n{format_line}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -3147,8 +3423,30 @@ class ChatEngine:
         neg_feedback_line = self._compute_negative_feedback_line(user_input)
         if neg_feedback_line:
             memory_text = f"{memory_text}\n{neg_feedback_line}"
+        # S38: 多语种切换检测(在 record 之前)
+        lang_switch_line = self._compute_lang_switch_line(session_id, user_input)
+        if lang_switch_line:
+            memory_text = f"{memory_text}\n{lang_switch_line}"
         # S32 (cont.): 记入历史
         self._record_user_message(session_id, user_input)
+        # S36: 用户角色推断
+        self._record_role_signal(session_id, user_input)
+        role_line = self._compute_role_inference_line(session_id)
+        if role_line:
+            memory_text = f"{memory_text}\n{role_line}"
+        # S37: 情绪倾向标注
+        sentiment_line = self._compute_sentiment_line(user_input)
+        if sentiment_line:
+            memory_text = f"{memory_text}\n{sentiment_line}"
+        # S39: 任务清单化触发
+        task_listing_line = self._compute_task_listing_line(user_input)
+        if task_listing_line:
+            memory_text = f"{memory_text}\n{task_listing_line}"
+        # S40: 输出格式偏好
+        self._record_format_signal(session_id, user_input)
+        format_line = self._compute_output_format_line(session_id)
+        if format_line:
+            memory_text = f"{memory_text}\n{format_line}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
