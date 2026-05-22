@@ -1536,16 +1536,33 @@ class MemoryManager:
 
     # ========== Vector Embeddings ==========
     async def _store_embedding(self, memory_id: str, text: str) -> None:
+        # v2.44e (Sprint 0.7 step 4b) — moved the INSERT through
+        # _write_async so the embedding write serializes on the
+        # WriterExecutor (production) and stops blocking the asyncio
+        # event loop on every store(). Embedding inference + numpy
+        # conversion stay OUTSIDE the write closure — they don't need
+        # the SQLite connection, and we want to keep the writer thread's
+        # critical section as short as possible.
         try:
             vector = await self._get_embedding(text)
             vec_blob = np.array(vector, dtype=np.float32).tobytes()
-            with self._connect() as conn:
+            vec_json = json.dumps(vector)
+            vec_id = str(uuid.uuid4())
+            vec_dim = len(vector)
+            vec_created_at = datetime.now(timezone.utc).isoformat()
+
+            def _do_write(conn: sqlite3.Connection) -> None:
                 conn.execute(
-                    "INSERT OR REPLACE INTO vectors (id, memory_id, vector, vector_blob, dim, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (str(uuid.uuid4()), memory_id, json.dumps(vector), vec_blob, len(vector), datetime.now(timezone.utc).isoformat()),
+                    "INSERT OR REPLACE INTO vectors "
+                    "(id, memory_id, vector, vector_blob, dim, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (vec_id, memory_id, vec_json, vec_blob, vec_dim, vec_created_at),
                 )
                 conn.commit()
-            # Update in-memory index
+
+            await self._write_async(_do_write)
+            # Update in-memory index AFTER the write commits — keeps the
+            # invariant that "in memory" implies "on disk".
             self._add_to_index(memory_id, vector)
         except Exception as e:
             logger.warning(f"Embedding generation failed: {e}")
