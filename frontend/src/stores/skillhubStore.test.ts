@@ -11,6 +11,7 @@ vi.mock("../api/skillhub", () => ({
     listRegistries: vi.fn(),
     addRegistry: vi.fn(),
     removeRegistry: vi.fn(),
+    updateRegistry: vi.fn(), // v2.39
     refresh: vi.fn(),
     listCandidates: vi.fn(),
     improve: vi.fn(),
@@ -171,6 +172,45 @@ describe("skillhubStore", () => {
     vi.mocked(skillhubApi.listRegistries).mockResolvedValue([]);
     const ok = await useSkillhubStore.getState().removeRegistry("r1");
     expect(ok).toBe(true);
+  });
+
+  // v2.39 — updateRegistry partial patch (used by UI Switch toggle).
+
+  it("v2.39: updateRegistry flips enabled and refetches", async () => {
+    vi.mocked(skillhubApi.updateRegistry).mockResolvedValue({ ok: true });
+    vi.mocked(skillhubApi.listRegistries).mockResolvedValue([{ name: "r1", url: "u", enabled: true, priority: 50 }]);
+    const ok = await useSkillhubStore.getState().updateRegistry("r1", { enabled: true });
+    expect(ok).toBe(true);
+    expect(skillhubApi.updateRegistry).toHaveBeenCalledWith("r1", { enabled: true });
+    // refetch was triggered after success.
+    expect(skillhubApi.listRegistries).toHaveBeenCalled();
+    expect(message.success).toHaveBeenCalled();
+  });
+
+  it("v2.39: updateRegistry returns false on backend error", async () => {
+    vi.mocked(skillhubApi.updateRegistry).mockResolvedValue({
+      ok: false,
+      error: "not found",
+    });
+    const ok = await useSkillhubStore.getState().updateRegistry("nope", { enabled: true });
+    expect(ok).toBe(false);
+    expect(message.error).toHaveBeenCalled();
+    // No refetch on failure.
+    expect(skillhubApi.listRegistries).not.toHaveBeenCalled();
+  });
+
+  it("v2.39: updateRegistry surfaces enable/disable language in success toast", async () => {
+    vi.mocked(skillhubApi.updateRegistry).mockResolvedValue({ ok: true });
+    vi.mocked(skillhubApi.listRegistries).mockResolvedValue([]);
+
+    await useSkillhubStore.getState().updateRegistry("r1", { enabled: false });
+    expect(message.success).toHaveBeenCalledWith(expect.stringMatching(/已停用/));
+
+    vi.clearAllMocks();
+    vi.mocked(skillhubApi.updateRegistry).mockResolvedValue({ ok: true });
+    vi.mocked(skillhubApi.listRegistries).mockResolvedValue([]);
+    await useSkillhubStore.getState().updateRegistry("r1", { enabled: true });
+    expect(message.success).toHaveBeenCalledWith(expect.stringMatching(/已启用/));
   });
 
   it("refresh with errors triggers warning, success otherwise", async () => {

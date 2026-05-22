@@ -173,6 +173,33 @@ export class SkillHubClient {
     return { ok: true };
   }
 
+  /**
+   * v2.39: patch an existing registry's `enabled` / `priority` /
+   * `url` in-place. addRegistry refuses duplicates by design — without
+   * this method the v2.35 seed entries (default `enabled: false`) had
+   * no UI-driven path to be turned on. Returns `{ ok: false }` when the
+   * named registry doesn't exist; pass only the fields you want to
+   * change (omitted fields are left alone).
+   */
+  updateRegistry(
+    name: string,
+    patch: { enabled?: boolean; priority?: number; url?: string },
+  ): { ok: boolean; error?: string } {
+    const reg = this.config.registries.find((r) => r.name === name);
+    if (!reg) {
+      return { ok: false, error: `Registry not found: ${name}` };
+    }
+    if (typeof patch.enabled === "boolean") reg.enabled = patch.enabled;
+    if (typeof patch.priority === "number") reg.priority = patch.priority;
+    if (typeof patch.url === "string" && patch.url.length > 0) reg.url = patch.url;
+    // Invalidate any cached index — the URL may have changed, or the
+    // user may have just toggled enabled and we want a clean refetch
+    // next time they hit the marketplace tab.
+    this.indices.delete(name);
+    this._saveConfig();
+    return { ok: true };
+  }
+
   removeRegistry(name: string): { ok: boolean; error?: string } {
     const before = this.config.registries.length;
     this.config.registries = this.config.registries.filter((r) => r.name !== name);

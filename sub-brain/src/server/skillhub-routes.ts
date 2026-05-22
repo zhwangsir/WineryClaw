@@ -116,6 +116,24 @@ export function registerSkillhubRoutes(app: FastifyInstance, deps: SkillhubRoute
     });
   });
 
+  // v2.39: PATCH lets users flip the v2.35 seed entries (default
+  // `enabled: false`) on/off without removing+re-adding. Body is a
+  // partial { enabled?, priority?, url? }; omitted fields are
+  // preserved. Returns ok:false with reason when name is unknown.
+  app.patch("/api/skillhub/registries/:name", async (request) => {
+    const { name } = request.params as { name: string };
+    const body = (request.body as {
+      enabled?: boolean;
+      priority?: number;
+      url?: string;
+    }) ?? {};
+    return skillHubClient.updateRegistry(String(name), {
+      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+      priority: typeof body.priority === "number" ? body.priority : undefined,
+      url: typeof body.url === "string" && body.url.length > 0 ? body.url : undefined,
+    });
+  });
+
   app.delete("/api/skillhub/registries/:name", async (request) => {
     const { name } = request.params as { name: string };
     return skillHubClient.removeRegistry(String(name));

@@ -52,6 +52,7 @@ export default function SkillhubPage() {
     fetchRegistries,
     addRegistry,
     removeRegistry,
+    updateRegistry, // v2.39 — enabled toggle
     // candidates
     candidates,
     candidatesLoading,
@@ -120,6 +121,7 @@ export default function SkillhubPage() {
                 registriesLoading={registriesLoading}
                 onAddRegistryClick={() => setRegistryModalOpen(true)}
                 onRemoveRegistry={removeRegistry}
+                onToggleRegistry={(name, enabled) => updateRegistry(name, { enabled })}
               />
             ),
           },
@@ -233,6 +235,8 @@ interface MarketplaceTabProps {
   registriesLoading: boolean;
   onAddRegistryClick: () => void;
   onRemoveRegistry: (name: string) => void;
+  /** v2.39 — flip enabled flag on existing registry. */
+  onToggleRegistry: (name: string, enabled: boolean) => void;
 }
 
 function MarketplaceTab({
@@ -247,6 +251,7 @@ function MarketplaceTab({
   registriesLoading,
   onAddRegistryClick,
   onRemoveRegistry,
+  onToggleRegistry,
 }: MarketplaceTabProps) {
   return (
     <>
@@ -271,6 +276,7 @@ function MarketplaceTab({
         loading={registriesLoading}
         onAddClick={onAddRegistryClick}
         onRemove={onRemoveRegistry}
+        onToggle={onToggleRegistry}
       />
 
       {skills.length === 0 && !loading ? (
@@ -335,12 +341,21 @@ function RegistryPanel({
   loading,
   onAddClick,
   onRemove,
+  onToggle,
 }: {
   registries: SkillRegistry[];
   loading: boolean;
   onAddClick: () => void;
   onRemove: (name: string) => void;
+  /** v2.39 — flip enabled flag on existing registry. */
+  onToggle: (name: string, enabled: boolean) => void;
 }) {
+  // v2.39: surface the number of currently-disabled entries so users can
+  // see at-a-glance that the v2.35 seed defaults to disabled (zero
+  // outbound until they explicitly opt in). Without this, the gray Tags
+  // looked like a bug.
+  const disabledCount = registries.filter((r) => !r.enabled).length;
+
   return (
     <Card
       size="small"
@@ -349,6 +364,13 @@ function RegistryPanel({
         <Space>
           <span>Registries</span>
           <Tag>{registries.length}</Tag>
+          {disabledCount > 0 && (
+            <Tooltip title="v2.35 默认 seed 入口默认关闭 — 翻开 Switch 后才会向远端 fetch index.json (隐私优先)。">
+              <Tag color="default" style={{ fontSize: 11 }}>
+                {disabledCount} 个未启用
+              </Tag>
+            </Tooltip>
+          )}
         </Space>
       }
       extra={
@@ -361,24 +383,53 @@ function RegistryPanel({
       {registries.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置任何 registry" />
       ) : (
-        <Space wrap>
+        <Space direction="vertical" style={{ width: "100%" }} size={4}>
           {registries.map((r) => (
-            <Popconfirm
+            <div
               key={r.name}
-              title={`移除 registry "${r.name}"?`}
-              onConfirm={() => onRemove(r.name)}
-              okText="移除"
-              cancelText="取消"
+              data-testid={`registry-row-${r.name}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "4px 8px",
+                borderRadius: 6,
+                background: r.enabled ? undefined : "var(--c-hover)",
+              }}
             >
-              <Tag
-                closable
-                color={r.enabled ? "blue" : undefined}
-                onClose={(e) => e.preventDefault()}
-                style={{ cursor: "pointer", padding: "4px 8px", fontSize: 12 }}
-              >
-                {r.name} <span style={{ opacity: 0.6, marginLeft: 4 }}>{r.url}</span>
+              {/* v2.39 — switch is the primary toggle. Replaces the
+                  previous design where users could only delete + re-add
+                  (broken for v2.35 seed entries since they default to
+                  disabled and addRegistry refuses duplicates). */}
+              <Tooltip title={r.enabled ? "已启用:刷新时会从此 URL 拉取 index.json" : "未启用:不会发起任何网络请求"}>
+                <Switch size="small" checked={r.enabled} onChange={(next) => onToggle(r.name, next)} />
+              </Tooltip>
+              <Tag color={r.enabled ? "blue" : undefined} style={{ margin: 0, padding: "2px 8px", fontSize: 12 }}>
+                {r.name}
               </Tag>
-            </Popconfirm>
+              <span
+                style={{
+                  flex: 1,
+                  opacity: 0.6,
+                  fontSize: 11,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {r.url}
+              </span>
+              <Popconfirm
+                title={`移除 registry "${r.name}"?`}
+                onConfirm={() => onRemove(r.name)}
+                okText="移除"
+                cancelText="取消"
+              >
+                <Button type="text" size="small" danger aria-label={`移除 ${r.name}`} style={{ padding: "0 6px" }}>
+                  ×
+                </Button>
+              </Popconfirm>
+            </div>
           ))}
         </Space>
       )}

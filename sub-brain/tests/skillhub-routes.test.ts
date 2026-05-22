@@ -247,6 +247,57 @@ describe("skillhub routes", () => {
     expect(res.json().ok).toBe(true);
   });
 
+  // v2.39: PATCH endpoint added so the SkillhubPage UI Switch can flip
+  // v2.35 seed entries from `enabled: false` to `enabled: true` (or
+  // vice versa). The seed entries are intentionally disabled by default
+  // (zero outbound until opt-in) but addRegistry refuses duplicates, so
+  // before v2.39 there was no UI path to turn them on.
+
+  it("v2.39: PATCH /api/skillhub/registries/:name flips enabled", async () => {
+    const list = await app.inject({ method: "GET", url: "/api/skillhub/registries" });
+    const initial = list.json().registries.find((r: any) => r.name === TEST_REGISTRY_NAME);
+    expect(initial).toBeDefined();
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/skillhub/registries/${TEST_REGISTRY_NAME}`,
+      payload: { enabled: !initial.enabled },
+    });
+    expect(res.json().ok).toBe(true);
+
+    const after = await app.inject({ method: "GET", url: "/api/skillhub/registries" });
+    const found = after.json().registries.find((r: any) => r.name === TEST_REGISTRY_NAME);
+    expect(found.enabled).toBe(!initial.enabled);
+  });
+
+  it("v2.39: PATCH preserves omitted fields", async () => {
+    const list = await app.inject({ method: "GET", url: "/api/skillhub/registries" });
+    const before = list.json().registries.find((r: any) => r.name === TEST_REGISTRY_NAME);
+
+    // Only flip enabled; priority + url must be untouched.
+    await app.inject({
+      method: "PATCH",
+      url: `/api/skillhub/registries/${TEST_REGISTRY_NAME}`,
+      payload: { enabled: true },
+    });
+
+    const after = (await app.inject({ method: "GET", url: "/api/skillhub/registries" })).json();
+    const found = after.registries.find((r: any) => r.name === TEST_REGISTRY_NAME);
+    expect(found.priority).toBe(before.priority);
+    expect(found.url).toBe(before.url);
+  });
+
+  it("v2.39: PATCH returns ok:false for unknown name", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/skillhub/registries/does-not-exist",
+      payload: { enabled: true },
+    });
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("not found");
+  });
+
   it("POST /api/skillhub/refresh returns refreshed list", async () => {
     const res = await app.inject({ method: "POST", url: "/api/skillhub/refresh", payload: {} });
     const body = res.json();

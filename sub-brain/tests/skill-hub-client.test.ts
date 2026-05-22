@@ -120,6 +120,64 @@ describe("SkillHubClient", () => {
     expect(miss.ok).toBe(false);
   });
 
+  // v2.39: updateRegistry — partial patch on an existing registry.
+  // Critical for v2.35 seed entries (default `enabled: false`) which
+  // had no UI-driven toggle path before this.
+
+  it("v2.39: updateRegistry flips enabled on an existing registry", () => {
+    // Confirm seed starts disabled (v2.35 contract — implementations may
+    // vary; here we read whatever is currently set so the test still
+    // proves the FLIP semantic regardless of initial value).
+    const before = client.listRegistries().find((r) => r.name === TEST_REGISTRY_NAME);
+    expect(before).toBeDefined();
+    const initial = before!.enabled;
+
+    const res = client.updateRegistry(TEST_REGISTRY_NAME, { enabled: !initial });
+    expect(res.ok).toBe(true);
+
+    const after = client.listRegistries().find((r) => r.name === TEST_REGISTRY_NAME);
+    expect(after!.enabled).toBe(!initial);
+  });
+
+  it("v2.39: updateRegistry preserves omitted fields", () => {
+    const before = client.listRegistries().find((r) => r.name === TEST_REGISTRY_NAME);
+    expect(before).toBeDefined();
+    const origPriority = before!.priority;
+    const origUrl = before!.url;
+
+    // Patch enabled only.
+    const res = client.updateRegistry(TEST_REGISTRY_NAME, { enabled: true });
+    expect(res.ok).toBe(true);
+
+    const after = client.listRegistries().find((r) => r.name === TEST_REGISTRY_NAME);
+    expect(after!.enabled).toBe(true);
+    // priority + url must be untouched.
+    expect(after!.priority).toBe(origPriority);
+    expect(after!.url).toBe(origUrl);
+  });
+
+  it("v2.39: updateRegistry rejects unknown name", () => {
+    const res = client.updateRegistry("does-not-exist", { enabled: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("not found");
+  });
+
+  it("v2.39: updateRegistry rejects empty url string but accepts non-empty", () => {
+    // Empty / missing url leaves URL unchanged (validated in route + here).
+    const before = client.listRegistries().find((r) => r.name === TEST_REGISTRY_NAME)!.url;
+
+    const res1 = client.updateRegistry(TEST_REGISTRY_NAME, { url: "" });
+    expect(res1.ok).toBe(true);
+    expect(client.listRegistries().find((r) => r.name === TEST_REGISTRY_NAME)!.url).toBe(before);
+
+    // Non-empty url is accepted.
+    const res2 = client.updateRegistry(TEST_REGISTRY_NAME, { url: "https://new.example.com/index.json" });
+    expect(res2.ok).toBe(true);
+    expect(client.listRegistries().find((r) => r.name === TEST_REGISTRY_NAME)!.url).toBe(
+      "https://new.example.com/index.json",
+    );
+  });
+
   it("refreshIndex pulls index.json from a file:// registry", async () => {
     const res = await client.refreshIndex();
     expect(res.refreshed).toEqual([TEST_REGISTRY_NAME]);

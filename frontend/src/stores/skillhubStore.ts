@@ -37,6 +37,8 @@ interface SkillhubState {
   fetchRegistries: () => Promise<void>;
   addRegistry: (reg: SkillRegistry) => Promise<boolean>;
   removeRegistry: (name: string) => Promise<boolean>;
+  /** v2.39 — partial update; used by UI switch to toggle enabled. */
+  updateRegistry: (name: string, patch: { enabled?: boolean; priority?: number; url?: string }) => Promise<boolean>;
   refresh: (name?: string) => Promise<void>;
 
   // --- improvements actions ---
@@ -184,6 +186,34 @@ export const useSkillhubStore = create<SkillhubState>((set, get) => ({
       return false;
     } catch (e: unknown) {
       message.error(errMsg(e, "移除 registry 失败"));
+      return false;
+    }
+  },
+
+  /**
+   * v2.39: partial update for a registry. Used by the SkillhubPage
+   * UI switch to flip seed entries from `enabled: false` to
+   * `enabled: true` (or vice versa). Optimistic in the UI sense
+   * (re-fetches on success) — keep that pattern aligned with
+   * addRegistry / removeRegistry.
+   */
+  updateRegistry: async (name: string, patch: { enabled?: boolean; priority?: number; url?: string }) => {
+    try {
+      const result = await skillhubApi.updateRegistry(name, patch);
+      if (result.ok) {
+        // Build a concise success line so the user can see what changed.
+        const parts: string[] = [];
+        if (typeof patch.enabled === "boolean") parts.push(patch.enabled ? "已启用" : "已停用");
+        if (typeof patch.priority === "number") parts.push(`priority=${patch.priority}`);
+        if (typeof patch.url === "string") parts.push("URL 已更新");
+        message.success(`Registry "${name}" ${parts.join(", ") || "已更新"}`);
+        await get().fetchRegistries();
+        return true;
+      }
+      message.error(result.error || "更新 registry 失败");
+      return false;
+    } catch (e: unknown) {
+      message.error(errMsg(e, "更新 registry 失败"));
       return false;
     }
   },

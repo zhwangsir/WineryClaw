@@ -114,6 +114,12 @@ export class ApiClient {
     return this.instance.put<T>(url, data, config).then((r) => r.data);
   }
 
+  /** v2.39: PATCH for partial updates. Added so the SkillHub registry
+   * toggle UI can flip `enabled` on/off without a remove+re-add dance. */
+  patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig) {
+    return this.instance.patch<T>(url, data, config).then((r) => r.data);
+  }
+
   delete<T>(url: string, config?: AxiosRequestConfig) {
     return this.instance.delete<T>(url, config).then((r) => r.data);
   }

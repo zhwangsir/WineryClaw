@@ -138,6 +138,15 @@ export const skillhubApi = {
 
   addRegistry: (reg: SkillRegistry) => api.post<{ ok: boolean; error?: string }>("/api/skillhub/registries", reg),
 
+  /**
+   * v2.39: partial update for an existing registry. Use this to flip
+   * v2.35 seed entries from `enabled: false` to `enabled: true`
+   * (or vice versa) — addRegistry refuses duplicates by design.
+   * Omitted fields are preserved server-side.
+   */
+  updateRegistry: (name: string, patch: { enabled?: boolean; priority?: number; url?: string }) =>
+    api.patch<{ ok: boolean; error?: string }>(`/api/skillhub/registries/${encodeURIComponent(name)}`, patch),
+
   removeRegistry: (name: string) =>
     api.delete<{ ok: boolean; error?: string }>(`/api/skillhub/registries/${encodeURIComponent(name)}`),
 
