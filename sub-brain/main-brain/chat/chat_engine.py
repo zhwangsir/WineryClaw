@@ -473,6 +473,79 @@ class ChatEngine:
             os.environ.get("WEBRAIN_MEM_ADEQUACY_ENABLED", "1") != "0"
         )
 
+        # S21: 实体关注度信号 (Entity Spotlight) — 检测 user message 命中的
+        # KG 实体,生成 `[本轮关注实体: A, B, C]` 单行,让 AI 显式知道用户
+        # 正在谈的是哪些已有实体。与 S9 KG 上下文注入互补:S9 注入实体
+        # 详细信息到系统提示,S21 在 memory block 末尾点名"本轮焦点"。
+        # 零成本(KG.search 已内存索引)。
+        self.entity_spotlight_enabled: bool = (
+            os.environ.get("WEBRAIN_ENTITY_SPOTLIGHT_ENABLED", "1") != "0"
+        )
+        try:
+            self.entity_spotlight_top_k: int = int(
+                os.environ.get("WEBRAIN_ENTITY_SPOTLIGHT_TOP_K", "5")
+            )
+        except ValueError:
+            self.entity_spotlight_top_k = 5
+
+        # S22: 对话主题分类 (Conversation Topic) — 纯关键词分类用户当前
+        # 消息属于哪个主题域(编程/写作/学习/工作/生活/通用),注入相应
+        # 行为提示。与 S18 查询意图(回溯式 vs 任务式)互补:S18 看"问什么",
+        # S22 看"哪个领域"。两者联合让 AI 既知道用户的查询模式又知道
+        # 应该用什么语气/术语回答。零 LLM 调用。
+        self.topic_classifier_enabled: bool = (
+            os.environ.get("WEBRAIN_TOPIC_CLASSIFIER_ENABLED", "1") != "0"
+        )
+
+        # S23: 对话连贯性信号 (Conversation Coherence) — 用 embedder 计算
+        # 本轮与上轮 user message 的语义相似度,提示 AI 是否在话题切换。
+        # 三档:连贯(>0.65) / 中等(0.35-0.65,不注入) / 切换(<0.35)。
+        # 帮 AI 在话题切换时主动跨越上下文鸿沟(例如"好的我们换个话题
+        # 来聊 X"),而不是延续上一轮的语境。每会话首条不触发。
+        # 单次 embedder 调用(~10ms),CPU 已有 embedder cache。
+        self.coherence_enabled: bool = (
+            os.environ.get("WEBRAIN_COHERENCE_ENABLED", "1") != "0"
+        )
+        try:
+            self.coherence_high_threshold: float = float(
+                os.environ.get("WEBRAIN_COHERENCE_HIGH", "0.65")
+            )
+            self.coherence_low_threshold: float = float(
+                os.environ.get("WEBRAIN_COHERENCE_LOW", "0.35")
+            )
+        except ValueError:
+            self.coherence_high_threshold = 0.65
+            self.coherence_low_threshold = 0.35
+        # 每个会话保留上一条 user message 的 embedding,用于本轮比较
+        self._last_user_embedding: Dict[str, Any] = {}
+
+        # S24: 高频引用记忆标记 (Hot Memory Highlight) — 统计本会话内某条
+        # memory 被 retrieve 命中的次数,在 memory_text 中给高频项(>=3 次)
+        # 加 [高频] 前缀,帮 AI 识别"反复出现的关键事实"——这通常是
+        # 用户最在意的信息。session-scope 内存计数,无需 DB schema 改动。
+        self.hot_memory_enabled: bool = (
+            os.environ.get("WEBRAIN_HOT_MEMORY_ENABLED", "1") != "0"
+        )
+        try:
+            self.hot_memory_threshold: int = int(
+                os.environ.get("WEBRAIN_HOT_MEMORY_THRESHOLD", "3")
+            )
+        except ValueError:
+            self.hot_memory_threshold = 3
+        # 会话级 memory hit counter: {session_id: {memory_id: count}}
+        self._memory_hit_counter: Dict[str, Dict[str, int]] = {}
+
+        # S25: 用户行为节律信号 (User Cadence) — 基于本会话消息时间戳
+        # 推断用户当前的对话节律:快速(<60s 一条)/常规(60-300s)/慢思考
+        # (>300s)。在快速节律下,AI 应回答更简短;慢思考时,可详尽展开。
+        # 与 S22 主题协同:慢思考 + LEARNING 主题 = 深度解释最合适。
+        # 纯时间戳计算,无 LLM/DB 开销。
+        self.cadence_enabled: bool = (
+            os.environ.get("WEBRAIN_CADENCE_ENABLED", "1") != "0"
+        )
+        # 会话级最近 5 条消息时间戳: {session_id: [ts1, ts2, ...]}
+        self._cadence_timestamps: Dict[str, List[float]] = {}
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1183,6 +1256,215 @@ class ChatEngine:
             return f"[记忆充分性: 充足(共 {total} 条历史记录) — 可整合时序脉络]"
         # total == 1 (total == 0 已被上面 not relevant 兜底)
         return "[记忆充分性: 有限 — 仅 1 条历史记录,时序重建可能不完整]"
+
+    # ── S21: Entity Spotlight ───────────────────────────────────────────
+    def _compute_entity_spotlight_line(self, user_message: str) -> str:
+        """S21: 实体关注度信号 — 检测 user message 命中的 KG 实体,生成
+        单行 `[本轮关注实体: A, B, C]`,让 AI 显式知道本轮谈的是哪些已知实体。
+
+        与 S9 KG 上下文注入互补:S9 注入实体详细信息到系统提示顶部,
+        S21 在 memory block 末尾点名"焦点"。失败开放(KG 缺失/空/异常
+        返回 "")。零成本(子串匹配)。
+        """
+        if not self.entity_spotlight_enabled or not self.kg:
+            return ""
+        if not user_message or not user_message.strip():
+            return ""
+        try:
+            entities = self.kg.search(
+                user_message, limit=self.entity_spotlight_top_k
+            )
+            if not entities:
+                return ""
+            names = [e.get("name", "") for e in entities if e.get("name")]
+            names = [n for n in names if n][: self.entity_spotlight_top_k]
+            if not names:
+                return ""
+            return f"[本轮关注实体: {', '.join(names)} — 用户正讨论这些已有实体]"
+        except Exception:  # pragma: no cover — defensive
+            return ""
+
+    # ── S22: Conversation Topic Classifier ──────────────────────────────
+    # Topic categories ordered by precedence — first match wins.
+    _TOPIC_PATTERNS = (
+        (
+            "CODING",
+            r"(代码|程序|编程|函数|class\b|def\b|import\b|bug|debug|"
+            r"python|javascript|typescript|rust|go\b|java\b|c\+\+|"
+            r"react|vue|sql|api|server|前端|后端|测试|repo|git|"
+            r"npm|pip|cargo|docker|kubernetes)",
+        ),
+        (
+            "WRITING",
+            r"(写[一份篇个文]|撰写|草拟|起草|文案|文章|博客|论文|"
+            r"报告|邮件|信件|演讲|总结一下|改写|润色|翻译)",
+        ),
+        (
+            "LEARNING",
+            r"(为什么|什么是|解释|原理|怎么理解|区别|不同|"
+            r"对比|教我|学习|教程|入门|how does|explain|"
+            r"why does|the difference)",
+        ),
+        (
+            "WORK",
+            r"(项目|计划|任务|会议|deadline|安排|工时|"
+            r"日程|进度|审批|流程|kpi|okr|周报|月报)",
+        ),
+        (
+            "LIFE",
+            r"(吃[什啥]|去[哪那]|出行|旅行|健康|睡眠|运动|"
+            r"心情|天气|食谱|菜谱|购物|价格|预算)",
+        ),
+    )
+
+    def _classify_conversation_topic(self, user_message: str) -> str:
+        """S22: 主题分类 — 纯关键词,返回 CODING/WRITING/LEARNING/WORK/LIFE/GENERAL。"""
+        if not self.topic_classifier_enabled or not user_message:
+            return "GENERAL"
+        msg = user_message.lower()
+        for topic, pattern in self._TOPIC_PATTERNS:
+            if re.search(pattern, msg, re.IGNORECASE):
+                return topic
+        return "GENERAL"
+
+    def _get_topic_hint(self, topic: str) -> str:
+        """S22: 根据主题分类返回单行行为提示。"""
+        if not self.topic_classifier_enabled or topic == "GENERAL":
+            return ""
+        hints = {
+            "CODING": (
+                "[主题: 编程 — 给出可执行代码;注释要简洁;"
+                "如需 import 写完整;假设默认环境是 Python 3.11+/Node 22+]"
+            ),
+            "WRITING": (
+                "[主题: 写作 — 给出完整文本而不是大纲;"
+                "若用户给了片段或要求改写,保留原作者风格]"
+            ),
+            "LEARNING": (
+                "[主题: 学习/解释 — 先给一句直接结论,再展开原理;"
+                "举一个具体例子;避免空洞抽象]"
+            ),
+            "WORK": (
+                "[主题: 工作 — 给出可立即执行的下一步;"
+                "如涉及多人协作,标明 owner 和 ETA]"
+            ),
+            "LIFE": (
+                "[主题: 生活 — 给出实用建议,避免说教;"
+                "如涉及偏好,询问用户而非默认]"
+            ),
+        }
+        return hints.get(topic, "")
+
+    # ── S23: Conversation Coherence ─────────────────────────────────────
+    async def _compute_coherence_line(
+        self, session_id: str, user_message: str
+    ) -> str:
+        """S23: 对话连贯性 — embedding 比对当前 vs 上轮 user message。"""
+        if not self.coherence_enabled or not user_message.strip():
+            return ""
+        # 没有 memory manager 就无法访问 embedder
+        if not self.memory or not hasattr(self.memory, "_get_embedder"):
+            return ""
+        try:
+            embedder = self.memory._get_embedder()
+            if embedder is None:
+                return ""
+            loop = asyncio.get_event_loop()
+            current_vec = await loop.run_in_executor(
+                None, lambda: embedder.encode([user_message], show_progress_bar=False)[0]
+            )
+            last_vec = self._last_user_embedding.get(session_id)
+            # 记下本轮 embedding 给下轮用,然后看是否能比对上轮
+            self._last_user_embedding[session_id] = current_vec
+            if last_vec is None:
+                return ""
+            # 余弦相似度
+            import numpy as np  # local import to avoid global cost
+            cur = np.asarray(current_vec, dtype=float)
+            prev = np.asarray(last_vec, dtype=float)
+            denom = (float(np.linalg.norm(cur)) * float(np.linalg.norm(prev))) or 1.0
+            sim = float(np.dot(cur, prev) / denom)
+            if sim >= self.coherence_high_threshold:
+                return "[对话连贯: 本轮与上文紧扣 — 可延续上下文语境]"
+            if sim <= self.coherence_low_threshold:
+                return (
+                    "[话题切换: 用户跳到了新话题 — "
+                    "请主动确认转向,不要套用上文语境]"
+                )
+            return ""  # 中间区间不注入,避免噪音
+        except Exception:  # pragma: no cover
+            return ""
+
+    # ── S24: Hot Memory Highlight ───────────────────────────────────────
+    def _annotate_hot_memories(
+        self, session_id: str, relevant: List[Dict]
+    ) -> List[Dict]:
+        """S24: 给本会话内重复命中 >= threshold 次的 memory 加 `[高频]` 前缀。
+
+        返回 *新的* relevant 列表,不修改输入。每条 dict 加 `hot: bool` 字段
+        让下游格式化代码可读取。增加 hit count 是 side-effect — 调用方
+        每轮触发一次。
+        """
+        if not self.hot_memory_enabled or not relevant:
+            return relevant
+        try:
+            counter = self._memory_hit_counter.setdefault(session_id, {})
+            out: List[Dict] = []
+            for m in relevant:
+                mid = m.get("id") or m.get("memory_id") or m.get("hash")
+                if mid is None:
+                    out.append(m)
+                    continue
+                counter[mid] = counter.get(mid, 0) + 1
+                hot = counter[mid] >= self.hot_memory_threshold
+                if hot:
+                    out.append({**m, "hot": True})
+                else:
+                    out.append(m)
+            return out
+        except Exception:  # pragma: no cover
+            return relevant
+
+    def _compute_hot_memory_line(self, relevant: List[Dict]) -> str:
+        """S24: 总结本轮有多少 hot 项 — 单行 hint。"""
+        if not self.hot_memory_enabled or not relevant:
+            return ""
+        hot_count = sum(1 for m in relevant if m.get("hot"))
+        if hot_count == 0:
+            return ""
+        return (
+            f"[高频引用: 本轮含 {hot_count} 条反复出现的记忆 — "
+            f"这些是用户最在意的事实]"
+        )
+
+    # ── S25: User Cadence ───────────────────────────────────────────────
+    def _record_cadence_tick(self, session_id: str) -> None:
+        """S25: 在每次 chat() 入口调用,记录当前时间戳到会话历史(末 5 条)。"""
+        if not self.cadence_enabled:
+            return
+        ts_list = self._cadence_timestamps.setdefault(session_id, [])
+        ts_list.append(time.time())
+        # 仅保留最近 5 条以避免内存增长
+        if len(ts_list) > 5:
+            del ts_list[: len(ts_list) - 5]
+
+    def _compute_cadence_line(self, session_id: str) -> str:
+        """S25: 基于近期消息间隔推断节律 — 快速/常规/慢思考。"""
+        if not self.cadence_enabled:
+            return ""
+        ts_list = self._cadence_timestamps.get(session_id, [])
+        if len(ts_list) < 2:
+            return ""
+        # 平均消息间隔(秒)
+        deltas = [ts_list[i + 1] - ts_list[i] for i in range(len(ts_list) - 1)]
+        if not deltas:
+            return ""
+        avg = sum(deltas) / len(deltas)
+        if avg < 60:
+            return "[用户节律: 快速对话 — 回复尽量简短,直击要点]"
+        if avg > 300:
+            return "[用户节律: 慢思考 — 可详尽展开,提供更多背景]"
+        return ""  # 常规节律不注入
 
     def _compute_knowledge_gap_hint(self, relevant: List[Dict]) -> str:
         """S16: 知识缺口检测 — 检测记忆上下文是否严重不足，返回行为指令行。
@@ -1982,6 +2264,10 @@ class ChatEngine:
             seen_ids = {m.get("id") for m in relevant if m.get("id")}
             new_l4 = [m for m in l4_anchors if m.get("id") not in seen_ids]
             relevant = new_l4 + relevant
+        # S25: 记录本轮入口时间戳,供 cadence 计算用
+        self._record_cadence_tick(session_id)
+        # S24: 给重复命中的 memory 加 hot 标记并累加 hit counter
+        relevant = self._annotate_hot_memories(session_id, relevant)
         # S3: 工作记忆 — 将当前会话已积累的关键事实注入 memory_text
         # S12: 用分层格式替代扁平列表，区分已验证事实与近期对话片段
         working_mem_text = self._get_working_memory_text(session_id)
@@ -2036,6 +2322,27 @@ class ChatEngine:
         adequacy_line = self._compute_memory_adequacy_line(relevant, intent)
         if adequacy_line and not gap_hint:
             memory_text = f"{memory_text}\n{adequacy_line}"
+        # S21: 实体关注度信号 — 列出本轮用户消息命中的 KG 实体
+        entity_spotlight = self._compute_entity_spotlight_line(user_input)
+        if entity_spotlight:
+            memory_text = f"{memory_text}\n{entity_spotlight}"
+        # S22: 主题分类 — 给出当前主题域的回答风格提示
+        topic = self._classify_conversation_topic(user_input)
+        topic_hint = self._get_topic_hint(topic)
+        if topic_hint:
+            memory_text = f"{memory_text}\n{topic_hint}"
+        # S23: 对话连贯性 — embedder 比对本轮 vs 上轮 user message
+        coherence_line = await self._compute_coherence_line(session_id, user_input)
+        if coherence_line:
+            memory_text = f"{memory_text}\n{coherence_line}"
+        # S24: 高频引用记忆 — 总结本会话内重复命中的 memory 数量
+        hot_memory_line = self._compute_hot_memory_line(relevant)
+        if hot_memory_line:
+            memory_text = f"{memory_text}\n{hot_memory_line}"
+        # S25: 用户节律 — 基于消息时间戳推断快速/慢思考
+        cadence_line = self._compute_cadence_line(session_id)
+        if cadence_line:
+            memory_text = f"{memory_text}\n{cadence_line}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -2238,6 +2545,27 @@ class ChatEngine:
         adequacy_line = self._compute_memory_adequacy_line(relevant, intent)
         if adequacy_line and not gap_hint:
             memory_text = f"{memory_text}\n{adequacy_line}"
+        # S21: 实体关注度信号 — 列出本轮用户消息命中的 KG 实体
+        entity_spotlight = self._compute_entity_spotlight_line(user_input)
+        if entity_spotlight:
+            memory_text = f"{memory_text}\n{entity_spotlight}"
+        # S22: 主题分类 — 给出当前主题域的回答风格提示
+        topic = self._classify_conversation_topic(user_input)
+        topic_hint = self._get_topic_hint(topic)
+        if topic_hint:
+            memory_text = f"{memory_text}\n{topic_hint}"
+        # S23: 对话连贯性 — embedder 比对本轮 vs 上轮 user message
+        coherence_line = await self._compute_coherence_line(session_id, user_input)
+        if coherence_line:
+            memory_text = f"{memory_text}\n{coherence_line}"
+        # S24: 高频引用记忆 — 总结本会话内重复命中的 memory 数量
+        hot_memory_line = self._compute_hot_memory_line(relevant)
+        if hot_memory_line:
+            memory_text = f"{memory_text}\n{hot_memory_line}"
+        # S25: 用户节律 — 基于消息时间戳推断快速/慢思考
+        cadence_line = self._compute_cadence_line(session_id)
+        if cadence_line:
+            memory_text = f"{memory_text}\n{cadence_line}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
