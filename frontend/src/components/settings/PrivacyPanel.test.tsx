@@ -78,4 +78,44 @@ describe("PrivacyPanel", () => {
     // status re-fetched after toggle
     expect(api.get).toHaveBeenCalledTimes(2);
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // v2.38 — error paths.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it("v2.38: api.get rejection does not crash; Card title still renders", async () => {
+    vi.mocked(api.get).mockRejectedValueOnce(new Error("network down"));
+    render(<PrivacyPanel />);
+    await waitFor(() => {
+      expect(screen.getByText("隐私模式")).toBeInTheDocument();
+    });
+    // status stays null → the dynamic mode tag ("已开启" / "关闭") should
+    // be absent, and the endpoint-count <strong> lines (formatted as
+    // "本地 endpoint (N):") shouldn't render. The description paragraph
+    // contains "本地 endpoint" as plain text though, so we anchor on the
+    // unique parenthesized-count form.
+    expect(screen.queryByText(/本地 endpoint \(\d/)).toBeNull();
+    expect(screen.queryByText("已开启")).toBeNull();
+    expect(screen.queryByText("关闭")).toBeNull();
+  });
+
+  it("v2.38: toggle failure does NOT re-fetch (refresh skipped)", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      mode: "off",
+      local_endpoints: [],
+      remote_endpoints: [],
+    });
+    vi.mocked(api.post).mockRejectedValueOnce(new Error("503"));
+    render(<PrivacyPanel />);
+    await waitFor(() => expect(screen.getByText("关闭")).toBeInTheDocument());
+    expect(api.get).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("switch"));
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    // Critical: a failed POST must NOT trigger a re-fetch — the second
+    // api.get would race against the user toggle's "toggling" spinner and
+    // flicker state. The handler's finally block clears `toggling` but
+    // does NOT call refresh on rejection.
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
 });

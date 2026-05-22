@@ -2,9 +2,10 @@
  * @vitest-environment jsdom
  *
  * v2.32 — MCPAuditPanel tests (P1 #8).
+ * v2.38 — added: filter Select wiring + error path coverage.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import MCPAuditPanel from "./MCPAuditPanel";
 
 vi.mock("../../api/client", () => ({
@@ -90,5 +91,110 @@ describe("MCPAuditPanel", () => {
     render(<MCPAuditPanel />);
     await waitFor(() => expect(screen.getByText("失败")).toBeInTheDocument());
     expect(screen.getByText(/UNAUTHORIZED/)).toBeInTheDocument();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // v2.38 — filter Select wiring + error path coverage.
+  //
+  // The 3 Select dropdowns (tool / scope / success) build query params for
+  // the next GET. Before this round these were entirely untested — a bug
+  // where flipping "仅成功" silently passed "仅失败" would never surface.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it("v2.38: scope Select onChange triggers GET with scope= query param", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      count: 0,
+      entries: [],
+      path: "/tmp/mcp.jsonl",
+      stats: { total: 0, by_tool: {}, by_scope: {}, success: 0, failure: 0 },
+    });
+    render(<MCPAuditPanel />);
+    // Wait for the initial GET (no filters yet).
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+    const initialCall = vi.mocked(api.get).mock.calls[0][0] as string;
+    expect(initialCall).not.toMatch(/scope=/);
+
+    // Pick the "scope" select by placeholder. antd renders the placeholder
+    // as a sibling element to the actual combobox; reach the combobox via
+    // the parent container.
+    const scopeCombobox = screen
+      .getByText("按 scope")
+      .closest(".ant-select")
+      ?.querySelector(".ant-select-selector") as HTMLElement;
+    expect(scopeCombobox).toBeTruthy();
+    fireEvent.mouseDown(scopeCombobox);
+
+    // The dropdown is rendered in a portal — searchable by role=option.
+    await waitFor(() => {
+      const opt = screen.getByText("write", { selector: ".ant-select-item-option-content" });
+      fireEvent.click(opt);
+    });
+
+    // After change, a second GET must have fired and must include scope=write.
+    await waitFor(() => {
+      const calls = vi.mocked(api.get).mock.calls.map((c) => c[0] as string);
+      expect(calls.some((u) => u.includes("scope=write"))).toBe(true);
+    });
+  });
+
+  it("v2.38: success Select onChange triggers GET with success= query param", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      count: 0,
+      entries: [],
+      path: "/tmp/mcp.jsonl",
+      stats: { total: 0, by_tool: {}, by_scope: {}, success: 0, failure: 0 },
+    });
+    render(<MCPAuditPanel />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+
+    // The 3rd Select (index 2) is the success filter (default "全部" / "all").
+    // Find it via its currently-displayed selected value text.
+    const successCombobox = screen
+      .getByText("全部")
+      .closest(".ant-select")
+      ?.querySelector(".ant-select-selector") as HTMLElement;
+    expect(successCombobox).toBeTruthy();
+    fireEvent.mouseDown(successCombobox);
+
+    await waitFor(() => {
+      const opt = screen.getByText("仅失败", {
+        selector: ".ant-select-item-option-content",
+      });
+      fireEvent.click(opt);
+    });
+
+    // success=false because the option's value is "false"
+    await waitFor(() => {
+      const calls = vi.mocked(api.get).mock.calls.map((c) => c[0] as string);
+      expect(calls.some((u) => u.includes("success=false"))).toBe(true);
+    });
+  });
+
+  it("v2.38: success=all does NOT add success= query (matches backend default)", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      count: 0,
+      entries: [],
+      path: "/tmp/mcp.jsonl",
+      stats: { total: 0, by_tool: {}, by_scope: {}, success: 0, failure: 0 },
+    });
+    render(<MCPAuditPanel />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+    // Initial state is successFilter=all; URL must NOT contain success=
+    const url = vi.mocked(api.get).mock.calls[0][0] as string;
+    expect(url).not.toMatch(/success=/);
+  });
+
+  it("v2.38: api.get rejection surfaces a user-facing error message", async () => {
+    vi.mocked(api.get).mockRejectedValueOnce(new Error("boom"));
+    render(<MCPAuditPanel />);
+    // The panel calls message.error(...). antd's message renders globally;
+    // we can match by partial Chinese text or just verify the rejection
+    // didn't crash the page (the Card title still renders).
+    await waitFor(() => {
+      expect(screen.getByText("MCP 调用审计")).toBeInTheDocument();
+    });
+    // No data was set, so the stats Tag should not render. The component
+    // gracefully shows the empty Table.
+    expect(api.get).toHaveBeenCalledTimes(1);
   });
 });

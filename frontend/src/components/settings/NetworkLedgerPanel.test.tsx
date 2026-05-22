@@ -84,4 +84,22 @@ describe("NetworkLedgerPanel", () => {
     expect(screen.getByText(/5\.02 s/)).toBeInTheDocument();
     expect(screen.getByText(/HTTPStatusError/)).toBeInTheDocument();
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // v2.38 — error path coverage.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it("v2.38: api.get rejection does not crash; Card title still renders", async () => {
+    vi.mocked(api.get).mockRejectedValueOnce(new Error("connection refused"));
+    render(<NetworkLedgerPanel />);
+    await waitFor(() => {
+      expect(screen.getByText(/网络出站审计/)).toBeInTheDocument();
+    });
+    // data stays null → the dynamic "<n> 条 / 总计 …" Tag (rendered ONLY
+    // when data exists) should be absent. We anchor on the unique
+    // "总计" prefix so we don't accidentally match the static "50 条"
+    // string in the description paragraph above.
+    expect(screen.queryByText(/总计/)).toBeNull();
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
 });
