@@ -28,6 +28,10 @@ function makeFakeManager(channels: FakeChannelRow[]) {
       sendCalls.push({ channelId, recipient, content });
       return { ok: true };
     }),
+    // v2.30: ChannelAutoReply now reads per-channel policy. Stub returns
+    // undefined = "no policy configured" = legacy allow-all behavior, so
+    // existing tests pass without modifying their assertions.
+    getPolicy: vi.fn(() => undefined),
   };
   return { mgr: mgr as unknown as ChannelManager, sendCalls, raw: mgr };
 }

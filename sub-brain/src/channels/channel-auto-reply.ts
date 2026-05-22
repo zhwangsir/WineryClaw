@@ -23,6 +23,47 @@
 
 import crypto from "node:crypto";
 import type { ChannelManager, InboundMessage } from "./channel-manager.js";
+import { evaluatePolicy } from "./channel-policy.js";
+
+/** Per-channel rolling window of reply timestamps for rate-limit eval.
+ * Bounded — we trim entries older than 1 hour on each evaluation. */
+const recentReplyTimestamps = new Map<string, number[]>();
+
+/** Audit ring buffer of recent policy decisions (last 200 per process)
+ * for the /channels/:id/policy/audit endpoint. */
+interface PolicyAuditEntry {
+  ts: string;
+  channelId: string;
+  sender: string;
+  contentPreview: string;
+  allowed: boolean;
+  reason: string;
+  delayMs: number;
+}
+const policyAudit: PolicyAuditEntry[] = [];
+const POLICY_AUDIT_MAX = 200;
+
+/** Read-only access to recent policy decisions. Used by the
+ * GET /channels/:id/policy/audit route. */
+export function recentPolicyAudit(channelId?: string, limit = 50): PolicyAuditEntry[] {
+  const all = channelId
+    ? policyAudit.filter((e) => e.channelId === channelId)
+    : policyAudit;
+  return all.slice(-Math.max(1, Math.min(limit, POLICY_AUDIT_MAX))).reverse();
+}
+
+function pushPolicyAudit(entry: PolicyAuditEntry): void {
+  policyAudit.push(entry);
+  if (policyAudit.length > POLICY_AUDIT_MAX) {
+    policyAudit.splice(0, policyAudit.length - POLICY_AUDIT_MAX);
+  }
+}
+
+/** Exported for tests — reset the cross-instance audit + rate-limit state. */
+export function _resetPolicyState(): void {
+  policyAudit.length = 0;
+  recentReplyTimestamps.clear();
+}
 
 export interface AutoReplyDeps {
   /** Channel manager to look up channels and send outbound replies. */
@@ -87,8 +128,39 @@ export class ChannelAutoReply {
   };
 
   private async runReply(channelId: string, message: InboundMessage, content: string): Promise<void> {
+    // v2.30 (M5.1): evaluate channel policy BEFORE calling chat engine.
+    // A blocked message is still stored as inbound (already happened by
+    // the time we get here), but consumes no LLM budget and produces no
+    // outbound reply. The decision is recorded in the policy audit log.
+    const policy = this.deps.channelManager.getPolicy(channelId);
+    const recent = recentReplyTimestamps.get(channelId) ?? [];
+    const decision = evaluatePolicy(policy, { sender: message.sender, content }, {
+      recentReplyTimestamps: recent,
+    });
+    pushPolicyAudit({
+      ts: new Date().toISOString(),
+      channelId,
+      sender: message.sender,
+      contentPreview: content.slice(0, 120),
+      allowed: decision.allow,
+      reason: decision.reason,
+      delayMs: decision.delayMs,
+    });
+    if (!decision.allow) {
+      console.log(
+        `[auto-reply] policy blocked ${channelId} from '${message.sender}': ${decision.reason}`
+      );
+      return;
+    }
+
+    // Honor policy-mandated reply delay (human-like pacing).
+    if (decision.delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, decision.delayMs));
+    }
+
     const sessionId = senderToSessionId(channelId, message.sender);
-    const agentId = this.deps.defaultAgentId || "agent-default";
+    // Policy.agentId overrides the dependency default — per-channel agent.
+    const agentId = decision.agentId || this.deps.defaultAgentId || "agent-default";
 
     let reply: string;
     try {
@@ -108,7 +180,16 @@ export class ChannelAutoReply {
       const sendResult = await this.deps.channelManager.send(channelId, recipient, reply);
       if (!sendResult.ok) {
         console.error(`[auto-reply] send failed for ${channelId}:`, sendResult.error);
+        return;
       }
+      // Record the timestamp ONLY when a reply actually went out, so the
+      // rate-limit window reflects real outbound traffic (not blocked /
+      // failed attempts). Trim the window to last hour to bound memory.
+      const now = Date.now();
+      const cutoff = now - 3_600_000;
+      const trimmed = recent.filter((t) => t >= cutoff);
+      trimmed.push(now);
+      recentReplyTimestamps.set(channelId, trimmed);
     } catch (err: any) {
       console.error(`[auto-reply] send threw for ${channelId}:`, err?.message || err);
     }

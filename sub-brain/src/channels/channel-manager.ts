@@ -8,6 +8,8 @@ import WebSocket from "ws";
 import { IMessageProtocol, startIMessagePolling } from "./imessage-protocol.js";
 import { EmailProtocol, startEmailPolling } from "./email-protocol.js";
 import { WebPushProtocol } from "./webpush-protocol.js";
+import type { ChannelPolicy } from "./channel-policy.js";
+import { validatePolicy } from "./channel-policy.js";
 
 export interface ChannelConfig {
   botToken?: string;
@@ -25,6 +27,9 @@ export interface Channel {
   /** M5: when true, inbound messages on this channel are auto-routed
    * to chat_engine and the reply is sent back to the sender. */
   autoReply: boolean;
+  /** M5.1 (v2.30): optional policy controlling which inbound messages
+   * trigger auto-reply. Empty / undefined = "no constraint" (legacy). */
+  policy?: ChannelPolicy;
   config: ChannelConfig;
   protocol: ChannelProtocol;
 }
@@ -364,10 +369,39 @@ export class ChannelManager {
   }
 
   async initialize(): Promise<void> {
+    // v2.30 (M5.1): one-shot ALTER TABLE adding the `policy` column. ADD
+    // COLUMN succeeds at most once on SQLite; subsequent boots throw
+    // "duplicate column name" which we swallow. Same idempotency
+    // pattern used for the M5 `auto_reply` column.
+    try {
+      this.db.exec("ALTER TABLE channels ADD COLUMN policy TEXT DEFAULT '{}'");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("duplicate column")) {
+        console.warn("[channels] policy column migration warning:", msg);
+      }
+    }
+
     // Load persisted channels from SQLite
     const rows = this.db.prepare("SELECT * FROM channels").all() as any[];
     for (const row of rows) {
       const config = JSON.parse(row.config || "{}");
+      let policy: ChannelPolicy | undefined;
+      if (row.policy && row.policy !== "{}") {
+        try {
+          const parsed = JSON.parse(row.policy);
+          const validated = validatePolicy(parsed);
+          if (validated.ok) {
+            policy = validated.policy;
+          } else {
+            console.warn(
+              `[channels] dropping invalid policy for ${row.id}: ${validated.error}`
+            );
+          }
+        } catch (e) {
+          console.warn(`[channels] policy JSON parse failed for ${row.id}:`, e);
+        }
+      }
       const protocol = PROTOCOL_REGISTRY[row.type];
       if (protocol) {
         this.channels.set(row.id, {
@@ -376,12 +410,54 @@ export class ChannelManager {
           name: row.name,
           connected: !!row.connected,
           autoReply: !!row.auto_reply,
+          policy,
           config,
           protocol,
         });
       }
     }
     console.log(`[channels] Loaded ${this.channels.size} persisted channels`);
+  }
+
+  /** M5.1: read the current policy for a channel. Returns undefined if
+   * no policy is set OR the channel doesn't exist. Callers should treat
+   * "no policy" as "allow everything" (legacy compatibility). */
+  getPolicy(channelId: string): ChannelPolicy | undefined {
+    return this.channels.get(channelId)?.policy;
+  }
+
+  /** M5.1: set/replace the policy for a channel. Validates input and
+   * persists to SQLite. Returns the sanitized policy on success.
+   *
+   * Pass `null` (or an empty object) to clear the policy and revert to
+   * legacy "allow everything" behavior. */
+  async setPolicy(
+    channelId: string,
+    rawPolicy: unknown
+  ): Promise<{ ok: boolean; policy?: ChannelPolicy; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+
+    // null / empty object → clear
+    if (rawPolicy === null) {
+      channel.policy = undefined;
+      const stmt = this.db.prepare(
+        "UPDATE channels SET policy = ?, updated_at = ? WHERE id = ?"
+      );
+      stmt.run("{}", new Date().toISOString(), channelId);
+      return { ok: true, policy: {} };
+    }
+
+    const validation = validatePolicy(rawPolicy);
+    if (!validation.ok) {
+      return { ok: false, error: validation.error };
+    }
+    channel.policy = validation.policy;
+    const stmt = this.db.prepare(
+      "UPDATE channels SET policy = ?, updated_at = ? WHERE id = ?"
+    );
+    stmt.run(JSON.stringify(validation.policy), new Date().toISOString(), channelId);
+    return { ok: true, policy: validation.policy };
   }
 
   async connect(channelType: string, config: ChannelConfig): Promise<{ ok: boolean; channel_id?: string; error?: string }> {
@@ -529,13 +605,22 @@ export class ChannelManager {
     return { ok: true };
   }
 
-  listChannels(): Array<{ id: string; name: string; type: string; connected: boolean; auto_reply: boolean }> {
+  listChannels(): Array<{
+    id: string;
+    name: string;
+    type: string;
+    connected: boolean;
+    auto_reply: boolean;
+    /** M5.1 (v2.30): policy summary. `null` means "no policy configured". */
+    policy: ChannelPolicy | null;
+  }> {
     return Array.from(this.channels.values()).map((c) => ({
       id: c.id,
       name: c.name,
       type: c.type,
       connected: c.connected,
       auto_reply: c.autoReply,
+      policy: c.policy ?? null,
     }));
   }
 
