@@ -546,6 +546,61 @@ class ChatEngine:
         # 会话级最近 5 条消息时间戳: {session_id: [ts1, ts2, ...]}
         self._cadence_timestamps: Dict[str, List[float]] = {}
 
+        # S26: 对话回合深度信号 (Turn Depth) — 当前会话已经进行了多少轮对话?
+        # 深对话(>5 轮)需要更注重一致性,避免前后矛盾;首轮对话需要更开放性。
+        # 与 S10 跨会话锚点互补:S10 跨会话,S26 同会话内深度。零成本(计数器)。
+        self.turn_depth_enabled: bool = (
+            os.environ.get("WEBRAIN_TURN_DEPTH_ENABLED", "1") != "0"
+        )
+        # 会话级回合计数器: {session_id: count}
+        self._turn_counters: Dict[str, int] = {}
+
+        # S27: 记忆陈旧度告警 (Memory Staleness Alert) — 与 S15 时效信号互补,
+        # 但聚焦"单条最旧记忆": 当某条 relevant 记忆 > N 天前(默认 90),
+        # 在 memory_text 末尾追加 `[陈旧记忆告警: M1 已 120 天前,引用时需说明]`,
+        # 让 AI 主动告知用户"这是较老的信息"避免信息时滞误导。
+        self.staleness_alert_enabled: bool = (
+            os.environ.get("WEBRAIN_STALENESS_ALERT_ENABLED", "1") != "0"
+        )
+        try:
+            self.staleness_alert_days: int = int(
+                os.environ.get("WEBRAIN_STALENESS_ALERT_DAYS", "90")
+            )
+        except ValueError:
+            self.staleness_alert_days = 90
+
+        # S28: 用户专业级别推断 (Expertise Inference) — 基于本会话累计的
+        # CODING 主题 + 术语密度推断用户在某领域是 NOVICE / INTERMEDIATE /
+        # EXPERT。EXPERT 时跳过基础解释直接给代码,NOVICE 时多解释。零 LLM
+        # 调用(纯关键词 + 计数)。
+        self.expertise_enabled: bool = (
+            os.environ.get("WEBRAIN_EXPERTISE_ENABLED", "1") != "0"
+        )
+        # 会话级专业级别累积证据 {session_id: {"expert_hits": int, "novice_hits": int}}
+        self._expertise_counters: Dict[str, Dict[str, int]] = {}
+
+        # S29: 响应长度建议 (Response Length Hint) — 综合 S22 主题 + S25 节律 +
+        # S26 回合深度,给 AI 一个明确的响应长度提示: 精简(<150 字)/常规
+        # (150-500)/详尽(>500)。统一长度策略让 UX 更可预期。
+        self.length_hint_enabled: bool = (
+            os.environ.get("WEBRAIN_LENGTH_HINT_ENABLED", "1") != "0"
+        )
+
+        # S30: 工具调用频次提示 (Tool Call Frequency) — 统计本会话内的 tool_call
+        # 次数,若 >= 阈值(默认 5)提示 AI"已多次工具调用,考虑直接给结论"。
+        # 防止 LLM 陷入工具调用循环不收敛。
+        self.tool_freq_enabled: bool = (
+            os.environ.get("WEBRAIN_TOOL_FREQ_ENABLED", "1") != "0"
+        )
+        try:
+            self.tool_freq_threshold: int = int(
+                os.environ.get("WEBRAIN_TOOL_FREQ_THRESHOLD", "5")
+            )
+        except ValueError:
+            self.tool_freq_threshold = 5
+        # 会话级工具调用计数 {session_id: count}
+        self._tool_call_counters: Dict[str, int] = {}
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1466,6 +1521,157 @@ class ChatEngine:
             return "[用户节律: 慢思考 — 可详尽展开,提供更多背景]"
         return ""  # 常规节律不注入
 
+    # ── S26: Turn Depth ─────────────────────────────────────────────────
+    def _record_turn(self, session_id: str) -> None:
+        """S26: 在每次 chat() 入口调用,会话回合数 +1。"""
+        if not self.turn_depth_enabled:
+            return
+        self._turn_counters[session_id] = self._turn_counters.get(session_id, 0) + 1
+
+    def _compute_turn_depth_line(self, session_id: str) -> str:
+        """S26: 给出当前会话深度的行为提示。"""
+        if not self.turn_depth_enabled:
+            return ""
+        depth = self._turn_counters.get(session_id, 0)
+        if depth <= 1:
+            return ""  # 首轮不注入,避免干扰开放性
+        if depth >= 8:
+            return (
+                f"[对话回合: 第 {depth} 轮(深对话) — "
+                f"注意与前文一致性,避免反复或矛盾]"
+            )
+        if depth >= 4:
+            return f"[对话回合: 第 {depth} 轮(中度) — 可引用前文已建立的事实]"
+        return ""
+
+    # ── S27: Memory Staleness Alert ─────────────────────────────────────
+    def _compute_staleness_alert_line(self, relevant: List[Dict]) -> str:
+        """S27: 若 relevant 中某条记忆 > staleness_alert_days 天前,告警。"""
+        if not self.staleness_alert_enabled or not relevant:
+            return ""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        old_count = 0
+        oldest_days = 0
+        for m in relevant:
+            ts_raw = m.get("created_at") or m.get("timestamp")
+            if not ts_raw:
+                continue
+            try:
+                if isinstance(ts_raw, (int, float)):
+                    ts = datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+                else:
+                    s = str(ts_raw).replace("Z", "+00:00")
+                    ts = datetime.fromisoformat(s)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                days_old = (now - ts).days
+                if days_old > self.staleness_alert_days:
+                    old_count += 1
+                    oldest_days = max(oldest_days, days_old)
+            except (ValueError, TypeError, OSError):
+                continue
+        if old_count == 0:
+            return ""
+        return (
+            f"[陈旧记忆告警: {old_count} 条已 {oldest_days}+ 天前 — "
+            f"引用时需向用户说明时效]"
+        )
+
+    # ── S28: User Expertise Inference ───────────────────────────────────
+    _EXPERT_TERMS = re.compile(
+        r"(async|await|generator|decorator|trait|borrow|monad|"
+        r"协程|闭包|装饰器|尾递归|多态|大端|位运算|"
+        r"o\(n\)|amortized|race condition|deadlock|sigterm|"
+        r"throughput|p95|p99|otel|opentelemetry|sli|slo)",
+        re.IGNORECASE,
+    )
+    _NOVICE_PHRASES = re.compile(
+        r"(什么是|怎么读|怎么写|新手|入门|不懂|不明白|为什么这样|"
+        r"小白|不会|帮我看看|教我|从零开始|first time|noob)",
+        re.IGNORECASE,
+    )
+
+    def _record_expertise_signal(self, session_id: str, user_message: str) -> None:
+        """S28: 扫描 user message 找专家/新手信号,累加会话 counter。"""
+        if not self.expertise_enabled or not user_message:
+            return
+        counters = self._expertise_counters.setdefault(
+            session_id, {"expert_hits": 0, "novice_hits": 0}
+        )
+        if self._EXPERT_TERMS.search(user_message):
+            counters["expert_hits"] += 1
+        if self._NOVICE_PHRASES.search(user_message):
+            counters["novice_hits"] += 1
+
+    def _compute_expertise_line(self, session_id: str) -> str:
+        """S28: 基于会话累积信号推断 NOVICE / INTERMEDIATE / EXPERT。"""
+        if not self.expertise_enabled:
+            return ""
+        c = self._expertise_counters.get(session_id, {})
+        expert = c.get("expert_hits", 0)
+        novice = c.get("novice_hits", 0)
+        # 需要至少 2 个证据才下结论,避免首轮误判
+        if expert + novice < 2:
+            return ""
+        if expert >= novice * 2 and expert >= 2:
+            return (
+                "[用户级别: EXPERT — 跳过基础解释,"
+                "直接给代码/术语;假设熟悉常见 idiom]"
+            )
+        if novice >= expert * 2 and novice >= 2:
+            return (
+                "[用户级别: NOVICE — 多用比喻和具体例子;"
+                "避免生僻术语,需要时先解释术语]"
+            )
+        return ""  # INTERMEDIATE 不注入(默认行为)
+
+    # ── S29: Response Length Hint ───────────────────────────────────────
+    def _compute_length_hint_line(
+        self, session_id: str, topic: str
+    ) -> str:
+        """S29: 综合 S22 主题 + S25 节律 + S26 深度,给响应长度建议。"""
+        if not self.length_hint_enabled:
+            return ""
+        depth = self._turn_counters.get(session_id, 0)
+        ts_list = self._cadence_timestamps.get(session_id, [])
+        avg_gap = 0.0
+        if len(ts_list) >= 2:
+            deltas = [ts_list[i + 1] - ts_list[i] for i in range(len(ts_list) - 1)]
+            avg_gap = sum(deltas) / max(1, len(deltas))
+        # 决策规则:
+        # - 快速节律(<60s) 或 深对话(>=8) → 精简
+        # - LEARNING 主题 + 慢思考(>300s) → 详尽
+        # - 其他 → 不注入(常规)
+        if avg_gap > 0 and avg_gap < 60:
+            return "[响应长度: 精简 — 用户在快速对话,< 150 字直击要点]"
+        if depth >= 8:
+            return "[响应长度: 精简 — 深对话已建立上下文,无需重复铺垫]"
+        if topic == "LEARNING" and avg_gap > 300:
+            return "[响应长度: 详尽 — 用户在慢思考学习,展开原理 + 例子 + 注意事项]"
+        return ""
+
+    # ── S30: Tool Call Frequency ────────────────────────────────────────
+    def _record_tool_call(self, session_id: str) -> None:
+        """S30: 每次 chat() 触发 tool_call 时调用,累计会话计数。"""
+        if not self.tool_freq_enabled:
+            return
+        self._tool_call_counters[session_id] = (
+            self._tool_call_counters.get(session_id, 0) + 1
+        )
+
+    def _compute_tool_freq_line(self, session_id: str) -> str:
+        """S30: 若 tool call 已超阈值,提示 AI 收敛到结论。"""
+        if not self.tool_freq_enabled:
+            return ""
+        n = self._tool_call_counters.get(session_id, 0)
+        if n < self.tool_freq_threshold:
+            return ""
+        return (
+            f"[工具调用提醒: 本会话已调用 {n} 次工具,"
+            f"考虑直接给出结论而非继续探索]"
+        )
+
     def _compute_knowledge_gap_hint(self, relevant: List[Dict]) -> str:
         """S16: 知识缺口检测 — 检测记忆上下文是否严重不足，返回行为指令行。
 
@@ -2266,6 +2472,8 @@ class ChatEngine:
             relevant = new_l4 + relevant
         # S25: 记录本轮入口时间戳,供 cadence 计算用
         self._record_cadence_tick(session_id)
+        # S26: 记录会话回合数(在 cadence tick 同一入口位置)
+        self._record_turn(session_id)
         # S24: 给重复命中的 memory 加 hot 标记并累加 hit counter
         relevant = self._annotate_hot_memories(session_id, relevant)
         # S3: 工作记忆 — 将当前会话已积累的关键事实注入 memory_text
@@ -2343,6 +2551,27 @@ class ChatEngine:
         cadence_line = self._compute_cadence_line(session_id)
         if cadence_line:
             memory_text = f"{memory_text}\n{cadence_line}"
+        # S26: 对话回合深度 — 多轮对话时提醒一致性
+        turn_depth_line = self._compute_turn_depth_line(session_id)
+        if turn_depth_line:
+            memory_text = f"{memory_text}\n{turn_depth_line}"
+        # S27: 记忆陈旧度告警
+        staleness_line = self._compute_staleness_alert_line(relevant)
+        if staleness_line:
+            memory_text = f"{memory_text}\n{staleness_line}"
+        # S28: 用户专业级别累积证据 + 推断
+        self._record_expertise_signal(session_id, user_input)
+        expertise_line = self._compute_expertise_line(session_id)
+        if expertise_line:
+            memory_text = f"{memory_text}\n{expertise_line}"
+        # S29: 响应长度建议(综合 S22 主题 + S25 节律 + S26 深度)
+        length_hint_line = self._compute_length_hint_line(session_id, topic)
+        if length_hint_line:
+            memory_text = f"{memory_text}\n{length_hint_line}"
+        # S30: 工具调用频次提醒
+        tool_freq_line = self._compute_tool_freq_line(session_id)
+        if tool_freq_line:
+            memory_text = f"{memory_text}\n{tool_freq_line}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -2566,6 +2795,27 @@ class ChatEngine:
         cadence_line = self._compute_cadence_line(session_id)
         if cadence_line:
             memory_text = f"{memory_text}\n{cadence_line}"
+        # S26: 对话回合深度 — 多轮对话时提醒一致性
+        turn_depth_line = self._compute_turn_depth_line(session_id)
+        if turn_depth_line:
+            memory_text = f"{memory_text}\n{turn_depth_line}"
+        # S27: 记忆陈旧度告警
+        staleness_line = self._compute_staleness_alert_line(relevant)
+        if staleness_line:
+            memory_text = f"{memory_text}\n{staleness_line}"
+        # S28: 用户专业级别累积证据 + 推断
+        self._record_expertise_signal(session_id, user_input)
+        expertise_line = self._compute_expertise_line(session_id)
+        if expertise_line:
+            memory_text = f"{memory_text}\n{expertise_line}"
+        # S29: 响应长度建议(综合 S22 主题 + S25 节律 + S26 深度)
+        length_hint_line = self._compute_length_hint_line(session_id, topic)
+        if length_hint_line:
+            memory_text = f"{memory_text}\n{length_hint_line}"
+        # S30: 工具调用频次提醒
+        tool_freq_line = self._compute_tool_freq_line(session_id)
+        if tool_freq_line:
+            memory_text = f"{memory_text}\n{tool_freq_line}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
