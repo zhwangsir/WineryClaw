@@ -1050,14 +1050,23 @@ class ChatEngine:
         if cached and (now - fetched_at) < self._agent_config_ttl:
             return cached
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.sub_brain_url}/agents/{agent_id}")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    agent = data.get("agent") or data
-                    self._agent_config_cache[agent_id] = agent
-                    self._agent_config_fetched_at[agent_id] = now
-                    return agent
+            # v2.45 — use shared httpx client. Pre-v2.45 every call here
+            # constructed a new AsyncClient, which forced a fresh SSL
+            # context load (`load_verify_locations` reads the CA bundle
+            # from disk). Profiling under 30-concurrent chat load showed
+            # this dominated wall-clock time (3.86s out of 5.94s, ~65%).
+            # Reusing the long-lived client amortizes TLS setup across
+            # the entire process lifetime.
+            client = self._get_client()
+            resp = await client.get(
+                f"{self.sub_brain_url}/agents/{agent_id}", timeout=5.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                agent = data.get("agent") or data
+                self._agent_config_cache[agent_id] = agent
+                self._agent_config_fetched_at[agent_id] = now
+                return agent
         except Exception as e:
             logger.warning(f"Failed to fetch agent config for {agent_id}: {e}")
         return None
@@ -2394,14 +2403,18 @@ class ChatEngine:
             prompt = agent["systemPrompt"]
         else:
             # Fallback: try to fetch system-prompt endpoint
+            # v2.45 — shared client (see _fetch_agent_config for rationale).
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(f"{self.sub_brain_url}/agents/{agent_id}/system-prompt")
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        prompt = data.get("content", "")
-                    else:
-                        prompt = ""
+                client = self._get_client()
+                resp = await client.get(
+                    f"{self.sub_brain_url}/agents/{agent_id}/system-prompt",
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    prompt = data.get("content", "")
+                else:
+                    prompt = ""
             except Exception:
                 prompt = ""
 
@@ -2584,13 +2597,15 @@ class ChatEngine:
         Phase: "pre" or "post" — corresponds to /hooks/llm/pre / /hooks/llm/post.
         """
         try:
-            async with httpx.AsyncClient(timeout=1.0) as client:
-                resp = await client.post(
-                    f"{self.sub_brain_url}/hooks/llm/{phase}",
-                    json=payload,
-                )
-                if resp.status_code == 200:
-                    return resp.json()
+            # v2.45 — shared client (see _fetch_agent_config for rationale).
+            client = self._get_client()
+            resp = await client.post(
+                f"{self.sub_brain_url}/hooks/llm/{phase}",
+                json=payload,
+                timeout=1.0,
+            )
+            if resp.status_code == 200:
+                return resp.json()
         except Exception:
             # plugin error must NEVER break the chat path
             pass
@@ -2664,10 +2679,19 @@ class ChatEngine:
                 request_bytes = 0
             t0 = time.time()
             try:
-                async with httpx.AsyncClient(timeout=ep.timeout) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
-                    resp.raise_for_status()
-                    data = resp.json()
+                # v2.45 — shared httpx client. Per-endpoint timeout
+                # passes through as a request-level override; the
+                # client default (120s) only matters if a caller
+                # forgets to set timeout (none do). This is the LLM
+                # call hot path — pre-v2.45 it was the #1 producer
+                # of SSL context creations under load (3.86s out of
+                # 5.94s in the 30-conc profile).
+                client = self._get_client()
+                resp = await client.post(
+                    url, json=payload, headers=headers, timeout=ep.timeout
+                )
+                resp.raise_for_status()
+                data = resp.json()
                 latency_ms = (time.time() - t0) * 1000.0
                 self.router.mark_success(ep.name, latency_ms)
                 result = self._parse_response(ep, data)

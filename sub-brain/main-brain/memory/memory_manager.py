@@ -1670,25 +1670,35 @@ class MemoryManager:
             _provider_timeout = float(_os.environ.get("WEBRAIN_EMBEDDING_PROVIDER_TIMEOUT_S", "5.0"))
         except ValueError:
             _provider_timeout = 5.0
-        async with httpx.AsyncClient(timeout=_provider_timeout) as client:
-            if provider["payload_fmt"] == "ollama":
-                resp = await client.post(provider["url"], json={
-                    "model": provider["model"],
-                    "prompt": text,
-                }, headers=provider["headers"])
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("embedding")
-            elif provider["payload_fmt"] == "openai":
-                resp = await client.post(provider["url"], json={
-                    "model": provider["model"],
-                    "input": text,
-                }, headers=provider["headers"])
-                if resp.status_code == 200:
-                    data = resp.json()
-                    emb = data.get("data", [{}])[0].get("embedding")
-                    if emb:
-                        return emb
+        # v2.45 — shared httpx client. The pre-v2.45 `async with
+        # httpx.AsyncClient(timeout=X)` pattern was the SECOND biggest
+        # producer of SSL context creations under load (1080 contexts
+        # at 30-conc, ~1.9s / 32% of profile time even after v2.45
+        # chat_engine fix). Re-using the existing per-instance client
+        # eliminates the TLS handshake / CA-bundle reload per embed call.
+        client = self._get_client()
+        if provider["payload_fmt"] == "ollama":
+            resp = await client.post(
+                provider["url"],
+                json={"model": provider["model"], "prompt": text},
+                headers=provider["headers"],
+                timeout=_provider_timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("embedding")
+        elif provider["payload_fmt"] == "openai":
+            resp = await client.post(
+                provider["url"],
+                json={"model": provider["model"], "input": text},
+                headers=provider["headers"],
+                timeout=_provider_timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                emb = data.get("data", [{}])[0].get("embedding")
+                if emb:
+                    return emb
         return None
 
     async def _local_embedding(self, text: str) -> Optional[List[float]]:
@@ -1769,10 +1779,13 @@ class MemoryManager:
                 headers["Authorization"] = f"Bearer {api_key}"
 
             try:
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
-                    resp.raise_for_status()
-                    return resp.json()
+                # v2.45 — shared client (see _call_embedding_provider rationale).
+                client = self._get_client()
+                resp = await client.post(
+                    url, json=payload, headers=headers, timeout=120.0
+                )
+                resp.raise_for_status()
+                return resp.json()
             except Exception as e:
                 last_error = e
                 logger.warning(f"LLM call failed for {base_url}: {e}, trying next endpoint...")

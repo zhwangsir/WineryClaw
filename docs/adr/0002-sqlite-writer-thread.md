@@ -1,6 +1,16 @@
 # ADR-0002 — SQLite writer thread + reader pool (Sprint 0.7)
 
 * Status: **Accepted, partial delivery** (2026-05-23)
+* Postscript (2026-05-23, v2.45): The follow-up profiling step
+  predicted in "Triggers for revisiting" identified the actual
+  bottleneck — per-call `httpx.AsyncClient()` creation (CA bundle
+  reload at 65% CPU under load), NOT the SQLite write lock. Fixed
+  in v2.45 by routing all chat-path HTTP through `self._get_client()`.
+  Result: seq P95 203→40.7 ms (target ≤ 80 ✅), conc 30 P95
+  5184→960 ms (target ≤ 800, 20% over but 5.4x improved).
+  Sprint 0.7 architecture (writer thread) remains in place — it is
+  the right design for future SQLite-heavy workloads even though it
+  wasn't the dominant bottleneck on the v2.44 measurement hardware.
 * Round: v2.44b–g
 * Deciders: project owner; architect sub-agent designed the plan
 * Supersedes: implicit "single connection pool serves both reads + writes" policy

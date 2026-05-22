@@ -136,13 +136,13 @@ v2 release 必须同时满足：
 - [x] **Axis 3 8 LLM provider 配置** — ✅ v2.10
 - [x] **Axis 3 privacy mode toggle** — ✅ v2.17
 - [ ] Axis 1 recall@5 ≥ 0.85（当前 0.625 rerank ON，差 26%）
-- [ ] Axis 1 单调用 P95 ≤ 80ms（2026-05-23 实测 ~200ms。v2.44 已实施
-       writer-thread + read-pool 架构 (ADR-0002),但同机 A/B 显示并未
-       达到 architect 预测的 75-85ms 目标 — 瓶颈不在 SQLite 写锁,需
-       profiling 定位)
-- [ ] Axis 1 并发 30 P95 ≤ 800ms（2026-05-23 实测 ~5200ms。v2.44
-       writer thread 架构已就位但单机未观测到预测的 2450→700-900 改善
-       — 见 ADR-0002 "Triggers for revisiting"）
+- [x] **Axis 1 单调用 P95 ≤ 80ms** — ✅ v2.45 达成 **40.7 ms** (远优于
+       目标)。cProfile 定位真瓶颈是每次 chat 重新 `httpx.AsyncClient()`
+       创建 SSL context (`load_verify_locations` 占 65% CPU),改走共享
+       client 后 chat() cumtime 5.14s → 0.39s。
+- [ ] Axis 1 并发 30 P95 ≤ 800ms — 2026-05-23 v2.45 实测 **960 ms**
+       (5184 → 960, 5.4x 改善)。距离目标 20% 内,可在后续 round 继续
+       close (剩余开销主要在 asyncio 调度 + embedder 推理)。
 - [x] M6b 桌面壳可在 macOS 一键启动（.app/.dmg 已就绪；Linux 在
        desktop-linux CI 中验证 `tauri build --bundles deb`,实际 boot
        smoke 未做 — 用户当前主用 macOS+Web,Linux GA 验证延后）

@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-23(v2.44h = Sprint 0.7 写迁移 + ADR-0002 写完成,P95 目标 open;详见 §22)
+> **最后更新**：2026-05-23(v2.45 = 共享 httpx client 突破,seq P95 ≤ 80ms 达成 + conc P95 5.4x 改善至 960ms;详见 §22)
 
 ---
 
@@ -1750,8 +1750,25 @@ v2.18 后的 21 个 commit 围绕三件事:**(a)** 用户真实使用系统暴�
 | Pre-v2.44 baseline (PROJECT_STATE §15) | 140 ms | 2450 ms |
 | Post-v2.44 fallback path (no executors) | 242 ms | 5393 ms |
 | Post-v2.44 executors wired (production path) | 203 ms | 5184 ms |
+| **Post-v2.45 (shared httpx client)**         | **40.7 ms** | **960 ms** |
+
+**v2.45 突破:**
+- 单调用 P95 ≤ 80ms 目标 ✅ **达成** (40.7ms vs 80ms)
+- 并发 30 P95 ≤ 800ms 目标 — 960ms,距离 20% 内 (vs 起点 5184ms,5.4x 改善)
+
+v2.45 关键洞察:Sprint 0.7 的 writer thread 架构正确但不是瓶颈。cProfile
+30 并发显示 `load_verify_locations` (SSL CA bundle 重新加载) 占 65% CPU
+时间。每个 chat() 创建多个 httpx.AsyncClient,每个都重新读 CA bundle。
+
+修复(4 处共 ~30 行):chat_engine 的 4 个 httpx.AsyncClient call site
++ memory_manager 的 2 个 _call_embedding_provider/_llm_call 改走
+self._get_client() 共享 long-lived client (timeout 通过 per-request
+override)。
+
+chat() cumulative time profile: 5.14s → 0.39s (13x 加速)。
 
 **未达 architect 预测 (75-85ms / 700-900ms)。**
+**v2.45 实测达成 seq 目标,conc 目标接近。**
 
 诚实记录(ADR-0002):
 - 同机 A/B 显示 fallback 路径与 writer-executor 路径无显著差异
@@ -1774,10 +1791,10 @@ v2.18 后的 21 个 commit 围绕三件事:**(a)** 用户真实使用系统暴�
 |---|---|---|
 | 1-10 | 同 §21.7 | ✅ (10 项不变) |
 | 11 | recall@5 ≥ 0.85 | ❌ 0.625 (算法侧) |
-| 12 | 单调用 P95 ≤ 80ms | ❌ ~200ms 实测 (v2.44 架构就位但未达成) |
-| 13 (new) | 并发 30 P95 ≤ 800ms | ❌ ~5200ms 实测 (同上) |
+| 12 | 单调用 P95 ≤ 80ms | ✅ **v2.45 达成 40.7ms** (远优于目标) |
+| 13 | 并发 30 P95 ≤ 800ms | ⚠️ **v2.45 达 960ms** (5.4x 改善,20% 内) |
 
-**10/13 = 77% 完成**(新增显式并发指标);剩余 3 项中 P95 两个为
-ADR-0002 文档记录的 open item,recall 仍是算法侧。
+**11/13 = 85% 完成** (v2.45 单调用目标达成);剩余 2 项中 conc P95 距
+目标 20% 内可在后续 round 继续 close,recall 仍是算法侧。
 
 ---
