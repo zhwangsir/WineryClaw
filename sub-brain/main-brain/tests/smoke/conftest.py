@@ -171,6 +171,17 @@ def _spawn_main_brain(
     # "Expected exactly one new mock-LLM call; got 2" → fail.
     env["WEBRAIN_HYDE_ENABLED"] = "0"
     env["WEBRAIN_REFLECTION_ENABLED"] = "0"
+    # v2.47 (2026-05-23): S3 working_memory does an async fire-and-forget
+    # `_chat_completion` after each chat returns. Pre-v2.45, every
+    # internal `_chat_completion` constructed its own httpx.AsyncClient
+    # (~100ms SSL setup), so the fire-and-forget call always landed at
+    # mock LLM *after* the test's `/__debug/calls` poll — invisible to
+    # the count. v2.45 (shared client) eliminated SSL setup, letting the
+    # fire-and-forget complete in <5ms. It now races into the poll
+    # window and the same `after_count == before_count + 1` assertion
+    # sees 2 calls. Disable in smoke for the same reason as HyDE /
+    # Reflection: behaviour is covered by unit tests.
+    env["WEBRAIN_WORKING_MEMORY_ENABLED"] = "0"
     # Force HOME to tmp so persisted files don't leak
     env["HOME"] = str(tmp_data_dir)
     # Redirect main-brain's data dir to the same tmp so memory.db,
