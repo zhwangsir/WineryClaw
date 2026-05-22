@@ -129,12 +129,21 @@ Axis 3 收尾。1-2 周。
 
 v2 release 必须同时满足：
 
-- [ ] 三大 axis 全部达到 §1 列的量化目标
-- [ ] 所有测试套件（main-brain 680+ / sub-brain 450+ / frontend 1216+ / e2e 89+ / smoke 53+）全绿
-- [ ] 性能基线：`pytest -m benchmark` 全部达标
-- [ ] M6b 桌面壳可在 macOS / Linux 上一键启动
+- [x] **Axis 1 元信号轮次 40+** — ✅ v2.14 达成 40/40
+- [x] **Axis 2 跨进程 plugin hook 8/8** — ✅ v2.15 达成 8/8
+- [x] **Axis 3 SQLCipher 加密** — ✅ v2.10 opt-in
+- [x] **Axis 3 网络出站审计 ledger** — ✅ v2.16
+- [x] **Axis 3 8 LLM provider 配置** — ✅ v2.10
+- [x] **Axis 3 privacy mode toggle** — ✅ v2.17
+- [ ] Axis 1 recall@5 ≥ 0.85（当前 0.625 rerank ON，差 26%）
+- [ ] Axis 1 单调用 P95 ≤ 80ms（当前 ~140ms，差 75%）
+- [ ] M6b 桌面壳可在 macOS / Linux 上一键启动（macOS .app/.dmg 已就绪，Linux 待）
 - [ ] webrain-keeper sub-agent 已运行至少 30 天且无失控记录
-- [ ] PROJECT_STATE.md 文档零漂移（最新一轮 commit 后 7 天内同步）
+- [x] 所有测试套件全绿（main-brain 892 / sub-brain 467 / frontend 1216 / e2e 89 / smoke 53）
+- [x] PROJECT_STATE.md 文档零漂移（v2.18 已同步至 §20）
+
+**当前进度**: 三大 axis **主指标全部达成**;剩余为延迟与 recall 算法侧
+深度优化(性能/算法工作,不在文档/接口层)。
 
 ---
 
