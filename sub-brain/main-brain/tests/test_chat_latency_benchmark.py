@@ -78,7 +78,13 @@ async def test_chat_latency_with_mock_llm(temp_dir, mock_llm_config, capsys):
         from concurrent.futures import ThreadPoolExecutor
         from memory._sqlite_executor import WriterExecutor as _Wx
 
-        ml_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bench-ml")
+        # v2.48 A/B prep: honour WEBRAIN_ML_EXECUTOR_WORKERS so the same
+        # benchmark can validate worker-count tuning without recompiling.
+        # Matches main_brain.py:160 default exactly (2). Bumping to 4
+        # locally is the v2.48 hypothesis for closing the conc 30 P95
+        # gap from 960ms → ≤800ms.
+        _bench_ml_workers = int(_os.environ.get("WEBRAIN_ML_EXECUTOR_WORKERS", "2"))
+        ml_executor = ThreadPoolExecutor(max_workers=_bench_ml_workers, thread_name_prefix="bench-ml")
         mm.set_ml_executor(ml_executor)
 
         def _wx_conn_factory():

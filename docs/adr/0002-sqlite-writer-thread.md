@@ -11,6 +11,25 @@
   Sprint 0.7 architecture (writer thread) remains in place — it is
   the right design for future SQLite-heavy workloads even though it
   wasn't the dominant bottleneck on the v2.44 measurement hardware.
+* Postscript (2026-05-23, v2.48 dev — knob retired): A/B benchmark
+  on the same hardware tested `WEBRAIN_ML_EXECUTOR_WORKERS ∈ {2, 4, 8}`
+  with `WEBRAIN_BENCH_WIRE_EXECUTORS=1`. Result is counter-intuitive
+  and worth recording so the next round doesn't re-test:
+  | workers | conc 30 P95 |
+  |---:|---:|
+  | 2 | 917 ms |
+  | 4 | 989 ms |
+  | 8 | 1052 ms |
+  More workers actively **hurt**. sentence-transformers `model.encode`
+  on CPU (torch.float32) doesn't release the GIL for the bulk of its
+  work and cache-thrashes when ≥3 threads contend. The remaining
+  gap to ≤ 800 ms cannot be closed by worker-count tuning alone — the
+  next surgical play is **embedder microbatch** (collect concurrent
+  `_local_embedding` requests in a small async coalescing layer, call
+  `model.encode([t1, t2, ...])` once; SentenceTransformers throughput
+  is 4-8x higher with batching). That's the next round's hypothesis,
+  not this one's. The latency benchmark (`tests/test_chat_latency_benchmark.py`)
+  honors `WEBRAIN_ML_EXECUTOR_WORKERS` so the A/B is reproducible.
 * Round: v2.44b–g
 * Deciders: project owner; architect sub-agent designed the plan
 * Supersedes: implicit "single connection pool serves both reads + writes" policy
