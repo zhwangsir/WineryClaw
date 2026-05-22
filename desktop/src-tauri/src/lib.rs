@@ -25,24 +25,37 @@
 //! Navigation menu items push the main window to the front and `eval()` a
 //! `location.href` change — the SPA's hash/history router picks it up. No
 //! frontend IPC plumbing required.
+//!
+//! v0.2 (2026-05-22) additions:
+//!   - Single-instance lock (second launch focuses the running app instead
+//!     of starting a duplicate that would EADDRINUSE on :3000).
+//!   - Async wait-for-health: after spawning sub-brain, hold the main and
+//!     popup windows hidden until `/health` returns 200, then show. Avoids
+//!     the "connection refused white screen" UX on first launch.
+//!   - Popup anchored to the tray icon's screen position on left-click,
+//!     not floating in the middle of the screen.
+//!   - Service status surfaced via `service_status` + a `webrain://ready`
+//!     event the frontend can listen for.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent,
+    Emitter, LogicalPosition, Manager, PhysicalPosition, RunEvent,
 };
 
 mod service_manager;
 
-use service_manager::ServiceManager;
+use service_manager::{ServiceManager, SpawnOutcome};
 
-/// Sub-brain origin — main + popup webviews load from this base. Hard-coded
-/// because the static.ts in sub-brain only serves on :3000 and the bind is
-/// not configurable in current wiring.
-const APP_BASE_URL: &str = "http://127.0.0.1:3000";
+/// How long to wait for sub-brain `/health` to return 200 before giving up
+/// and showing the windows anyway (so the user can see the error overlay).
+/// 45s is the same budget the smoke fixtures use (sentence-transformers
+/// cold-load + uvicorn bind takes ~30s on first launch).
+const HEALTH_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Resolve the repo root by walking up from the binary's CWD until we hit
 /// a directory containing `sub-brain/` and `frontend/`. Falls back to CWD.
@@ -76,18 +89,48 @@ fn show_popup(app: &tauri::AppHandle) {
     }
 }
 
-/// Left-click toggle: if popup visible, hide it; otherwise show it.
-fn toggle_popup(app: &tauri::AppHandle) {
+/// Anchor the popup to a position near the given tray-icon coordinates. We
+/// take the tray icon's screen position (top-right corner of the menu bar in
+/// macOS) and drop the popup just below + slightly to the left so it lines
+/// up naturally with the tray icon rather than floating at the screen center.
+///
+/// Position is in physical pixels (Tauri's PhysicalPosition); the popup is
+/// 400×580 logical pixels in tauri.conf.json. On macOS the menu bar is at
+/// the top of the screen, so we anchor below the click point.
+fn position_popup_near_tray(app: &tauri::AppHandle, tray_pos: PhysicalPosition<f64>) {
+    if let Some(popup) = app.get_webview_window("popup") {
+        // Popup width is 400 logical px; nudge left by half so it centers
+        // under the tray icon. Drop down 4 px so it doesn't overlap the
+        // menu bar.
+        // We accept that this is best-effort — multi-monitor setups with
+        // mixed DPI may misalign. Users can drag the popup; subsequent
+        // shows re-position to the new tray location.
+        let x = tray_pos.x - 200.0;
+        let y = tray_pos.y + 4.0;
+        let _ = popup.set_position(LogicalPosition::new(x, y));
+        let _ = popup.show();
+        let _ = popup.set_focus();
+        let _ = popup.set_always_on_top(true);
+    }
+}
+
+/// Left-click toggle: if popup visible, hide it; otherwise show it AND
+/// anchor to the tray position. We re-anchor on every show because the user
+/// might have a different display configuration than at launch.
+fn toggle_popup_at(app: &tauri::AppHandle, tray_pos: Option<PhysicalPosition<f64>>) {
     if let Some(popup) = app.get_webview_window("popup") {
         match popup.is_visible() {
             Ok(true) => {
                 let _ = popup.hide();
             }
-            _ => {
-                let _ = popup.show();
-                let _ = popup.set_focus();
-                let _ = popup.set_always_on_top(true);
-            }
+            _ => match tray_pos {
+                Some(pos) => position_popup_near_tray(app, pos),
+                None => {
+                    let _ = popup.show();
+                    let _ = popup.set_focus();
+                    let _ = popup.set_always_on_top(true);
+                }
+            },
         }
     }
 }
@@ -150,6 +193,63 @@ fn quit_with_shutdown(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
+/// After spawning services, run a background task that polls /health and,
+/// once the backend is up, shows the main window and emits `webrain://ready`
+/// to the frontend.
+///
+/// Why the main window starts hidden (tauri.conf.json `visible: false`):
+/// the webview's initial URL is sub-brain's :3000. If sub-brain isn't up
+/// yet, the webview hits ERR_CONNECTION_REFUSED and shows a Chromium error
+/// page — terrible first-launch UX. Holding the window hidden until /health
+/// passes means the user sees a brief dock-icon-only state, then a fully
+/// loaded SPA. On the failure path (timeout), we still show the window so
+/// the user can see what's wrong rather than face a permanently invisible app.
+fn schedule_health_signal(app: tauri::AppHandle, outcome: SpawnOutcome) {
+    std::thread::spawn(move || {
+        // If we attached to an existing service, /health is probably already
+        // up. Probe once with a short timeout and emit immediately on success.
+        let timeout = if outcome == SpawnOutcome::AlreadyRunning {
+            Duration::from_secs(3)
+        } else {
+            HEALTH_WAIT_TIMEOUT
+        };
+        let ready = {
+            let mgr_state = app.state::<Mutex<ServiceManager>>();
+            let mgr = mgr_state.lock().expect("service manager mutex poisoned");
+            mgr.wait_for_health(timeout)
+        };
+
+        // Show the main window regardless of /health outcome. If ready, the
+        // SPA loads instantly. If not, the user sees the error overlay (or
+        // can use right-click → Quit) instead of being stuck on dock icon.
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+
+        let payload = serde_json::json!({
+            "ready": ready,
+            "outcome": match outcome {
+                SpawnOutcome::Spawned => "spawned",
+                SpawnOutcome::AlreadyRunning => "attached_to_existing",
+                SpawnOutcome::Failed => "failed",
+            },
+            "timeout_s": timeout.as_secs(),
+        });
+        if let Err(e) = app.emit("webrain://ready", &payload) {
+            log::warn!("emit webrain://ready failed: {e}");
+        }
+        if !ready {
+            log::warn!(
+                "sub-brain did not become healthy within {}s — UI may show errors",
+                timeout.as_secs()
+            );
+        } else {
+            log::info!("sub-brain healthy — UI is good to go");
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::init();
@@ -159,19 +259,51 @@ pub fn run() {
     let service_mgr = ServiceManager::new(repo_root.clone());
 
     tauri::Builder::default()
+        // Single-instance plugin: if the user launches WeBrain a second time
+        // (double-clicking the dock icon, opening from Finder again, etc.),
+        // run this callback in the EXISTING process and exit the duplicate.
+        // We use it to bring the main window forward — far less confusing
+        // than the previous behavior where the second launch failed silently
+        // because :3000 was already bound.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            log::info!("second instance detected — focusing existing main window");
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.show();
+                let _ = main.unminimize();
+                let _ = main.set_focus();
+            }
+        }))
         .manage(Mutex::new(service_mgr))
         .invoke_handler(tauri::generate_handler![service_status])
         .setup(move |app| {
-            // Spawn sub-brain (which in turn spawns main-brain). If something
-            // is already listening on :3000 the spawn errors silently; the
-            // webview still loads against the existing service.
-            {
+            // Spawn sub-brain (which in turn spawns main-brain). The new
+            // ServiceManager returns SpawnOutcome so we know whether we
+            // started a fresh service, attached to an existing one, or
+            // failed entirely.
+            let outcome = {
                 let mgr_state = app.state::<Mutex<ServiceManager>>();
                 let mut mgr = mgr_state.lock().expect("service manager mutex poisoned");
-                if let Err(e) = mgr.spawn_all() {
-                    log::warn!("sub-brain spawn returned: {e} (likely already running)");
+                match mgr.spawn_all() {
+                    Ok(outcome) => {
+                        log::info!("spawn_all → {:?}", outcome);
+                        outcome
+                    }
+                    Err(e) => {
+                        // Spawn failed (probably PATH issue or missing pnpm).
+                        // We still build the rest of the UI so the user gets
+                        // a window with an actionable error, not just a
+                        // bouncing dock icon that disappears.
+                        log::error!(
+                            "sub-brain spawn failed: {e} — UI will show an error overlay"
+                        );
+                        SpawnOutcome::Failed
+                    }
                 }
-            }
+            };
+
+            // Kick off the health-poll background task. Emits `webrain://ready`
+            // when /health responds 200 — or after the timeout if it doesn't.
+            schedule_health_signal(app.handle().clone(), outcome);
 
             // Tray menu (right-click on macOS, left-click shows separately below).
             // Menu item IDs starting with "nav:" are routed through navigate_main_to.
@@ -232,10 +364,11 @@ pub fn run() {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
+                        position,
                         ..
                     } = event
                     {
-                        toggle_popup(tray.app_handle());
+                        toggle_popup_at(tray.app_handle(), Some(position));
                     }
                 })
                 .build(app)?;
@@ -244,6 +377,14 @@ pub fn run() {
             // suspenders ensure it stays hidden on boot.
             if let Some(popup) = app.get_webview_window("popup") {
                 let _ = popup.hide();
+            }
+
+            // Brief log to confirm where on disk our log files live — useful
+            // for users diagnosing spawn issues.
+            if let Some(mgr_state) = app.try_state::<Mutex<ServiceManager>>() {
+                if let Ok(mgr) = mgr_state.lock() {
+                    log::info!("service status at boot: {}", mgr.status());
+                }
             }
 
             Ok(())

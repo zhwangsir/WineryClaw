@@ -15,11 +15,25 @@ tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
 tauri = { version = "2.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "sync", "time"] }
 log = "0.4"
 env_logger = "0.11"
+# Resolve `pnpm` / `python3` when launched from Finder (GUI processes inherit
+# a minimal PATH on macOS — no shell rc files are sourced). v0.2 supports
+# discovering the user shell environment and looking up tools in standard
+# locations (Homebrew, NVM, pyenv, asdf).
+which = "6"
+# Standard cross-platform paths for log files (~/Library/Logs on macOS,
+# %APPDATA%/Logs on Windows, ~/.local/state on Linux).
+dirs = "5"
+
+# SIGTERM/SIGKILL signaling is Unix-only — Windows uses `Child::kill` which
+# is already in std. Gating the dep + uses keeps the Windows build clean.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }
 
 [features]
 default = []
