@@ -875,37 +875,64 @@ class MemoryManager:
 
         # Smart chunking for long content
         chunks = self._chunk_text(content)
-        stored_ids = []
+        stored_ids: List[str] = []
 
-        with self._connect() as conn:
-            if len(chunks) <= 1:
-                # Single chunk — store as-is
+        # v2.44f (Sprint 0.7 step 4c) — the entire chunk-INSERT block
+        # moves into a single _write_async closure so all chunks land
+        # in ONE transaction on the writer thread. Pre-v2.44f, every
+        # store() raced for the SQLite write lock; under 30-concurrent
+        # chat traffic this was the dominant contributor to P95 2450ms.
+        # Now writes form an orderly line at the WriterExecutor queue.
+        #
+        # The chunk-id pre-computation moves outside the closure so the
+        # function still mutates `stored_ids` deterministically. The
+        # writer thread only does the SQL.
+        if len(chunks) <= 1:
+            # Single-chunk row: preserve the pre-v2.44f behavior where
+            # `metadata` was omitted from the INSERT and SQLite filled in
+            # the schema default `'{}'`. Passing '{}' explicitly keeps
+            # downstream consumers (which expect a parseable JSON dict,
+            # not NULL) byte-identical to the old code.
+            insert_rows = [
+                (
+                    mem_id, level, content, source, session_id, now,
+                    "{}",  # metadata default for single-chunk rows
+                    importance, now, provenance_source, provenance_refs_json,
+                )
+            ]
+            stored_ids.append(mem_id)
+        else:
+            insert_rows = []
+            for i, chunk in enumerate(chunks):
+                cid = str(uuid.uuid4()) if i > 0 else mem_id
+                meta = json.dumps(
+                    {"chunk_index": i, "total_chunks": len(chunks), "parent_id": mem_id}
+                )
+                insert_rows.append(
+                    (
+                        cid, level, chunk, source, session_id, now, meta,
+                        importance, now, provenance_source, provenance_refs_json,
+                    )
+                )
+                stored_ids.append(cid)
+
+        def _do_inserts(conn: sqlite3.Connection) -> None:
+            # Use the metadata-aware schema for ALL rows; rows without
+            # chunk metadata pass NULL — sqlite3 accepts it for TEXT
+            # columns. This unifies the single- and multi-chunk paths
+            # into one INSERT statement, simpler than branching inside
+            # the writer thread.
+            for row in insert_rows:
                 conn.execute(
                     """INSERT INTO memories
-                       (id, level, content, source, session_id, created_at,
+                       (id, level, content, source, session_id, created_at, metadata,
                         importance, last_accessed_at, provenance_source, provenance_refs)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (mem_id, level, content, source, session_id, now,
-                     importance, now, provenance_source, provenance_refs_json),
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    row,
                 )
-                stored_ids.append(mem_id)
-            else:
-                # Multiple chunks — store each with chunk metadata. All chunks
-                # share the same importance + provenance — they're the same
-                # logical memory, just sliced.
-                for i, chunk in enumerate(chunks):
-                    cid = str(uuid.uuid4()) if i > 0 else mem_id
-                    meta = json.dumps({"chunk_index": i, "total_chunks": len(chunks), "parent_id": mem_id})
-                    conn.execute(
-                        """INSERT INTO memories
-                           (id, level, content, source, session_id, created_at, metadata,
-                            importance, last_accessed_at, provenance_source, provenance_refs)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (cid, level, chunk, source, session_id, now, meta,
-                         importance, now, provenance_source, provenance_refs_json),
-                    )
-                    stored_ids.append(cid)
             conn.commit()
+
+        await self._write_async(_do_inserts)
 
         # Auto-extract semantic info for L2+ and L3
         if level in ("L2", "L3") and len(content) > 10:
