@@ -172,12 +172,17 @@ jobs:
   # change (e.g. macOS-only API, missing #[cfg] guard) sneaks through.
   #
   # Strategy: cargo check + cargo test --lib on Ubuntu, with Tauri's
-  # webview dependencies installed. We deliberately do NOT run the full
-  # `tauri build` (5+ minutes, produces .deb/.AppImage artifacts) on every
-  # PR — that's reserved for release tags via a separate workflow when
-  # we ship binaries. The cheap `cargo check` catches the bug class we
-  # care about: Linux-only Rust compile failures, missing #[cfg(unix)]
-  # guards, dependency resolution issues.
+  # webview dependencies installed.
+  #
+  # v2.43 (Sprint 0.7 GA prep): the previous "cheap check only" stance has
+  # been upgraded. ROADMAP V2 §4 lists "桌面壳可在 Linux 一键启动" as a
+  # v2 completion criterion, and a `cargo check` alone has zero coverage
+  # of the bundling pipeline (frontend dist → tauri bundle → .deb). We now
+  # additionally run `tauri build --bundles deb` and verify the resulting
+  # .deb package structure on PRs. ~3–5 min added; cargo cache keeps it
+  # to <90s on warm runs. The smoke step intentionally does NOT launch
+  # the binary (CI has no X server) — that gap is covered by macOS
+  # manual QA + the e2e-boot-smoke job's spawn of the headless services.
   # ---------------------------------------------------------------------
   desktop-linux:
     runs-on: ubuntu-latest
@@ -228,3 +233,64 @@ jobs:
           cd desktop/src-tauri
           cargo clippy --all-targets -- -D warnings
         timeout-minutes: 10
+
+      # v2.43 — tauri build + .deb smoke. Splits into Node setup,
+      # frontend build (Tauri's beforeBuildCommand runs `cd ../frontend
+      # && pnpm build` — but we install deps explicitly here so the
+      # build step doesn't double up), then the bundle, then structural
+      # verification. Only the .deb bundle is produced (skips rpm /
+      # appimage) — that's the most representative Linux artifact and
+      # we don't want the job to balloon to 15 min.
+      - name: Setup Node for frontend bundle
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - name: Install frontend deps
+        run: cd frontend && pnpm install --frozen-lockfile
+      - name: Install desktop deps
+        run: cd desktop && pnpm install --frozen-lockfile
+      - name: Tauri build (.deb only)
+        # `tauri build --bundles deb` skips rpm / appimage. The frontend
+        # build is triggered via Tauri's beforeBuildCommand
+        # ("cd ../frontend && pnpm build"). --ci suppresses the
+        # interactive update prompt that Tauri shows on stdout.
+        run: cd desktop && pnpm tauri build --bundles deb --ci
+        timeout-minutes: 15
+      - name: Verify .deb structure (smoke)
+        # The build produced exactly ONE deb under
+        # target/release/bundle/deb/. We assert:
+        #   1. file exists + filename starts with the productName
+        #   2. dpkg-deb -I parses control metadata
+        #   3. dpkg-deb -c lists the expected binary path
+        #   4. extract the binary; verify it's ELF and `ldd` has no
+        #      "not found" lines (catches missing runtime libs that
+        #      would explode at user startup time)
+        run: |
+          set -euo pipefail
+          DEB=$(ls desktop/src-tauri/target/release/bundle/deb/*.deb | head -n1)
+          echo "Built .deb: $DEB"
+          test -f "$DEB"
+          dpkg-deb -I "$DEB"
+          echo "--- contents ---"
+          dpkg-deb -c "$DEB" | grep -E "usr/bin/(WeBrain|webrain)" \
+            || (echo "expected WeBrain binary missing from .deb"; exit 1)
+          mkdir -p /tmp/deb-extract
+          dpkg-deb -x "$DEB" /tmp/deb-extract
+          BIN=$(find /tmp/deb-extract/usr/bin -type f | head -n1)
+          echo "Extracted binary: $BIN"
+          file "$BIN" | grep -q "ELF" \
+            || (echo "binary is not ELF"; exit 1)
+          # ldd shows missing libs as "not found". A clean output has
+          # none. We grep -v to strip the "linux-vdso" line which has
+          # no path resolution.
+          echo "--- ldd ---"
+          ldd "$BIN" || true
+          if ldd "$BIN" 2>&1 | grep -E "not found" >/dev/null; then
+            echo "FATAL: .deb binary has unresolved shared library deps"
+            ldd "$BIN" 2>&1 | grep -E "not found"
+            exit 1
+          fi
+          echo "✓ .deb bundle smoke passed"

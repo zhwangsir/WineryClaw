@@ -395,7 +395,14 @@ class MemoryManager:
     # the F2 chat-latency benchmark uses 30 concurrent + most are
     # write-heavy so 4 is a reasonable middle ground (above 4, contention
     # on the SQLite write lock outweighs connect-cost savings).
-    _POOL_SIZE = int(os.environ.get("WEBRAIN_SQLITE_POOL_SIZE", "4"))
+    #
+    # v2.43 (Sprint 0.7 quick win): bumped default 4 → 6. database-reviewer
+    # audit found that 30-concurrent benchmarks burn ~12-15% of P95 on
+    # "pool empty → fall through to ad-hoc connect-and-close" rather than
+    # write-lock contention. A pool of 6 keeps the steady-state hit rate
+    # higher without hitting the SQLite write-lock saturation cliff. The
+    # bigger conc-30 P95 win comes from v2.44 (writer thread + read pool).
+    _POOL_SIZE = int(os.environ.get("WEBRAIN_SQLITE_POOL_SIZE", "6"))
 
     def __init__(self, db_path: Optional[str] = None, llm_config: Optional[Dict] = None):
         self._db_path = db_path or str(Path.home() / ".webrain" / "memory.db")
@@ -504,6 +511,14 @@ class MemoryManager:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=5000")
+            # v2.43 (Sprint 0.7 quick win, zero-risk per database-reviewer
+            # audit): negative cache_size = "KiB", so -8000 = 8 MiB page
+            # cache per connection. With pool size 6 that's 48 MiB
+            # steady-state — fine on any modern host. temp_store=MEMORY
+            # keeps intermediate FTS5 / ORDER BY tmps off disk. Both are
+            # idempotent and SQLCipher-compatible.
+            conn.execute("PRAGMA cache_size=-8000")
+            conn.execute("PRAGMA temp_store=MEMORY")
         except sqlite3.DatabaseError as e:
             logger.debug("sqlite pool pragma setup partial: %s", e)
         return conn
