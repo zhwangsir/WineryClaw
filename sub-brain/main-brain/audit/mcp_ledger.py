@@ -59,6 +59,28 @@ def _is_disabled() -> bool:
     return os.environ.get("WEBRAIN_MCP_AUDIT_DISABLED") == "1"
 
 
+def _default_max_bytes() -> int:
+    """Hard ceiling for the .jsonl file before single-step rotation kicks
+    in. 10 MB ≈ 50k typical rows (~200 B each); plenty for several weeks
+    of normal use, capped so a runaway process can't fill the disk.
+
+    Override via `WEBRAIN_MCP_AUDIT_MAX_BYTES`. Set to `0` to disable
+    rotation entirely (legacy v2.29 behavior — append forever).
+    """
+    raw = os.environ.get("WEBRAIN_MCP_AUDIT_MAX_BYTES")
+    if raw is None:
+        return 10 * 1024 * 1024
+    try:
+        n = int(raw)
+        return max(0, n)
+    except ValueError:
+        logger.warning(
+            "Invalid WEBRAIN_MCP_AUDIT_MAX_BYTES=%r — defaulting to 10 MB",
+            raw,
+        )
+        return 10 * 1024 * 1024
+
+
 def hash_bearer(bearer: Optional[str]) -> Optional[str]:
     """Return a deterministic short identifier for a bearer token.
 
@@ -113,12 +135,25 @@ class MCPLedger:
     are safe to fire-and-forget from asyncio handlers.
     """
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        path: Optional[Path] = None,
+        *,
+        max_bytes: Optional[int] = None,
+    ) -> None:
         self.path: Path = path or _default_path()
+        # v2.39: single-step rotation. When the active file exceeds
+        # `max_bytes`, we atomically rename it to `<path>.1` (overwriting
+        # any prior `.1`) and continue writing to a fresh empty primary.
+        # `max_bytes == 0` disables rotation (legacy behavior).
+        self._max_bytes: int = (
+            max_bytes if max_bytes is not None else _default_max_bytes()
+        )
         self._lock = Lock()
         # Rate-limit OSError warnings so test fixtures with disappearing
         # HOME don't spam the log.
         self._warned_oserror = False
+        self._warned_rotate_err = False
         if not _is_disabled():
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +163,54 @@ class MCPLedger:
                     self.path.parent,
                     e,
                 )
+
+    @property
+    def rotated_path(self) -> Path:
+        """Path of the single rotated-out file. Useful for tests / UI."""
+        return self.path.with_suffix(self.path.suffix + ".1")
+
+    def _rotate_if_needed(self) -> None:
+        """If active file is over `max_bytes`, rotate it to `<path>.1`.
+
+        Called WITH `self._lock` held. Best-effort — any OSError is
+        swallowed (warn-once) so the audit path never crashes the actual
+        MCP call. A failed rotation leaves the file as-is and writes
+        continue to append (degraded mode — disk fills more slowly than
+        with no limit, but rotation should be retried next time).
+        """
+        if self._max_bytes <= 0:
+            return
+        try:
+            size = self.path.stat().st_size
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            logger.debug("rotation size-check failed: %s", e)
+            return
+        if size < self._max_bytes:
+            return
+        try:
+            # os.replace is atomic on POSIX + Windows and overwrites the
+            # destination if it exists — exactly what we want for
+            # single-step rotation. After this, the next `open(self.path,
+            # "a")` will create a fresh empty file.
+            os.replace(self.path, self.rotated_path)
+            logger.info(
+                "MCP audit ledger rotated at %d bytes: %s -> %s",
+                size,
+                self.path,
+                self.rotated_path,
+            )
+        except OSError as e:
+            if not self._warned_rotate_err:
+                logger.warning(
+                    "Could not rotate MCP audit ledger %s -> %s: %s — "
+                    "continuing to append (file may grow past max_bytes)",
+                    self.path,
+                    self.rotated_path,
+                    e,
+                )
+                self._warned_rotate_err = True
 
     def record(
         self,
@@ -166,6 +249,11 @@ class MCPLedger:
         line = json.dumps(entry, ensure_ascii=False) + "\n"
         try:
             with self._lock:
+                # v2.39: check size BEFORE append so a single oversized row
+                # can still land in the rotated file (vs. forever-orphan in
+                # the active one). The lock around rotate+append makes the
+                # sequence atomic w.r.t. other in-process recorders.
+                self._rotate_if_needed()
                 with open(self.path, "a", encoding="utf-8") as fp:
                     fp.write(line)
         except OSError as e:
@@ -196,16 +284,25 @@ class MCPLedger:
           - scope:    "read" | "write"
           - success:  True / False
 
+        v2.39: also reads from `<path>.1` (the rotated-out file) when
+        present, so callers don't see history disappear at the rotation
+        boundary. Read order: `.1` first (older), then active (newer),
+        so the chronological reverse-then-take-limit still yields the
+        true most-recent N entries.
+
         Empty ledger or read failure → empty list. Malformed JSON lines
         are skipped silently (audit ledger is forward-evolving; older
         records that don't parse just don't surface).
         """
-        if _is_disabled() or not self.path.exists():
+        if _is_disabled():
             return []
         rows: List[Dict[str, Any]] = []
-        try:
-            with self._lock:
-                with open(self.path, "r", encoding="utf-8") as fp:
+
+        def _read_into(target: Path) -> None:
+            if not target.exists():
+                return
+            try:
+                with open(target, "r", encoding="utf-8") as fp:
                     for line in fp:
                         line = line.strip()
                         if not line:
@@ -221,10 +318,18 @@ class MCPLedger:
                         if success is not None and entry.get("success") is not success:
                             continue
                         rows.append(entry)
+            except OSError as e:
+                logger.debug("Failed reading MCP audit ledger %s: %s", target, e)
+
+        try:
+            with self._lock:
+                _read_into(self.rotated_path)
+                _read_into(self.path)
         except OSError as e:
             logger.debug("Failed reading MCP audit ledger: %s", e)
             return []
-        # Most recent first — file is chronological, so reverse.
+        # Most recent first — both files are chronological + active is
+        # newer than rotated, so concatenation is already chronological.
         rows.reverse()
         return rows[:limit]
 
@@ -233,8 +338,11 @@ class MCPLedger:
 
         Lightweight scan of the whole file; for large ledgers a downstream
         consumer should switch to a streaming/indexed implementation.
+
+        v2.39: also counts entries in `<path>.1` (the rotated-out file)
+        so stats remain stable across rotation boundaries.
         """
-        if _is_disabled() or not self.path.exists():
+        if _is_disabled():
             return {
                 "total": 0,
                 "by_tool": {},
@@ -247,9 +355,13 @@ class MCPLedger:
         success = 0
         failure = 0
         total = 0
-        try:
-            with self._lock:
-                with open(self.path, "r", encoding="utf-8") as fp:
+
+        def _accumulate(target: Path) -> None:
+            nonlocal total, success, failure
+            if not target.exists():
+                return
+            try:
+                with open(target, "r", encoding="utf-8") as fp:
                     for line in fp:
                         line = line.strip()
                         if not line:
@@ -267,8 +379,13 @@ class MCPLedger:
                             success += 1
                         else:
                             failure += 1
-        except OSError as e:
-            logger.debug("Failed reading MCP audit ledger for stats: %s", e)
+            except OSError as e:
+                logger.debug("Failed reading %s for stats: %s", target, e)
+
+        with self._lock:
+            _accumulate(self.rotated_path)
+            _accumulate(self.path)
+
         return {
             "total": total,
             "by_tool": by_tool,

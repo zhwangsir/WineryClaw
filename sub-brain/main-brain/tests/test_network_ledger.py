@@ -243,3 +243,148 @@ class TestUnicodeAndLargePayload:
         )
         entry = json.loads(tmp_ledger.path.read_text(encoding="utf-8").strip())
         assert entry["error"] == long_err
+
+
+# ── v2.39 — Single-step file rotation ────────────────────────────────
+
+
+class TestRotation:
+    """Verify the single-step rotation introduced in v2.39 keeps the
+    network ledger file size bounded while preserving cross-rotation
+    history. Mirrors test_mcp_ledger.TestRotation.
+    """
+
+    def test_rotation_kicks_in_at_max_bytes(self, tmp_path: Path) -> None:
+        path = tmp_path / "ledger.jsonl"
+        l = NetworkLedger(path=path, max_bytes=400)
+        for i in range(20):
+            l.record_success(
+                endpoint=f"ep_{i}",
+                base_url="http://x",
+                model="m",
+                latency_ms=10.0,
+                request_bytes=100,
+                response_bytes=200,
+            )
+        # Rotation happened at least once → .1 exists.
+        assert l.rotated_path.exists()
+        # Disk usage is bounded: with "check-then-write" semantics the
+        # active file can grow up to ~2× max_bytes between rotations
+        # (the last legal write + one more before the next check fires).
+        assert path.stat().st_size < 2 * 400
+
+    def test_recent_entries_spans_rotated_and_active(self, tmp_path: Path) -> None:
+        """Read path must span `.1` + active so the most recent rotation's
+        history is preserved. Staged directly to avoid brittle byte-size
+        dependencies."""
+        path = tmp_path / "ledger.jsonl"
+        l = NetworkLedger(path=path, max_bytes=10_000)
+        # Stage a pre-existing .1 with two rows.
+        l.rotated_path.write_text(
+            json.dumps({"ts": "T0", "endpoint": "ep_old_0", "success": True}) + "\n"
+            + json.dumps({"ts": "T1", "endpoint": "ep_old_1", "success": True}) + "\n",
+            encoding="utf-8",
+        )
+        # Add an active entry.
+        l.record_success(
+            endpoint="ep_new_2",
+            base_url="http://x",
+            model="m",
+            latency_ms=10.0,
+            request_bytes=100,
+            response_bytes=200,
+        )
+        entries = l.recent_entries(limit=50)
+        # All 3 visible; chronological order (oldest first per
+        # NetworkLedger's existing contract).
+        assert [e["endpoint"] for e in entries] == [
+            "ep_old_0",
+            "ep_old_1",
+            "ep_new_2",
+        ]
+
+    def test_count_spans_rotated_and_active(self, tmp_path: Path) -> None:
+        path = tmp_path / "ledger.jsonl"
+        l = NetworkLedger(path=path, max_bytes=10_000)
+        # Stage 5 rows in .1 + 3 in active.
+        l.rotated_path.write_text(
+            "\n".join(
+                json.dumps({"ts": f"T{i}", "endpoint": "old", "success": True})
+                for i in range(5)
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        for _ in range(3):
+            l.record_success(
+                endpoint="active",
+                base_url="http://x",
+                model="m",
+                latency_ms=10.0,
+                request_bytes=100,
+                response_bytes=200,
+            )
+        assert l.count() == 8
+
+    def test_max_bytes_zero_disables_rotation(self, tmp_path: Path) -> None:
+        path = tmp_path / "ledger.jsonl"
+        l = NetworkLedger(path=path, max_bytes=0)
+        for i in range(30):
+            l.record_success(
+                endpoint="ep",
+                base_url="http://x",
+                model="m",
+                latency_ms=10.0,
+                request_bytes=100,
+                response_bytes=200,
+            )
+        assert not l.rotated_path.exists()
+        assert l.count() == 30
+
+    def test_default_max_bytes_is_10mb(self) -> None:
+        from audit.network_ledger import _default_max_bytes
+
+        assert _default_max_bytes() == 10 * 1024 * 1024
+
+    def test_env_override_for_max_bytes(self, monkeypatch) -> None:
+        from audit.network_ledger import _default_max_bytes
+
+        monkeypatch.setenv("WEBRAIN_NETWORK_LEDGER_MAX_BYTES", "1024")
+        assert _default_max_bytes() == 1024
+        monkeypatch.setenv("WEBRAIN_NETWORK_LEDGER_MAX_BYTES", "0")
+        assert _default_max_bytes() == 0
+        monkeypatch.setenv("WEBRAIN_NETWORK_LEDGER_MAX_BYTES", "garbage")
+        assert _default_max_bytes() == 10 * 1024 * 1024
+
+    def test_rotation_failure_does_not_break_record(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import audit.network_ledger as mod
+
+        path = tmp_path / "ledger.jsonl"
+        l = NetworkLedger(path=path, max_bytes=200)
+        for _ in range(5):
+            l.record_success(
+                endpoint="seed",
+                base_url="http://x",
+                model="m",
+                latency_ms=10.0,
+                request_bytes=100,
+                response_bytes=200,
+            )
+
+        def boom(*_a, **_kw):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(mod.os, "replace", boom)
+        # Must not raise.
+        l.record_success(
+            endpoint="post_fail",
+            base_url="http://x",
+            model="m",
+            latency_ms=10.0,
+            request_bytes=100,
+            response_bytes=200,
+        )
+        entries = l.recent_entries(limit=100)
+        assert any(e["endpoint"] == "post_fail" for e in entries)

@@ -61,6 +61,28 @@ def _is_disabled() -> bool:
     return os.environ.get("WEBRAIN_NETWORK_LEDGER_DISABLED") == "1"
 
 
+def _default_max_bytes() -> int:
+    """Hard ceiling for the .jsonl file before single-step rotation kicks
+    in. 10 MB is generous for the compact rows here (~150 B each), capped
+    so a chatty deployment can't fill the user's disk silently.
+
+    Override via `WEBRAIN_NETWORK_LEDGER_MAX_BYTES`. Set to `0` to
+    disable rotation entirely (legacy v2.16 behavior — append forever).
+    """
+    raw = os.environ.get("WEBRAIN_NETWORK_LEDGER_MAX_BYTES")
+    if raw is None:
+        return 10 * 1024 * 1024
+    try:
+        n = int(raw)
+        return max(0, n)
+    except ValueError:
+        logger.warning(
+            "Invalid WEBRAIN_NETWORK_LEDGER_MAX_BYTES=%r — defaulting to 10 MB",
+            raw,
+        )
+        return 10 * 1024 * 1024
+
+
 class NetworkLedger:
     """Append-only audit ledger for outbound LLM HTTP calls.
 
@@ -70,9 +92,22 @@ class NetworkLedger:
     JSON serialization deterministic).
     """
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        path: Optional[Path] = None,
+        *,
+        max_bytes: Optional[int] = None,
+    ) -> None:
         self.path: Path = path or _default_ledger_path()
+        # v2.39: single-step rotation (see mcp_ledger.py for the design).
+        # When the active file exceeds `max_bytes` we rename it to
+        # `<path>.1` (overwriting any prior `.1`) and continue writing
+        # to a fresh empty primary. max_bytes == 0 disables rotation.
+        self._max_bytes: int = (
+            max_bytes if max_bytes is not None else _default_max_bytes()
+        )
         self._lock = Lock()
+        self._warned_rotate_err = False
         if not _is_disabled():
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +117,48 @@ class NetworkLedger:
                     self.path.parent,
                     e,
                 )
+
+    @property
+    def rotated_path(self) -> Path:
+        """Path of the single rotated-out file."""
+        return self.path.with_suffix(self.path.suffix + ".1")
+
+    def _rotate_if_needed(self) -> None:
+        """Atomically rotate active file → `.1` if over `max_bytes`.
+
+        Best-effort. Called with `self._lock` held. Failures are
+        logged-once at warn, then debug — never raised (audit must not
+        crash the LLM call path).
+        """
+        if self._max_bytes <= 0:
+            return
+        try:
+            size = self.path.stat().st_size
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            logger.debug("network_ledger size-check failed: %s", e)
+            return
+        if size < self._max_bytes:
+            return
+        try:
+            os.replace(self.path, self.rotated_path)
+            logger.info(
+                "network_ledger rotated at %d bytes: %s -> %s",
+                size,
+                self.path,
+                self.rotated_path,
+            )
+        except OSError as e:
+            if not self._warned_rotate_err:
+                logger.warning(
+                    "Could not rotate network_ledger %s -> %s: %s — "
+                    "continuing to append (file may grow past max_bytes)",
+                    self.path,
+                    self.rotated_path,
+                    e,
+                )
+                self._warned_rotate_err = True
 
     # ── write side ─────────────────────────────────────────────────────
 
@@ -118,6 +195,10 @@ class NetworkLedger:
         line = json.dumps(entry, ensure_ascii=False) + "\n"
         try:
             with self._lock:
+                # v2.39: rotate BEFORE append so a single oversized row
+                # still lands in the rotated file. Lock guarantees the
+                # rotate+append sequence is atomic w.r.t. other recorders.
+                self._rotate_if_needed()
                 with open(self.path, "a", encoding="utf-8") as fp:
                     fp.write(line)
         except OSError as e:
@@ -176,22 +257,27 @@ class NetworkLedger:
     def recent_entries(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Return the last `limit` parsed JSONL entries, oldest→newest.
 
-        Corrupt lines are skipped (best-effort tolerance). Missing file
-        returns `[]`. The recipient typically reverses if newest-first
-        order is required.
+        v2.39: also reads `<path>.1` (the rotated-out file) when present
+        so callers don't see history vanish across a rotation boundary.
+        `.1` lines come first (older), then active file (newer); the
+        oldest→newest contract is preserved.
+
+        Corrupt lines are skipped (best-effort tolerance). Missing files
+        return `[]`. The recipient typically reverses for newest-first
+        display.
         """
-        if not self.path.exists():
-            return []
-        try:
-            with open(self.path, "r", encoding="utf-8") as fp:
-                # Tail-N: read whole file (audit logs are small),
-                # take last N lines.
-                lines = fp.readlines()
-        except OSError as e:
-            logger.warning("Failed to read network_ledger: %s", e)
-            return []
+        all_lines: List[str] = []
+        for target in (self.rotated_path, self.path):
+            if not target.exists():
+                continue
+            try:
+                with open(target, "r", encoding="utf-8") as fp:
+                    all_lines.extend(fp.readlines())
+            except OSError as e:
+                logger.warning("Failed to read %s: %s", target, e)
         out: List[Dict[str, Any]] = []
-        for line in lines[-limit:]:
+        # Tail-N across the combined oldest→newest stream.
+        for line in all_lines[-limit:]:
             line = line.strip()
             if not line:
                 continue
@@ -202,14 +288,17 @@ class NetworkLedger:
         return out
 
     def count(self) -> int:
-        """Total rows in the ledger. 0 if file missing."""
-        if not self.path.exists():
-            return 0
-        try:
-            with open(self.path, "r", encoding="utf-8") as fp:
-                return sum(1 for line in fp if line.strip())
-        except OSError:
-            return 0
+        """Total rows across active + rotated file. 0 if both missing."""
+        total = 0
+        for target in (self.path, self.rotated_path):
+            if not target.exists():
+                continue
+            try:
+                with open(target, "r", encoding="utf-8") as fp:
+                    total += sum(1 for line in fp if line.strip())
+            except OSError:
+                continue
+        return total
 
 
 # Module-level singleton for the running process.

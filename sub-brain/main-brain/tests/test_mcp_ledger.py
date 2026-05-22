@@ -238,3 +238,171 @@ class TestRobustness:
         # When disabled, record is a no-op and the file should not exist.
         assert not (tmp_path / "audit.jsonl").exists()
         assert l.recent_entries() == []
+
+
+# ── v2.39 — Single-step file rotation ────────────────────────────────
+
+
+class TestRotation:
+    """Verify the single-step rotation introduced in v2.39 keeps the
+    ledger file size bounded while preserving cross-rotation history.
+
+    Design recap: when the active file exceeds `max_bytes`, it is
+    renamed to `<path>.1` (overwriting any prior `.1`) and new writes
+    create a fresh empty active file. Read paths (`recent_entries` and
+    `stats`) read from `.1` first, then active, so history is seamless.
+    """
+
+    def test_rotation_kicks_in_at_max_bytes(self, tmp_path: Path) -> None:
+        # Each row is ~200 bytes; cap at 600 bytes so 3-4 rows triggers
+        # rotation. Test runs in <50ms.
+        path = tmp_path / "audit.jsonl"
+        l = MCPLedger(path=path, max_bytes=600)
+        for i in range(10):
+            l.record(
+                tool=f"tool_{i}",
+                scope="write",
+                success=True,
+                latency_ms=1.0,
+                args_summary={"i": i},
+            )
+        # After 10 records, .1 must exist (rotation happened at least once).
+        assert l.rotated_path.exists(), "rotated file .1 should be created"
+        # Disk usage bounded: "check-then-write" lets active grow up to
+        # ~2× max_bytes before the next rotate fires.
+        assert path.stat().st_size < 2 * 600
+
+    def test_recent_entries_spans_rotated_and_active(self, tmp_path: Path) -> None:
+        """After rotation, recent_entries must read from BOTH files so
+        the UI doesn't lose history at the latest rotation boundary.
+
+        We stage the file state directly (rather than triggering rotation
+        via record() calls — which depends on per-row byte size and could
+        be brittle) so the assertion is on the read-path behavior only.
+        """
+        path = tmp_path / "audit.jsonl"
+        l = MCPLedger(path=path, max_bytes=10_000)  # high cap, no live rotation
+        # Stage a `.1` file containing older rows.
+        l.rotated_path.write_text(
+            json.dumps({"ts": "T0", "tool": "old_0", "scope": "read", "success": True}) + "\n"
+            + json.dumps({"ts": "T1", "tool": "old_1", "scope": "read", "success": True}) + "\n",
+            encoding="utf-8",
+        )
+        # Write a fresh active entry.
+        l.record(tool="new_2", scope="read", success=True, latency_ms=1.0)
+
+        entries = l.recent_entries(limit=10)
+        # All 3 visible (2 rotated + 1 active), newest-first.
+        assert [e["tool"] for e in entries] == ["new_2", "old_1", "old_0"]
+
+    def test_stats_spans_rotated_and_active(self, tmp_path: Path) -> None:
+        """Same as above but for stats() aggregation."""
+        path = tmp_path / "audit.jsonl"
+        l = MCPLedger(path=path, max_bytes=10_000)
+        # Stage .1 with 3 successes + 1 failure on tool "a"
+        rotated_lines = [
+            json.dumps({"tool": "a", "scope": "read", "success": True}),
+            json.dumps({"tool": "a", "scope": "read", "success": True}),
+            json.dumps({"tool": "a", "scope": "read", "success": True}),
+            json.dumps({"tool": "a", "scope": "read", "success": False}),
+        ]
+        l.rotated_path.write_text("\n".join(rotated_lines) + "\n", encoding="utf-8")
+        # Add 2 active rows on tool "b"
+        l.record(tool="b", scope="write", success=True, latency_ms=1.0)
+        l.record(tool="b", scope="write", success=False, latency_ms=1.0)
+
+        s = l.stats()
+        # Across both files: 6 total, by_tool={a:4, b:2}, success=4, failure=2
+        assert s["total"] == 6
+        assert s["by_tool"] == {"a": 4, "b": 2}
+        assert s["by_scope"] == {"read": 4, "write": 2}
+        assert s["success"] == 4
+        assert s["failure"] == 2
+
+    def test_max_bytes_zero_disables_rotation(self, tmp_path: Path) -> None:
+        """`max_bytes=0` preserves legacy v2.29 behavior (no rotation)."""
+        path = tmp_path / "audit.jsonl"
+        l = MCPLedger(path=path, max_bytes=0)
+        for i in range(30):
+            l.record(tool="t", scope="read", success=True, latency_ms=1.0)
+        # No .1 ever created.
+        assert not l.rotated_path.exists()
+        # All 30 in the single active file.
+        assert l.stats()["total"] == 30
+
+    def test_default_max_bytes_is_10mb(self) -> None:
+        """The default cap should NOT trigger on typical test fixtures.
+
+        We don't want every test in the repo to accidentally start
+        rotating mid-run because the default became too small.
+        """
+        from audit.mcp_ledger import _default_max_bytes
+
+        assert _default_max_bytes() == 10 * 1024 * 1024
+
+    def test_env_override_for_max_bytes(self, monkeypatch) -> None:
+        from audit.mcp_ledger import _default_max_bytes
+
+        monkeypatch.setenv("WEBRAIN_MCP_AUDIT_MAX_BYTES", "1024")
+        assert _default_max_bytes() == 1024
+        monkeypatch.setenv("WEBRAIN_MCP_AUDIT_MAX_BYTES", "0")
+        assert _default_max_bytes() == 0
+        # Invalid value falls back to default.
+        monkeypatch.setenv("WEBRAIN_MCP_AUDIT_MAX_BYTES", "not-a-number")
+        assert _default_max_bytes() == 10 * 1024 * 1024
+        # Negative clamps to 0 (rotation disabled).
+        monkeypatch.setenv("WEBRAIN_MCP_AUDIT_MAX_BYTES", "-5")
+        assert _default_max_bytes() == 0
+
+    def test_rotation_overwrites_prior_dot1(self, tmp_path: Path) -> None:
+        """Single-step rotation: when called twice the .1 file is
+        OVERWRITTEN, not accumulated as .1, .2, .3 — this is the design
+        trade-off (bounded disk usage vs unbounded multi-generation log
+        rotation). We verify by staging an initial .1 with sentinel
+        content and ensuring it's gone after a triggered rotation.
+        """
+        path = tmp_path / "audit.jsonl"
+        # Stage a pre-existing .1 with a sentinel.
+        sentinel_line = json.dumps({"tool": "OLD_SENTINEL", "scope": "x"}) + "\n"
+        rotated = path.with_suffix(path.suffix + ".1")
+        rotated.write_text(sentinel_line, encoding="utf-8")
+
+        # Now trigger rotation: fill active past max_bytes, then write
+        # one more to cause rotate.
+        l = MCPLedger(path=path, max_bytes=200)
+        for i in range(5):
+            l.record(tool=f"new_{i}", scope="write", success=True, latency_ms=1.0)
+        # After enough writes, .1 must have been overwritten — the
+        # OLD_SENTINEL is gone.
+        assert l.rotated_path.exists()
+        rotated_text = l.rotated_path.read_text(encoding="utf-8")
+        assert "OLD_SENTINEL" not in rotated_text, (
+            "single-step rotation must OVERWRITE prior .1, but old sentinel "
+            "is still present — multi-generation rotation slipped in"
+        )
+        # And no .2 / .3 etc was created.
+        assert not (tmp_path / "audit.jsonl.2").exists()
+
+    def test_rotation_failure_does_not_break_record(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A failed rotation must still allow record() to append (degraded
+        mode) — audit ledger NEVER crashes the MCP path."""
+        import audit.mcp_ledger as mod
+
+        path = tmp_path / "audit.jsonl"
+        l = MCPLedger(path=path, max_bytes=200)
+        # Fill once to seed the active file.
+        for i in range(5):
+            l.record(tool="seed", scope="read", success=True, latency_ms=1.0)
+
+        # Simulate rename failure on the NEXT rotation attempt.
+        def boom(*_a, **_kw):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(mod.os, "replace", boom)
+        # Should not raise; should still append.
+        l.record(tool="post_fail", scope="read", success=True, latency_ms=1.0)
+        # The active file now exists and contains at least the post_fail row.
+        entries = l.recent_entries(limit=100)
+        assert any(e["tool"] == "post_fail" for e in entries)
