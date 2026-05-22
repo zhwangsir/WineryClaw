@@ -87,13 +87,15 @@ jobs:
   # intentionally NOT spawning the backend stack — bootstrapping main-brain
   # (Python venv + sentence-transformers cold-load, ~500 MB pip + 30 s
   # startup) here would double CI time and duplicate what `e2e-boot-smoke`
-  # already covers. Without a backend the suite naturally fails, so we
-  # mark the job non-blocking (`continue-on-error: true`) — it remains
-  # visible in the checks list as a status signal for contributors who
-  # need to run the suite locally with `WEBRAIN_REQUIRE_BACKEND=1 pnpm test`.
+  # already covers.
+  #
+  # v2.20: `tests/_run-or-skip.mjs` now does a preflight against /health and
+  # exits 0 with a console.warn when WEBRAIN_REQUIRE_BACKEND≠1 and backend is
+  # down. This converts "no backend in CI" into a clean green check while
+  # preserving local strictness via `WEBRAIN_REQUIRE_BACKEND=1 pnpm test`.
+  # `continue-on-error: true` therefore no longer needed.
   integration-test:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -106,7 +108,7 @@ jobs:
         run: pnpm install
       - name: Install sub-brain deps
         run: cd sub-brain && pnpm install
-      - name: Run integration tests (non-blocking; backend not spawned in CI)
+      - name: Run integration tests (preflight skips if backend not spawned)
         run: pnpm test
         env:
           CI: true
@@ -142,6 +144,11 @@ jobs:
           python3 -m venv venv
           ./venv/bin/pip install --upgrade pip
           ./venv/bin/pip install -r requirements.txt
+          # pytest is intentionally excluded from requirements.txt (production-only)
+          # but the smoke step below invokes `pytest`, so install the test stack
+          # into this venv too — matches what python-check (line 23) does. Missing
+          # this install was the 2026-05-22 CI red: "No module named pytest".
+          ./venv/bin/pip install pytest pytest-asyncio pytest-cov
       - name: Install sub-brain deps
         run: cd sub-brain && pnpm install
       - name: Run e2e boot smoke
