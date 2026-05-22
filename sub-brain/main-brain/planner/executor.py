@@ -31,7 +31,7 @@ import logging
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from .planner import Plan, PlanTask
 
@@ -314,6 +314,254 @@ class PlanExecutor:
             )
             current_plan = new_plan
             # Loop continues with the new plan.
+
+    async def run_stream(
+        self,
+        plan: Plan,
+        session_id: str,
+        agent_id: str = "agent-default",
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Streaming variant of `run()` — yields progress events as plan runs.
+
+        Event shapes (all envelope dicts):
+          {type: "plan_start",   data: {plan_id, n_tasks, replan_count}}
+          {type: "task_start",   data: {plan_id, task_id, description,
+                                        idx, total}}
+          {type: "attempt_start",data: {plan_id, task_id, attempt_idx,
+                                        strategy}}
+          {type: "attempt_done", data: {plan_id, task_id, attempt_idx,
+                                        passed, reason, duration_ms,
+                                        output_preview}}
+          {type: "task_done",    data: {plan_id, task_id, succeeded,
+                                        attempts: int, final_output_preview}}
+          {type: "replan_start", data: {old_plan_id, n_failures,
+                                        replan_count}}
+          {type: "replan_done",  data: {new_plan_id, n_tasks}}
+          {type: "finished",     data: ExecutionResult.to_dict() + {ok: true}}
+
+        The shape mirrors what `run()` returns — the `finished` event is the
+        same payload `/plan/execute` produces today, so consumers that only
+        care about the final result can ignore intermediate events.
+
+        v2.28 — P0 #5 from ROADMAP V2. Previously the only way to know plan
+        progress was wait for the synchronous /plan/execute response, which
+        on a 5-task replan-3 plan can be 30+ seconds of UI hang.
+        """
+        original_plan_id = plan.plan_id
+        current_plan = plan
+        prior_results: List[TaskResult] = []
+        total_attempts = 0
+        replan_count = 0
+
+        yield {
+            "type": "plan_start",
+            "data": {
+                "plan_id": current_plan.plan_id,
+                "n_tasks": len(current_plan.tasks),
+                "replan_count": 0,
+            },
+        }
+
+        while True:
+            results: List[TaskResult] = []
+            prior_outputs: List[Tuple[str, str]] = []
+            total = len(current_plan.tasks)
+
+            for idx_task, task in enumerate(current_plan.tasks, start=1):
+                yield {
+                    "type": "task_start",
+                    "data": {
+                        "plan_id": current_plan.plan_id,
+                        "task_id": task.id,
+                        "description": task.description,
+                        "idx": idx_task,
+                        "total": total,
+                    },
+                }
+                attempts: List[TaskAttempt] = []
+                last_output = ""
+                succeeded = False
+
+                for attempt_idx in range(1, self._max_retries + 1):
+                    strategy = (
+                        "augmented" if attempt_idx > self._strategy_switch_at else "default"
+                    )
+                    yield {
+                        "type": "attempt_start",
+                        "data": {
+                            "plan_id": current_plan.plan_id,
+                            "task_id": task.id,
+                            "attempt_idx": attempt_idx,
+                            "strategy": strategy,
+                        },
+                    }
+                    prompt = self._build_prompt(task, prior_outputs, attempts, strategy)
+                    t0 = time.time()
+                    try:
+                        output = await self._execute(
+                            prompt,
+                            session_id,
+                            agent_id,
+                            {
+                                "disable_planner": True,
+                                "disable_rag": True,
+                                "plan_execution": True,
+                            },
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "task %s attempt %d execute_fn raised: %s",
+                            task.id,
+                            attempt_idx,
+                            e,
+                        )
+                        output = ""
+                    duration_ms = int((time.time() - t0) * 1000)
+                    last_output = output or last_output
+
+                    try:
+                        passed, reason = await self._verify(task, output or "")
+                    except Exception as e:  # noqa: BLE001 — defensive
+                        logger.warning(
+                            "verifier raised on task %s attempt %d: %s",
+                            task.id,
+                            attempt_idx,
+                            e,
+                        )
+                        passed, reason = False, f"verifier error: {type(e).__name__}"
+
+                    attempts.append(
+                        TaskAttempt(
+                            attempt_idx=attempt_idx,
+                            output=output or "",
+                            verification_passed=passed,
+                            verification_reason=reason,
+                            strategy=strategy,
+                            duration_ms=duration_ms,
+                        )
+                    )
+                    yield {
+                        "type": "attempt_done",
+                        "data": {
+                            "plan_id": current_plan.plan_id,
+                            "task_id": task.id,
+                            "attempt_idx": attempt_idx,
+                            "passed": passed,
+                            "reason": reason,
+                            "duration_ms": duration_ms,
+                            "output_preview": (output or "")[:120],
+                        },
+                    }
+                    if passed:
+                        succeeded = True
+                        break
+
+                r = TaskResult(
+                    task_id=task.id,
+                    description=task.description,
+                    final_output=(last_output if not succeeded else attempts[-1].output),
+                    attempts=attempts,
+                    succeeded=succeeded,
+                )
+                results.append(r)
+                total_attempts += len(attempts)
+                if r.succeeded and r.final_output.strip():
+                    prior_outputs.append((task.description, r.final_output))
+
+                yield {
+                    "type": "task_done",
+                    "data": {
+                        "plan_id": current_plan.plan_id,
+                        "task_id": task.id,
+                        "succeeded": succeeded,
+                        "attempts": len(attempts),
+                        "final_output_preview": (r.final_output or "")[:120],
+                    },
+                }
+
+            failed_ids = [r.task_id for r in results if not r.succeeded]
+
+            if not failed_ids:
+                exec_result = ExecutionResult(
+                    plan_id=original_plan_id,
+                    results=results,
+                    total_attempts=total_attempts,
+                    overall_success=True,
+                    failed_task_ids=[],
+                    replan_count=replan_count,
+                    final_plan_id=current_plan.plan_id if replan_count else None,
+                )
+                payload = exec_result.to_dict()
+                payload["ok"] = True
+                yield {"type": "finished", "data": payload}
+                return
+
+            if self._replan_fn is None or replan_count >= self._max_replans:
+                exec_result = ExecutionResult(
+                    plan_id=original_plan_id,
+                    results=results,
+                    total_attempts=total_attempts,
+                    overall_success=False,
+                    failed_task_ids=failed_ids,
+                    replan_count=replan_count,
+                    final_plan_id=current_plan.plan_id if replan_count else None,
+                )
+                payload = exec_result.to_dict()
+                payload["ok"] = True  # ok meaning the call completed; success is on overall_success
+                yield {"type": "finished", "data": payload}
+                return
+
+            # Replan flow.
+            failures: List[Tuple[str, str, str, str]] = []
+            for r in results:
+                if not r.succeeded:
+                    last_reason = (
+                        r.attempts[-1].verification_reason if r.attempts else "no attempts"
+                    )
+                    failures.append(
+                        (r.task_id, r.description, r.final_output or "", last_reason)
+                    )
+            yield {
+                "type": "replan_start",
+                "data": {
+                    "old_plan_id": current_plan.plan_id,
+                    "n_failures": len(failures),
+                    "replan_count": replan_count + 1,
+                },
+            }
+            try:
+                new_plan = await self._replan_fn(current_plan, failures, session_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "replan_fn raised: %s — surfacing partial result", exc
+                )
+                new_plan = None
+
+            if new_plan is None or not new_plan.tasks:
+                exec_result = ExecutionResult(
+                    plan_id=original_plan_id,
+                    results=results,
+                    total_attempts=total_attempts,
+                    overall_success=False,
+                    failed_task_ids=failed_ids,
+                    replan_count=replan_count,
+                    final_plan_id=current_plan.plan_id if replan_count else None,
+                )
+                payload = exec_result.to_dict()
+                payload["ok"] = True
+                yield {"type": "finished", "data": payload}
+                return
+
+            replan_count += 1
+            prior_results = results  # noqa: F841 — retained for potential trace
+            yield {
+                "type": "replan_done",
+                "data": {
+                    "new_plan_id": new_plan.plan_id,
+                    "n_tasks": len(new_plan.tasks),
+                },
+            }
+            current_plan = new_plan
 
     async def _run_task(
         self,

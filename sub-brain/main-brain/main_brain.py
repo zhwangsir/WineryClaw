@@ -1093,6 +1093,143 @@ async def plan_execute(request: Dict[str, Any]):
     return payload
 
 
+@app.post("/plan/execute/stream")
+async def plan_execute_stream(request: Dict[str, Any]):
+    """v2.28 — SSE variant of /plan/execute (ROADMAP V2 P0 #5).
+
+    Same body as /plan/execute (user_input OR plan; optional session_id /
+    agent_id / verify), but returns a server-sent-events stream where each
+    line is `data: <json>\\n\\n`. Event shapes documented on
+    `PlanExecutor.run_stream`. Final event has `type: "finished"` and carries
+    the same payload `/plan/execute` returns. Frontend can render per-task
+    progress while the backend is still iterating retries / replans rather
+    than hanging on a 30s synchronous response.
+
+    Error envelope (no streaming):
+      - missing planner/chat       → 503 `{ok: false, error: ...}`
+      - bad body                   → 400 `{ok: false, error: ...}`
+      - trivial input (planner skipped) → 200 `{ok: true, skipped: true, ...}`
+        (matches /plan/execute non-streaming behavior)
+    """
+    from fastapi.responses import StreamingResponse
+
+    from planner import (
+        LLMGradeVerifier,
+        PlanExecutor,
+        plan_from_dict,
+        presence_verifier,
+    )
+
+    planner = _state.get("planner")
+    chat_engine = _state.get("chat")
+    if planner is None or chat_engine is None:
+        return JSONResponse(
+            {"ok": False, "error": "planner/chat not initialized"}, status_code=503
+        )
+
+    plan = None
+    if "plan" in request and isinstance(request["plan"], dict):
+        plan = plan_from_dict(request["plan"])
+        if plan is None:
+            return JSONResponse(
+                {"ok": False, "error": "supplied plan has no usable tasks"},
+                status_code=400,
+            )
+    else:
+        user_input = str(request.get("user_input", "")).strip()
+        if not user_input:
+            return JSONResponse(
+                {"ok": False, "error": "user_input or plan required"},
+                status_code=400,
+            )
+        plan = await planner.plan(user_input)
+        if plan is None:
+            # Same trivial-input behavior as /plan/execute — return 200 with
+            # a skip envelope rather than streaming nothing.
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "input is too trivial to plan, or planner unavailable",
+            }
+
+    verify_mode = str(request.get("verify", "presence")).lower()
+    if verify_mode == "llm":
+        async def _llm_grade(messages):
+            ep = chat_engine.router.get_primary()
+            if not ep:
+                raise RuntimeError("no LLM endpoint for grader")
+            result = await chat_engine._chat_completion(messages, max_tokens=512)
+            return result["choices"][0]["message"].get("content", "")
+
+        verifier = LLMGradeVerifier(_llm_grade)
+    else:
+        verifier = presence_verifier
+
+    async def _execute(user_input, session_id, agent_id, context=None):
+        result = await chat_engine.chat(user_input, session_id, agent_id, context)
+        return result.get("reply", "")
+
+    async def _replan(failed_plan, failures, session_id):
+        if not failures or planner is None:
+            return None
+        failure_lines = "\n".join(
+            f"  - Task {tid} ({desc!r}) failed: {reason}"
+            for tid, desc, _out, reason in failures
+        )
+        replan_input = (
+            f"Original request: {failed_plan.user_input}\n\n"
+            f"Earlier attempt produced this plan but the following tasks "
+            f"failed to satisfy their verifier:\n{failure_lines}\n\n"
+            "Generate a new plan that avoids the same failure modes. "
+            "Prefer a different approach over re-trying the same steps."
+        )
+        try:
+            new_plan = await planner.plan(replan_input)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("M3 replan: planner.plan raised: %s", exc)
+            return None
+        return new_plan
+
+    try:
+        max_replans = max(0, int(os.environ.get("WEBRAIN_PLAN_MAX_REPLANS", "2")))
+    except ValueError:
+        max_replans = 2
+    executor = PlanExecutor(
+        _execute,
+        verifier=verifier,
+        replan_fn=_replan,
+        max_replans=max_replans,
+    )
+
+    session_id = str(request.get("session_id") or "session-plan-exec")
+    agent_id = str(request.get("agent_id") or "agent-default")
+
+    async def _event_source():
+        # Echo the resolved plan up-front so the UI can render the task list
+        # before the first attempt completes — same UX `/chat` (stream)
+        # provides via the `plan` event.
+        plan_event = {"type": "plan", "data": plan.to_dict()}
+        yield f"data: {json.dumps(plan_event, ensure_ascii=False)}\n\n"
+        try:
+            async for event in executor.run_stream(plan, session_id, agent_id):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001 — surface any unexpected
+            err = {"type": "error", "data": f"{type(e).__name__}: {e}"}
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        # Terminator that some SSE consumers (incl. our sub-brain proxy
+        # forwarder) expect to cleanly close the stream.
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ========== MCP Server (M4b) ==========
 
 
