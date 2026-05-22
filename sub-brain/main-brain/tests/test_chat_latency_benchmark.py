@@ -113,39 +113,53 @@ async def test_chat_latency_with_mock_llm(temp_dir, mock_llm_config, capsys):
     N_WARMUP = 3   # absorb any first-call costs (DB schema, embedder lazy load)
     N_SAMPLES = 30  # enough for stable P50/P95; not so many tests take forever
 
+    # v2.48 — patch httpx.AsyncClient.post ONCE for the whole test instead of
+    # per-call. Pre-v2.48 the per-call `with patch(...)` had a latent race:
+    # when 30 concurrent chats each enter their own `with` block on the same
+    # global attribute, the patch stack can be left inconsistent on exit,
+    # causing later chats to see the ORIGINAL httpx (which hits the
+    # unreachable test endpoint). Pre-v2.48 the awaited L1 store made each
+    # chat slow enough that the overlapping windows didn't trigger the race;
+    # v2.48 (deferred L1 store) sped chats up enough that the race fires.
+    # A single persistent mock-context fixes the test infra without changing
+    # what's measured — every chat still hits the same mocked LLM response.
+    mock_post = AsyncMock()
+    mock_post.return_value.raise_for_status = MagicMock()
+    mock_post.return_value.json = MagicMock(return_value=plain_resp)
+
     async def _one_chat(seq: int) -> float:
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.raise_for_status = MagicMock()
-            mock_post.return_value.json = MagicMock(return_value=plain_resp)
-            t0 = time.perf_counter()
-            await chat.chat(
-                f"latency-bench-{seq}",
-                session_id=f"bench-{seq}",
-                context={"tools_enabled": False},
-            )
-            return (time.perf_counter() - t0) * 1000.0  # ms
+        t0 = time.perf_counter()
+        await chat.chat(
+            f"latency-bench-{seq}",
+            session_id=f"bench-{seq}",
+            context={"tools_enabled": False},
+        )
+        return (time.perf_counter() - t0) * 1000.0  # ms
 
-    # Warmup
-    for i in range(N_WARMUP):
-        await _one_chat(i)
+    # Single persistent patch covering warmup + sequential + concurrent
+    # measurement (see v2.48 comment above on the per-call race).
+    with patch("httpx.AsyncClient.post", mock_post):
+        # Warmup
+        for i in range(N_WARMUP):
+            await _one_chat(i)
 
-    # Measure
-    samples_ms = []
-    for i in range(N_SAMPLES):
-        samples_ms.append(await _one_chat(N_WARMUP + i))
-
-    # Concurrent — fire all at once, measure each
-    async def _concurrent_batch() -> List[float]:
-        starts = [time.perf_counter() for _ in range(N_SAMPLES)]
-        tasks = []
+        # Measure
+        samples_ms = []
         for i in range(N_SAMPLES):
-            async def _ts(idx=i, s=starts[i]):
-                await _one_chat(N_WARMUP + N_SAMPLES + idx)
-                return (time.perf_counter() - s) * 1000.0
-            tasks.append(_ts())
-        return await asyncio.gather(*tasks)
+            samples_ms.append(await _one_chat(N_WARMUP + i))
 
-    concurrent_samples = await _concurrent_batch()
+        # Concurrent — fire all at once, measure each
+        async def _concurrent_batch() -> List[float]:
+            starts = [time.perf_counter() for _ in range(N_SAMPLES)]
+            tasks = []
+            for i in range(N_SAMPLES):
+                async def _ts(idx=i, s=starts[i]):
+                    await _one_chat(N_WARMUP + N_SAMPLES + idx)
+                    return (time.perf_counter() - s) * 1000.0
+                tasks.append(_ts())
+            return await asyncio.gather(*tasks)
+
+        concurrent_samples = await _concurrent_batch()
 
     # Report
     p50 = _percentile(samples_ms, 50)

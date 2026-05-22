@@ -885,6 +885,78 @@ class ChatEngine:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+    def _fire_persist_assistant_and_extract_async(
+        self, session_id: str, user_input: str, reply: str
+    ) -> None:
+        """v2.48 — assistant L1 store + active_memory extraction as ONE
+        fire-and-forget chain off the chat critical path.
+
+        Before v2.48 the chat reply sequence was:
+
+            await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", ...})
+            self._fire_active_memory_async(session_id, user_input, reply)
+            return  # chat returns
+
+        Profiling showed that the awaited assistant L1 store accounts for
+        ~30 of the 60 SQLite-writer-serialised writes that dominated the
+        post-v2.45 conc-30 P95 (917 ms — embedder is only 18% of it).
+        Moving the L1 store off the critical path removes 30 writes per
+        conc-30 batch from the chat reply path; the user no longer waits
+        for them.
+
+        Why bundle with active_memory: process_conversation queries the
+        memory for the just-stored exchange. The previous code relied on
+        the awaited L1 to guarantee that row is visible before the
+        active_memory fire-and-forget read. By chaining L1 → active_memory
+        inside ONE task we preserve that ordering invariant; the chat
+        reply itself just doesn't wait for either step.
+
+        session_summarize + working_memory remain as their own independent
+        fire-and-forget tasks — they don't depend on the assistant L1
+        being persisted to do their job.
+        """
+        if not session_id or not reply:
+            return
+
+        async def _run() -> None:
+            try:
+                await self.memory.store({
+                    "level": "L1",
+                    "content": f"Assistant: {reply}",
+                    "session_id": session_id,
+                    "source": "assistant",
+                })
+            except Exception as exc:  # noqa: BLE001 — background task must never crash chat
+                logger.warning(
+                    "assistant L1 store failed (session=%s): %s",
+                    session_id, exc,
+                )
+                return  # don't run active_memory if L1 store failed
+
+            if not self.active_memory_enabled or self.active_memory is None:
+                return
+            try:
+                messages = [
+                    {"role": "user", "content": user_input},
+                    {"role": "assistant", "content": reply},
+                ]
+                await self.active_memory.process_conversation(session_id, messages)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "active_memory.process_conversation failed (session=%s): %s",
+                    session_id, exc,
+                )
+
+        try:
+            task = asyncio.create_task(_run())
+        except RuntimeError:
+            logger.debug(
+                "no running loop for persist_assistant fire-and-forget; skipping"
+            )
+            return
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     # ---- Tool definitions registry ----
     _TOOL_REGISTRY: Dict[str, Dict] = {
         "execute_shell": {"type": "function", "function": {"name": "execute_shell", "description": "执行本地 shell 命令", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -3473,18 +3545,20 @@ class ChatEngine:
                 if revised:
                     reply = revised
 
-                await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", "session_id": session_id, "source": "assistant"})
-                # Fire ActiveMemory extraction in the background. Must come
-                # AFTER the L1 store so process_conversation sees a coherent
-                # exchange when it queries memory, and BEFORE return so we
-                # don't lose the reference if the caller never awaits again.
-                self._fire_active_memory_async(session_id, user_input, reply)
-                # Round M2 — also opportunistically summarize long sessions.
-                # Both fire-and-forget tasks coexist (active_memory extracts
-                # patterns, summarizer compresses history); they query
-                # memory independently.
+                # v2.48 — assistant L1 store + active_memory in one
+                # fire-and-forget chain (see _fire_persist_assistant_and_extract_async).
+                # Pre-v2.48 the L1 store was awaited on the critical path; this
+                # was the dominant contributor to conc-30 P95 (60 serial writes
+                # through the single writer thread). Now chat reply returns
+                # immediately and these run in background.
+                self._fire_persist_assistant_and_extract_async(session_id, user_input, reply)
+                # Round M2 — session summarize fires independently; it doesn't
+                # depend on this turn's L1 row being persisted (threshold check
+                # reads all L1 it can see; missing one row just defers the
+                # summary by one turn — eventual consistency).
                 self._fire_session_summarize_async(session_id)
-                # S3: 工作记忆 — 异步提取当前轮次关键信息供下一轮使用
+                # S3: 工作记忆 — 异步提取当前轮次关键信息供下一轮使用。
+                # 仅用 (user_input, reply) — 不依赖 L1 是否已落盘。
                 self._fire_working_memory_async(session_id, user_input, reply)
                 return {
                     "reply": reply,
@@ -3778,8 +3852,8 @@ class ChatEngine:
 
                 if not has_tool_calls:
                     # No tool calls needed — done
-                    await self.memory.store({"level": "L1", "content": f"Assistant: {full_content}", "session_id": session_id, "source": "assistant"})
-                    self._fire_active_memory_async(session_id, user_input, full_content)
+                    # v2.48 — see _fire_persist_assistant_and_extract_async.
+                    self._fire_persist_assistant_and_extract_async(session_id, user_input, full_content)
                     self._fire_session_summarize_async(session_id)
                     # S3: 工作记忆异步提取
                     self._fire_working_memory_async(session_id, user_input, full_content)
@@ -3797,8 +3871,8 @@ class ChatEngine:
 
             if not tool_calls:
                 reply = msg.get("content", "")
-                await self.memory.store({"level": "L1", "content": f"Assistant: {reply}", "session_id": session_id, "source": "assistant"})
-                self._fire_active_memory_async(session_id, user_input, reply)
+                # v2.48 — see _fire_persist_assistant_and_extract_async.
+                self._fire_persist_assistant_and_extract_async(session_id, user_input, reply)
                 self._fire_session_summarize_async(session_id)
                 # S3: 工作记忆异步提取
                 self._fire_working_memory_async(session_id, user_input, reply)
