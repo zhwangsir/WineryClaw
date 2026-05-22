@@ -2620,6 +2620,11 @@ class ChatEngine:
             url, payload, headers = self._build_request(
                 ep, messages, tools, max_tokens, temperature, stream=False
             )
+            # v2.16 Axis 3: pre-compute request bytes for audit ledger.
+            try:
+                request_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            except Exception:
+                request_bytes = 0
             t0 = time.time()
             try:
                 async with httpx.AsyncClient(timeout=ep.timeout) as client:
@@ -2634,6 +2639,26 @@ class ChatEngine:
                 # downstream consumers that ignore unknown keys.
                 if isinstance(result, dict):
                     result.setdefault("_endpoint", ep.name)
+                # v2.16 Axis 3: record successful outbound LLM call to
+                # network_ledger.jsonl for user audit. Never raises.
+                try:
+                    response_bytes = len(
+                        json.dumps(data, ensure_ascii=False).encode("utf-8")
+                    )
+                except Exception:
+                    response_bytes = 0
+                try:
+                    from audit.network_ledger import get_ledger
+                    get_ledger().record_success(
+                        endpoint=ep.name,
+                        base_url=ep.base_url,
+                        model=ep.model_id,
+                        latency_ms=latency_ms,
+                        request_bytes=request_bytes,
+                        response_bytes=response_bytes,
+                    )
+                except Exception as audit_err:
+                    logger.debug("network_ledger record_success failed: %s", audit_err)
                 # v2.12: post_llm_call hook (fire-and-forget; result still
                 # returned regardless of hook outcome)
                 await self._fire_plugin_hook(
@@ -2652,6 +2677,20 @@ class ChatEngine:
                 err_msg = f"{type(e).__name__}: {e}"
                 self.router.mark_failure(ep.name, err_msg)
                 last_error = e
+                # v2.16 Axis 3: record failure to network_ledger too —
+                # users want to see "endpoint X errored" in audit.
+                latency_ms_to_fail = (time.time() - t0) * 1000.0
+                try:
+                    from audit.network_ledger import get_ledger
+                    get_ledger().record_failure(
+                        endpoint=ep.name,
+                        base_url=ep.base_url,
+                        model=ep.model_id,
+                        error=err_msg,
+                        latency_ms=latency_ms_to_fail,
+                    )
+                except Exception:
+                    pass
                 logger.warning(
                     "LLM endpoint %s failed (%s) — failing over to next endpoint",
                     ep.name,

@@ -2259,6 +2259,31 @@ async def cache_clear():
     return {"ok": True}
 
 
+# ========== Audit (v2.16 Axis 3) ==========
+
+
+@app.get("/audit/network_ledger")
+async def audit_network_ledger(limit: int = 50):
+    """Recent outbound LLM calls — last N entries from network_ledger.jsonl.
+
+    Limit clamped to [1, 1000]. Returns oldest→newest; UI may reverse.
+    Returns `{count, entries}`.
+    """
+    try:
+        from audit.network_ledger import get_ledger
+    except Exception as e:
+        return {"count": 0, "entries": [], "error": f"ledger import failed: {e}"}
+    safe_limit = max(1, min(int(limit), 1000))
+    ledger = get_ledger()
+    entries = ledger.recent_entries(limit=safe_limit)
+    return {
+        "count": len(entries),
+        "total": ledger.count(),
+        "entries": entries,
+        "path": str(ledger.path),
+    }
+
+
 # ========== WebSocket for Real-time Communication ==========
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
