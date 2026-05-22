@@ -37,19 +37,16 @@ use nix::unistd::Pid;
 fn log_dir() -> PathBuf {
     // macOS: $HOME/Library/Logs, Linux: $XDG_STATE_HOME/log or ~/.local/state/log,
     // Windows: %LOCALAPPDATA% (no first-class "logs" subdir — we suffix below).
+    // clippy::unnecessary_lazy_evaluations (Rust 1.95 strict, hit in CI v2.27):
+    // the macOS-only fallback closure body is cheap (one env lookup), so
+    // collapse to `.or(...)`. The cfg attributes still gate which arm compiles.
+    #[cfg(target_os = "macos")]
+    let macos_logs: Option<PathBuf> = dirs::home_dir().map(|h| h.join("Library").join("Logs"));
+    #[cfg(not(target_os = "macos"))]
+    let macos_logs: Option<PathBuf> = None;
     let base = dirs::state_dir()
         .or_else(dirs::data_local_dir)
-        .or_else(|| {
-            // macOS: $HOME/Library/Logs
-            #[cfg(target_os = "macos")]
-            {
-                dirs::home_dir().map(|h| h.join("Library").join("Logs"))
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                None
-            }
-        })
+        .or(macos_logs)
         .unwrap_or_else(std::env::temp_dir);
     let dir = base.join("WeBrain");
     if let Err(e) = std::fs::create_dir_all(&dir) {
