@@ -2284,6 +2284,60 @@ async def audit_network_ledger(limit: int = 50):
     }
 
 
+# ========== Privacy Mode (v2.17 Axis 3) ==========
+
+
+@app.get("/privacy/status")
+async def privacy_status():
+    """Current privacy mode state.
+
+    When `mode == "on"`, LLMRouter skips any endpoint whose base_url is
+    not local (LM Studio / Ollama / 127.* / 10.* / 192.168.*). User
+    data therefore cannot leak to remote providers.
+    """
+    try:
+        from audit.privacy_mode import get_privacy_state, is_local_url
+    except Exception as e:
+        return {"mode": "off", "error": f"privacy_mode import failed: {e}"}
+    state = get_privacy_state()
+    # Surface which configured endpoints would survive the filter, so
+    # the user can see at-a-glance whether enabling will leave them
+    # with any working endpoint.
+    local_eps = []
+    remote_eps = []
+    if "chat" in _state and getattr(_state["chat"], "router", None):
+        for ep in _state["chat"].router.get_all():
+            (local_eps if is_local_url(ep.base_url) else remote_eps).append(
+                {"name": ep.name, "base_url": ep.base_url}
+            )
+    return {
+        "mode": state.get(),
+        "path": str(state.state_path),
+        "local_endpoints": local_eps,
+        "remote_endpoints": remote_eps,
+    }
+
+
+@app.post("/privacy/toggle")
+async def privacy_toggle(mode: Optional[str] = None):
+    """Flip or set privacy mode.
+
+    - With no `mode` query param: toggles current value.
+    - With `mode=on` or `mode=off`: sets explicitly.
+    Returns the new state.
+    """
+    try:
+        from audit.privacy_mode import get_privacy_state
+    except Exception as e:
+        return {"ok": False, "error": f"privacy_mode import failed: {e}"}
+    state = get_privacy_state()
+    if mode is None:
+        new = state.toggle()
+    else:
+        new = state.set(mode)
+    return {"ok": True, "mode": new}
+
+
 # ========== WebSocket for Real-time Communication ==========
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

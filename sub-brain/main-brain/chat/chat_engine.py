@@ -2614,7 +2614,24 @@ class ChatEngine:
         last_endpoint_name: Optional[str] = None
         tried = 0
 
+        # v2.17 Axis 3: privacy-mode filter. When user has flipped privacy on,
+        # only local endpoints (LM Studio / Ollama / 127.* / 10.* / 192.168.*)
+        # are allowed; remote providers are skipped entirely for this call.
+        try:
+            from audit.privacy_mode import get_privacy_state, is_local_url
+            privacy_on = get_privacy_state().is_on()
+        except Exception:
+            privacy_on = False
+            is_local_url = lambda _u: True  # noqa: E731 — defensive fallback
+
         for ep in self.router.iter_failover():
+            if privacy_on and not is_local_url(ep.base_url):
+                logger.info(
+                    "Privacy mode ON: skipping remote endpoint %s (%s)",
+                    ep.name,
+                    ep.base_url,
+                )
+                continue
             tried += 1
             last_endpoint_name = ep.name
             url, payload, headers = self._build_request(
@@ -2699,6 +2716,13 @@ class ChatEngine:
                 continue
 
         # All endpoints exhausted
+        if tried == 0 and privacy_on:
+            # No local endpoints — privacy mode explicitly opted in to this.
+            raise RuntimeError(
+                "Privacy mode is ON but no local endpoint (LM Studio / Ollama / "
+                "127.* / 10.* / 192.168.*) is configured. "
+                "Either turn privacy mode OFF or add a local endpoint."
+            )
         raise RuntimeError(
             f"All {tried} LLM endpoint(s) failed; last endpoint {last_endpoint_name!r} "
             f"raised {type(last_error).__name__ if last_error else 'unknown'}: {last_error}"
