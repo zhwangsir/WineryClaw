@@ -601,6 +601,56 @@ class ChatEngine:
         # 会话级工具调用计数 {session_id: count}
         self._tool_call_counters: Dict[str, int] = {}
 
+        # S31: 对话节奏切换信号 (Pace Switch) — 跟踪本会话最近 N 条用户消息字数,
+        # 若最近 3 条 vs 之前 3 条均长发生显著切换(>= 2x),提示 AI 调整深浅度。
+        # 帮助 AI 感知用户"快速问答 → 深入探讨"或反向切换。零成本(滑动窗口)。
+        self.pace_switch_enabled: bool = (
+            os.environ.get("WEBRAIN_PACE_SWITCH_ENABLED", "1") != "0"
+        )
+        # 会话级近期消息字数历史 {session_id: [len, len, ...]} (最多 6 条)
+        self._pace_history: Dict[str, List[int]] = {}
+
+        # S32: 重复性问题检测 (Repeat Question) — 比较当前用户消息与本会话近 5 条
+        # 用户消息的 Jaccard 字符 3-gram 重合度,若 >= 阈值视为重复询问。
+        # 帮助 AI 意识到用户对上次回答不满意,应换角度或更具体回答。零成本。
+        self.repeat_question_enabled: bool = (
+            os.environ.get("WEBRAIN_REPEAT_QUESTION_ENABLED", "1") != "0"
+        )
+        try:
+            self.repeat_question_threshold: float = float(
+                os.environ.get("WEBRAIN_REPEAT_QUESTION_THRESHOLD", "0.6")
+            )
+        except ValueError:
+            self.repeat_question_threshold = 0.6
+        # 会话级近期用户消息缓存 {session_id: [msg, msg, ...]} (最多 5 条)
+        self._user_msg_history: Dict[str, List[str]] = {}
+
+        # S33: 时段感知行为信号 (Time-of-day) — 基于当前小时为深夜/晚间/工作时段
+        # 注入语气/深度提示。复用 S14 datetime 资源,零额外成本。
+        self.time_of_day_enabled: bool = (
+            os.environ.get("WEBRAIN_TIME_OF_DAY_ENABLED", "1") != "0"
+        )
+
+        # S34: 短句上下文遗漏检测 (Context Drop) — 若用户消息很短(< 10 字符)
+        # 且本会话已有 >= 2 条历史,且消息中无明确指代代词(我/你/这/那),
+        # 提示 AI 联系上下文推断意图或主动询问。零成本(字符长度判断)。
+        self.context_drop_enabled: bool = (
+            os.environ.get("WEBRAIN_CONTEXT_DROP_ENABLED", "1") != "0"
+        )
+        try:
+            self.context_drop_max_chars: int = int(
+                os.environ.get("WEBRAIN_CONTEXT_DROP_MAX_CHARS", "10")
+            )
+        except ValueError:
+            self.context_drop_max_chars = 10
+
+        # S35: 失败反馈识别 (Negative Feedback) — 扫描用户消息中"不对/错了/没明白"
+        # 等失败信号关键词,触发后提示 AI 彻底重新理解需求,避免再次重复同思路。
+        # 零成本(关键词匹配)。
+        self.negative_feedback_enabled: bool = (
+            os.environ.get("WEBRAIN_NEGATIVE_FEEDBACK_ENABLED", "1") != "0"
+        )
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -1672,6 +1722,181 @@ class ChatEngine:
             f"考虑直接给出结论而非继续探索]"
         )
 
+    # ── S31: Conversation Pace Switch ───────────────────────────────────
+    def _record_pace_sample(self, session_id: str, user_message: str) -> None:
+        """S31: 在 chat() 入口记录本条消息字数,维护滑动窗口(最多 6 条)。"""
+        if not self.pace_switch_enabled or not user_message:
+            return
+        history = self._pace_history.setdefault(session_id, [])
+        history.append(len(user_message))
+        if len(history) > 6:
+            del history[0 : len(history) - 6]
+
+    def _compute_pace_switch_line(self, session_id: str) -> str:
+        """S31: 比较最近 3 条 vs 之前 3 条均长,若发生显著切换则提示。
+
+        切换判定:
+          深度切换 (短 → 长): recent_avg >= 2.0 * prior_avg AND recent_avg >= 60
+          快速切换 (长 → 短): prior_avg >= 2.0 * recent_avg AND prior_avg >= 60
+        """
+        if not self.pace_switch_enabled:
+            return ""
+        history = self._pace_history.get(session_id, [])
+        if len(history) < 6:
+            return ""
+        prior = history[-6:-3]
+        recent = history[-3:]
+        prior_avg = sum(prior) / 3
+        recent_avg = sum(recent) / 3
+        # 深度切换:用户开始展开详细问题
+        if recent_avg >= 60 and recent_avg >= 2.0 * max(prior_avg, 1):
+            return (
+                f"[对话节奏: 用户已切换到深度模式(均字数 {int(prior_avg)}→{int(recent_avg)}),"
+                f"建议展开详细分析]"
+            )
+        # 快速切换:用户开始追问简短问题
+        if prior_avg >= 60 and prior_avg >= 2.0 * max(recent_avg, 1):
+            return (
+                f"[对话节奏: 用户已切换到快速问答(均字数 {int(prior_avg)}→{int(recent_avg)}),"
+                f"建议精简回答]"
+            )
+        return ""
+
+    # ── S32: Repeat Question Detection ──────────────────────────────────
+    @staticmethod
+    def _char_trigrams(text: str) -> set:
+        """生成字符 3-gram 集合用于 Jaccard 相似度。"""
+        if not text or len(text) < 3:
+            # 短文本直接降为单字符集合
+            return set(text) if text else set()
+        return {text[i : i + 3] for i in range(len(text) - 2)}
+
+    def _record_user_message(self, session_id: str, user_message: str) -> None:
+        """S32: 在 chat() 入口记录本条 user 消息,维护滑动窗口(最多 5 条)。
+
+        注意:必须在 _compute_repeat_question_line 之后调用以避免自匹配。
+        """
+        if not self.repeat_question_enabled or not user_message:
+            return
+        history = self._user_msg_history.setdefault(session_id, [])
+        history.append(user_message)
+        if len(history) > 5:
+            del history[0 : len(history) - 5]
+
+    def _compute_repeat_question_line(
+        self, session_id: str, user_message: str
+    ) -> str:
+        """S32: 若当前消息与近 5 条用户消息任一 Jaccard 重合 >= 阈值,标记重复。"""
+        if not self.repeat_question_enabled or not user_message:
+            return ""
+        history = self._user_msg_history.get(session_id, [])
+        if not history:
+            return ""
+        current_tri = self._char_trigrams(user_message)
+        if not current_tri:
+            return ""
+        for prev in history:
+            prev_tri = self._char_trigrams(prev)
+            if not prev_tri:
+                continue
+            inter = len(current_tri & prev_tri)
+            union = len(current_tri | prev_tri)
+            if union == 0:
+                continue
+            jaccard = inter / union
+            if jaccard >= self.repeat_question_threshold:
+                return (
+                    "[重复询问检测: 用户在重复类似问题(与上轮重合度高),"
+                    "上次回答可能未解决问题,建议换角度或更具体回答]"
+                )
+        return ""
+
+    # ── S33: Time-of-day Behavior ───────────────────────────────────────
+    def _compute_time_of_day_line(self) -> str:
+        """S33: 基于当前小时返回时段语气提示。
+
+        深夜 (0-5 时):简洁友好优先
+        晚间 (22-23 时):语气可更轻松
+        其他时段:不注入
+        """
+        if not self.time_of_day_enabled:
+            return ""
+        from datetime import datetime
+
+        hour = datetime.now().hour
+        if 0 <= hour < 6:
+            return (
+                "[时段提示: 当前为深夜时段(可能用户疲惫),"
+                "请使用简洁友好且降低认知负荷的语言]"
+            )
+        if 22 <= hour <= 23:
+            return "[时段提示: 当前为夜间时段,语气可更轻松自然]"
+        return ""
+
+    # ── S34: Context Drop on Short Message ──────────────────────────────
+    def _compute_context_drop_line(
+        self, session_id: str, user_message: str
+    ) -> str:
+        """S34: 若消息很短且缺乏指代,在已有历史时提示上下文不完整。
+
+        触发条件:
+          - 消息非空且字符数 <= context_drop_max_chars
+          - 不包含任何代词("我/你/这/那/它/他/她/我的/你的")
+          - 本会话已有 >= 2 条历史
+        """
+        if not self.context_drop_enabled or not user_message:
+            return ""
+        stripped = user_message.strip()
+        if len(stripped) > self.context_drop_max_chars or len(stripped) == 0:
+            return ""
+        pronouns = ["我", "你", "这", "那", "它", "他", "她", "i ", "you", "this", "that", "it"]
+        lower = stripped.lower()
+        if any(p in lower for p in pronouns):
+            return ""
+        # 检查本会话用户历史(S32 维护的 _user_msg_history)
+        history = self._user_msg_history.get(session_id, [])
+        if len(history) < 2:
+            return ""
+        return (
+            "[上下文不完整: 用户当前消息非常简短且缺乏指代,"
+            "建议联系历史推断意图或主动询问澄清]"
+        )
+
+    # ── S35: Negative Feedback Detection ────────────────────────────────
+    def _compute_negative_feedback_line(self, user_message: str) -> str:
+        """S35: 扫描失败/不满意关键词,触发后提示彻底重新理解需求。
+
+        触发关键词(中文 + 部分英文):不对/错了/不是这样/你没明白/弄错/搞错/
+        没听懂/不是我想要的/wrong/again/no that's not。
+        匹配采用精确子串(全部小写比较),确保高召回低误报。
+        """
+        if not self.negative_feedback_enabled or not user_message:
+            return ""
+        lower = user_message.lower()
+        keywords = [
+            "不对",
+            "错了",
+            "不是这样",
+            "你没明白",
+            "弄错",
+            "搞错",
+            "没听懂",
+            "理解错",
+            "不是我想要的",
+            "我不是这个意思",
+            "wrong",
+            "that's not what",
+            "you misunderstood",
+            "no that's not",
+        ]
+        for kw in keywords:
+            if kw in lower:
+                return (
+                    "[反馈识别: 用户对上一回答不满意,"
+                    "请彻底重新理解需求,避免重复相同思路]"
+                )
+        return ""
+
     def _compute_knowledge_gap_hint(self, relevant: List[Dict]) -> str:
         """S16: 知识缺口检测 — 检测记忆上下文是否严重不足，返回行为指令行。
 
@@ -2634,6 +2859,29 @@ class ChatEngine:
         tool_freq_line = self._compute_tool_freq_line(session_id)
         if tool_freq_line:
             memory_text = f"{memory_text}\n{tool_freq_line}"
+        # S31: 对话节奏切换检测 — 在 S32 历史更新之前先记录字数样本
+        self._record_pace_sample(session_id, user_input)
+        pace_switch_line = self._compute_pace_switch_line(session_id)
+        if pace_switch_line:
+            memory_text = f"{memory_text}\n{pace_switch_line}"
+        # S32: 重复性问题检测 — 必须先 compute 再 record,避免自匹配
+        repeat_q_line = self._compute_repeat_question_line(session_id, user_input)
+        if repeat_q_line:
+            memory_text = f"{memory_text}\n{repeat_q_line}"
+        # S33: 时段感知行为信号
+        time_of_day_line = self._compute_time_of_day_line()
+        if time_of_day_line:
+            memory_text = f"{memory_text}\n{time_of_day_line}"
+        # S34: 短句上下文遗漏检测 — 依赖 S32 已经维护的历史长度
+        context_drop_line = self._compute_context_drop_line(session_id, user_input)
+        if context_drop_line:
+            memory_text = f"{memory_text}\n{context_drop_line}"
+        # S35: 失败反馈识别
+        neg_feedback_line = self._compute_negative_feedback_line(user_input)
+        if neg_feedback_line:
+            memory_text = f"{memory_text}\n{neg_feedback_line}"
+        # S32 (cont.): 最后把当前 user_input 记入历史(下轮用)
+        self._record_user_message(session_id, user_input)
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -2878,6 +3126,29 @@ class ChatEngine:
         tool_freq_line = self._compute_tool_freq_line(session_id)
         if tool_freq_line:
             memory_text = f"{memory_text}\n{tool_freq_line}"
+        # S31: 对话节奏切换检测
+        self._record_pace_sample(session_id, user_input)
+        pace_switch_line = self._compute_pace_switch_line(session_id)
+        if pace_switch_line:
+            memory_text = f"{memory_text}\n{pace_switch_line}"
+        # S32: 重复性问题检测(compute 前于 record)
+        repeat_q_line = self._compute_repeat_question_line(session_id, user_input)
+        if repeat_q_line:
+            memory_text = f"{memory_text}\n{repeat_q_line}"
+        # S33: 时段感知
+        time_of_day_line = self._compute_time_of_day_line()
+        if time_of_day_line:
+            memory_text = f"{memory_text}\n{time_of_day_line}"
+        # S34: 短句上下文遗漏
+        context_drop_line = self._compute_context_drop_line(session_id, user_input)
+        if context_drop_line:
+            memory_text = f"{memory_text}\n{context_drop_line}"
+        # S35: 失败反馈识别
+        neg_feedback_line = self._compute_negative_feedback_line(user_input)
+        if neg_feedback_line:
+            memory_text = f"{memory_text}\n{neg_feedback_line}"
+        # S32 (cont.): 记入历史
+        self._record_user_message(session_id, user_input)
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
