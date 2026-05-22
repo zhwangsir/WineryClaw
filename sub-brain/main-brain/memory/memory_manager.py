@@ -466,8 +466,36 @@ class MemoryManager:
         H2: now that connections are pooled, PRAGMA setup cost
         amortizes across many queries. We can enable WAL mode + tighter
         busy timeout without the H1 per-connect overhead trap.
+
+        ROADMAP V2 Axis 3 — opt-in SQLCipher encryption.
+        When WEBRAIN_SQLCIPHER_KEY is set:
+          - try import pysqlcipher3 → use encrypted driver + PRAGMA key
+          - if pysqlcipher3 is missing → warn loudly, fall back to plain
+            sqlite3 (fail-open so dev / CI without the binding stays green)
+        When the env var is unset, behavior is identical to pre-encryption.
         """
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        sqlcipher_key = os.environ.get("WEBRAIN_SQLCIPHER_KEY")
+        conn: sqlite3.Connection
+        if sqlcipher_key:
+            try:
+                from pysqlcipher3 import dbapi2 as sqlcipher  # type: ignore[import-not-found]
+
+                conn = sqlcipher.connect(self._db_path, check_same_thread=False)
+                # PRAGMA key MUST run before any other SQL on a SQLCipher conn.
+                # Parametrized binding is not supported for PRAGMA — escape
+                # single quotes to keep the literal safe against quote injection.
+                escaped = sqlcipher_key.replace("'", "''")
+                conn.execute(f"PRAGMA key = '{escaped}'")
+                logger.info("[memory] SQLCipher enabled (db=%s)", self._db_path)
+            except ImportError:
+                logger.warning(
+                    "[memory] WEBRAIN_SQLCIPHER_KEY set but pysqlcipher3 not "
+                    "installed — falling back to UNENCRYPTED sqlite3. Install "
+                    "pysqlcipher3 to enable at-rest encryption."
+                )
+                conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        else:
+            conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         # PRAGMAs are idempotent on existing DBs. journal_mode=WAL is
         # sticky in the DB header but harmless to re-set per connection

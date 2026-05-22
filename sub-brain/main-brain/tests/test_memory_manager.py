@@ -438,3 +438,141 @@ class TestConflictsAndLineageAPIs:
     async def test_get_with_lineage_unknown_id_returns_error(self, mm):
         result = await mm.get_with_lineage("nonexistent")
         assert result["ok"] is False
+
+
+class TestSqlCipherEncryption:
+    """ROADMAP V2 Axis 3 — opt-in SQLCipher at-rest encryption.
+
+    The MVP only touches the connection-open path. We verify three
+    branches of _make_pooled_connection:
+      1. No env key → plain sqlite3 (current default, no regression).
+      2. Key set + pysqlcipher3 available → encrypted driver invoked with
+         PRAGMA key, file no longer parseable as plain sqlite.
+      3. Key set + pysqlcipher3 import fails → fail-open warning, plain
+         sqlite3 used (so CI / dev without the optional binding stays green).
+    """
+
+    def test_no_env_key_uses_plain_sqlite(self, temp_dir, mock_llm_config, monkeypatch):
+        monkeypatch.delenv("WEBRAIN_SQLCIPHER_KEY", raising=False)
+        db_path = temp_dir / "plain.db"
+        mm = MemoryManager(db_path=str(db_path), llm_config=mock_llm_config)
+        # Sanity: plain sqlite3 can re-open the file written above.
+        with sqlite3.connect(str(db_path)) as conn:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            ]
+        assert "memories" in tables
+
+    def test_missing_pysqlcipher3_fails_open_with_warning(
+        self, temp_dir, mock_llm_config, monkeypatch, caplog
+    ):
+        """Key set but binding missing → loud warning, fall back to plain.
+
+        We can't uninstall pysqlcipher3 from the venv per-test, so we
+        simulate the ImportError by patching builtins.__import__ to raise
+        on the pysqlcipher3.dbapi2 module. Any other import passes through.
+        """
+        import builtins
+
+        monkeypatch.setenv("WEBRAIN_SQLCIPHER_KEY", "test-key-123")
+        real_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "pysqlcipher3":
+                raise ImportError("simulated missing pysqlcipher3 binding")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        db_path = temp_dir / "fallback.db"
+        with caplog.at_level("WARNING", logger="webrain.memory"):
+            mm = MemoryManager(db_path=str(db_path), llm_config=mock_llm_config)
+
+        # Loud warning was emitted.
+        assert any(
+            "pysqlcipher3 not installed" in rec.message
+            and "UNENCRYPTED" in rec.message
+            for rec in caplog.records
+        ), f"expected fail-open warning, got: {[r.message for r in caplog.records]}"
+        # And the DB file is a normal plain sqlite (re-openable without key).
+        with sqlite3.connect(str(db_path)) as conn:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            ]
+        assert "memories" in tables
+
+    def test_pysqlcipher3_present_uses_encrypted_driver(
+        self, temp_dir, mock_llm_config, monkeypatch
+    ):
+        """Key set + binding 'present' → sqlcipher.connect is called,
+        PRAGMA key is issued before any other SQL.
+
+        pysqlcipher3 is not in the venv, so we inject a stub module that
+        records the connect-call + PRAGMA chain and delegates underlying
+        storage to plain sqlite3 (so the rest of MemoryManager init can
+        proceed normally — schema creation, FTS, etc.).
+        """
+        import sys
+        import types
+
+        monkeypatch.setenv("WEBRAIN_SQLCIPHER_KEY", "secret-pass-phrase")
+        calls: list[tuple[str, tuple]] = []
+
+        stub_module = types.ModuleType("pysqlcipher3")
+        dbapi2_module = types.ModuleType("pysqlcipher3.dbapi2")
+
+        class _ConnProxy:
+            """Forwards everything to a real sqlite3.Connection but spies
+            on execute() so we can record PRAGMA key + skip it (plain
+            sqlite3 doesn't know PRAGMA key). The wrapped MemoryManager
+            uses the proxy for the lifetime of the pool slot.
+            """
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            def execute(self, sql, *args, **kwargs):
+                if isinstance(sql, str) and sql.strip().upper().startswith(
+                    "PRAGMA KEY"
+                ):
+                    calls.append(("pragma_key", (sql,)))
+                    return self._inner.execute("SELECT 1")
+                return self._inner.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, item):
+                return getattr(self._inner, item)
+
+            def __enter__(self):
+                return self._inner.__enter__()
+
+            def __exit__(self, *exc):
+                return self._inner.__exit__(*exc)
+
+        def fake_connect(db_path, **kwargs):
+            calls.append(("connect", (db_path,)))
+            real_conn = sqlite3.connect(db_path, **kwargs)
+            return _ConnProxy(real_conn)
+
+        dbapi2_module.connect = fake_connect  # type: ignore[attr-defined]
+        stub_module.dbapi2 = dbapi2_module  # type: ignore[attr-defined]
+
+        monkeypatch.setitem(sys.modules, "pysqlcipher3", stub_module)
+        monkeypatch.setitem(sys.modules, "pysqlcipher3.dbapi2", dbapi2_module)
+
+        db_path = temp_dir / "encrypted.db"
+        MemoryManager(db_path=str(db_path), llm_config=mock_llm_config)
+
+        # First the encrypted driver was used to open the file.
+        connect_calls = [c for c in calls if c[0] == "connect"]
+        assert len(connect_calls) >= 1, f"expected sqlcipher.connect, got {calls}"
+        # And PRAGMA key was the first statement issued.
+        pragma_calls = [c for c in calls if c[0] == "pragma_key"]
+        assert len(pragma_calls) >= 1, f"expected PRAGMA key, got {calls}"
+        # Key value made it into the PRAGMA literal (single-quote-escaped).
+        assert "secret-pass-phrase" in pragma_calls[0][1][0]

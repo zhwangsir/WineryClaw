@@ -146,6 +146,43 @@ pnpm dev
 docker-compose up --build
 ```
 
+### 配置 LLM 端点（多 provider 接入）
+
+仓库提供了 8 个主流 provider 的端点模板：
+`sub-brain/main-brain/config/llm.example.json`
+
+包含：OpenAI、Anthropic、Google Gemini、DeepSeek、Kimi/Moonshot、Groq、LM Studio (本地)、Ollama (本地)。
+
+启用真实云端 provider 步骤：
+
+```bash
+# 1) 复制模板到用户级配置目录(sub-brain 从 ~/.webrain/model-config.json 读取)
+mkdir -p ~/.webrain
+cp sub-brain/main-brain/config/llm.example.json ~/.webrain/model-config.json
+
+# 2) 编辑填入 apiKey,删除不用的 endpoint,调整 priority(数字越大优先级越高)
+$EDITOR ~/.webrain/model-config.json
+
+# 3) 重启 sub-brain (会自动让 main-brain 重新 /config/reload)
+#    或运行中直接 POST /config/model 让其热加载
+```
+
+字段说明（与 chat_engine `LLMEndpoint` schema 对齐）:
+
+| 字段 | 说明 |
+|---|---|
+| `name` | 端点显示名(任意,但建议保持唯一) |
+| `provider` | `openai` \| `anthropic` \| `google`,决定请求构造方式 |
+| `baseUrl` | API base URL,**不带尾部斜杠** |
+| `modelId` | 模型标识(如 `gpt-4o-mini`、`claude-3-5-sonnet-20241022`) |
+| `apiKey` | provider 密钥,本地服务可留空字符串 |
+| `priority` | 优先级,**越大越先**;同优先级按声明顺序 |
+| `timeout` | 单次请求超时(秒) |
+
+> **安全**: `~/.webrain/model-config.json` 含明文密钥,不要 commit 到 git;部署时建议用环境变量或挂载 secret 卷。
+> **失效转移**: `chat_engine` 在 M4a 后已支持 multi-endpoint failover——任一端点失败会自动切到下一个 priority 较低的健康端点。
+> **热加载**: 修改后无需重启,`POST /config/model` 即可让所有 engine (chat / reasoning / planner / dreaming / kg / skill_reflector) 同步新配置。
+
 ### 安装检查
 
 ```bash
