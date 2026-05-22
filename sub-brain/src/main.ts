@@ -72,7 +72,13 @@ import { WeBrainCLI } from "./cli/webrain-cli.js";
 const PORT = parseInt(process.env.WEBRAIN_SUB_BRAIN_PORT || "3000", 10);
 const MAIN_BRAIN_PORT = parseInt(process.env.WEBRAIN_MAIN_BRAIN_PORT || "18790", 10);
 const MAIN_BRAIN_UDS = process.env.WEBRAIN_MAIN_BRAIN_UDS || "/tmp/webrain-main.sock";
-const USE_UDS = !process.env.WEBRAIN_MAIN_BRAIN_UDS && !process.env.WEBRAIN_MAIN_BRAIN_PORT;
+// Transport selection (v2.19 fix — previously inverted):
+//   WEBRAIN_MAIN_BRAIN_PORT  set → force TCP (test/docker/multi-host deploys)
+//   WEBRAIN_MAIN_BRAIN_UDS   set → force UDS at the given path
+//   neither set              → UDS at the default `/tmp/webrain-main.sock`
+// Pre-fix bug: setting WEBRAIN_MAIN_BRAIN_UDS *disabled* UDS (truthy → !UDS = false),
+// so the proxy went to TCP :18790 and ECONNREFUSED'd. Confirmed in real-user test.
+const USE_UDS = !process.env.WEBRAIN_MAIN_BRAIN_PORT;
 const MAIN_BRAIN_URL = USE_UDS ? "http://localhost" : `http://127.0.0.1:${MAIN_BRAIN_PORT}`;
 const EMBEDDED = process.env.WEBRAIN_EMBEDDED === "1";
 const __dirname = dirname(fileURLToPath(import.meta.url));

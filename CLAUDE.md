@@ -94,8 +94,11 @@ The README has the diagram. These are the things that are easy to get wrong and 
 ### Transport selection (sub-brain → main-brain)
 
 In `sub-brain/src/main.ts`:
-- If neither `WEBRAIN_MAIN_BRAIN_UDS` nor `WEBRAIN_MAIN_BRAIN_PORT` is set → UDS (`/tmp/webrain-main.sock`).
-- If `WEBRAIN_MAIN_BRAIN_PORT` is set → TCP to that port.
+- If `WEBRAIN_MAIN_BRAIN_PORT` is set → TCP to that port (`http://127.0.0.1:$PORT`).
+- Otherwise → UDS at `WEBRAIN_MAIN_BRAIN_UDS` (default `/tmp/webrain-main.sock`).
+- v2.19 fix: previously `USE_UDS` was inverted (setting `WEBRAIN_MAIN_BRAIN_UDS`
+  *disabled* UDS instead of overriding the path); confirmed broken in real-user
+  test 2026-05-22. Now `PORT` env alone toggles transport.
 - Stale UDS sockets cause boot failure — clean before restart if you switch.
 
 ### Main-brain bind + data dir
@@ -124,7 +127,7 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 
 | Var | Service | Default | Effect |
 |---|---|---|---|
-| `WEBRAIN_MAIN_BRAIN_UDS` | sub-brain | `/tmp/webrain-main.sock` | UDS path. Set this OR `WEBRAIN_MAIN_BRAIN_PORT`, not both. |
+| `WEBRAIN_MAIN_BRAIN_UDS` | sub-brain | `/tmp/webrain-main.sock` | UDS path override (only effective when `WEBRAIN_MAIN_BRAIN_PORT` is *unset*). |
 | `WEBRAIN_MAIN_BRAIN_PORT` | sub-brain | `18790` | Forces TCP transport to main-brain. |
 | `WEBRAIN_SUB_BRAIN_URL` | main-brain | `http://127.0.0.1:3000` | Where main-brain fetches `/config/model` from. Smoke fixtures set this to the spawned sub-brain's port. |
 | `WEBRAIN_NO_MAIN_BRAIN` | sub-brain | unset | If `1`, sub-brain skips auto-spawning a main-brain child. Useful when running main-brain manually. |

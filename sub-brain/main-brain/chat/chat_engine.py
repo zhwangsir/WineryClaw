@@ -2696,15 +2696,21 @@ class ChatEngine:
                 last_error = e
                 # v2.16 Axis 3: record failure to network_ledger too —
                 # users want to see "endpoint X errored" in audit.
+                # v2.19 fix: pass request_bytes (already computed before send)
+                # so audit shows "you sent X bytes that then errored", not null.
                 latency_ms_to_fail = (time.time() - t0) * 1000.0
                 try:
                     from audit.network_ledger import get_ledger
-                    get_ledger().record_failure(
+                    get_ledger().record(
+                        event="llm_call",
                         endpoint=ep.name,
                         base_url=ep.base_url,
                         model=ep.model_id,
-                        error=err_msg,
+                        success=False,
                         latency_ms=latency_ms_to_fail,
+                        request_bytes=request_bytes,
+                        response_bytes=None,
+                        error=err_msg,
                     )
                 except Exception:
                     pass
