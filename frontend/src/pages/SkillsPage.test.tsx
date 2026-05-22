@@ -181,9 +181,17 @@ describe("SkillsPage", () => {
   it("refreshes data", async () => {
     render(<SkillsPage />);
     await screen.findByText("Summarize");
-    // v2.22: wrap the click-then-assert in waitFor — CI workers can race
-    // here where the mount-time `list` fetch is in-flight when click fires,
-    // so the spy sees only the click call. waitFor polls until both fire.
+    // v2.22.1: wait for the refresh button's loading state to clear before
+    // clicking. The button uses `loading={loading}` from fetchData; AntD makes
+    // loading buttons non-clickable, so on slow CI VMs the click can land
+    // before mount-time fetchData finishes and is silently consumed by the
+    // loading affordance — only ONE list call (mount) registers, refresh test
+    // sees `expected 2, got 1`. waitFor here polls until the button is enabled.
+    await waitFor(() => {
+      const btn = screen.getByText("刷新").closest("button");
+      expect(btn).toBeTruthy();
+      expect(btn?.classList.contains("ant-btn-loading")).toBe(false);
+    });
     fireEvent.click(screen.getByText("刷新"));
     await waitFor(() => {
       expect(skillsApi.list).toHaveBeenCalledTimes(2);
