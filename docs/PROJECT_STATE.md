@@ -2,7 +2,7 @@
 
 > **用途**：新开 AI 对话时，让 AI 读这一份文件即可同步项目完整状态。
 > **维护约定**：每完成一个开发轮次（Round），更新「开发进度」「测试状态」「下一步」三节。
-> **最后更新**：2026-05-22(v2.35 = P0 全清 + P1 接通 + CI 6/6 + 桌面端 Linux 进 CI;详见 §21)
+> **最后更新**：2026-05-23(v2.44h = Sprint 0.7 写迁移 + ADR-0002 写完成,P95 目标 open;详见 §22)
 
 ---
 
@@ -1722,5 +1722,62 @@ v2.18 后的 21 个 commit 围绕三件事:**(a)** 用户真实使用系统暴�
 | 12 | P95 ≤ 80ms | ❌ ~140ms (性能侧) |
 
 **10/12 = 83% 完成**;剩余 2 项为非线性深度算法/性能工作。
+
+---
+
+## §22. v2.36 – v2.44 (2026-05-22 至 23) — UI 收尾 + Sprint 0.7 写迁移
+
+### 22.1 概览
+
+本批 commit 跨度大,可分三块:
+
+1. **UI 收尾 (v2.36–v2.42)** — 用户多次反馈"桌面端 UI 有瑕疵"。共 7
+   个 commit 修了 v2.34 RAG dropzone .pdf/.docx 误导 (真 bug:后端
+   v2.38 allowlist 会 reject)、HeaderBar 启动期红色误报、Settings 表
+   头被裁、SkillhubPage 双空状态、ChatPage InboxOutlined 不对题 等。
+2. **MCP / Channel / SkillHub 收尾 (v2.37–v2.40)** — 抓出 5 个真实
+   生产 bug: channel maxRepliesPerHour 并发 race、Fastify bodyLimit
+   1MB 默认导致 RAG 上传不可用、上传 /upload 零防护可上 .exe、ledger
+   无滚动会撑爆磁盘、SkillHub seed 翻不开 (addRegistry 拒重名 +
+   无 PATCH)。
+3. **Sprint 0.7 写迁移 (v2.43–v2.44)** — architect + database-reviewer
+   sub-agent 联合分析后实施 8 步 writer-thread 计划。
+
+### 22.2 Sprint 0.7 实测结果 (v2.44g)
+
+| Config | Seq P95 | Conc 30 P95 |
+|---|---:|---:|
+| Pre-v2.44 baseline (PROJECT_STATE §15) | 140 ms | 2450 ms |
+| Post-v2.44 fallback path (no executors) | 242 ms | 5393 ms |
+| Post-v2.44 executors wired (production path) | 203 ms | 5184 ms |
+
+**未达 architect 预测 (75-85ms / 700-900ms)。**
+
+诚实记录(ADR-0002):
+- 同机 A/B 显示 fallback 路径与 writer-executor 路径无显著差异
+- 写锁不是这台机器上的主瓶颈(否则 writer 会显著改善 conc P95)
+- 真瓶颈可能在 embedder/FTS5 trigger/asyncio 调度,需 py-spy profiling
+- v2.44 架构正确、回滚廉价、不增加缺陷;P95 目标仍 open
+
+### 22.3 测试规模最新
+
+| 套件 | 起点 (v2.35) | 现在 (v2.44h) | Δ |
+|---|---:|---:|---:|
+| main-brain pytest | 929 | **969** | +40 |
+| sub-brain vitest | 513 | **537** | +24 |
+| frontend vitest | 1240 | **1267** | +27 |
+| 总计 | 2682 | **2773** | **+91** |
+
+### 22.4 ROADMAP V2 §4 验收清单(v2.44h 时点)
+
+| # | 验收项 | 状态 |
+|---|---|---|
+| 1-10 | 同 §21.7 | ✅ (10 项不变) |
+| 11 | recall@5 ≥ 0.85 | ❌ 0.625 (算法侧) |
+| 12 | 单调用 P95 ≤ 80ms | ❌ ~200ms 实测 (v2.44 架构就位但未达成) |
+| 13 (new) | 并发 30 P95 ≤ 800ms | ❌ ~5200ms 实测 (同上) |
+
+**10/13 = 77% 完成**(新增显式并发指标);剩余 3 项中 P95 两个为
+ADR-0002 文档记录的 open item,recall 仍是算法侧。
 
 ---

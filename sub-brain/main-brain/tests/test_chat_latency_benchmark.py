@@ -64,6 +64,29 @@ async def test_chat_latency_with_mock_llm(temp_dir, mock_llm_config, capsys):
     # Fresh DB so accumulated rows don't skew the importance blender.
     mm = MemoryManager(db_path=str(temp_dir / "latency.db"), llm_config=mock_llm_config)
 
+    # v2.44g — opt-in wiring for the Sprint 0.7 executors. Default OFF
+    # so this benchmark continues to measure the legacy path that any
+    # direct-construction caller gets (no main_brain.py lifespan). Set
+    # WEBRAIN_BENCH_WIRE_EXECUTORS=1 to compare the production hot path
+    # (writer thread + isolated ML pool) against the legacy baseline.
+    # The legacy path uses asyncio.to_thread + default executor.
+    import os as _os
+    _wire_executors = _os.environ.get("WEBRAIN_BENCH_WIRE_EXECUTORS", "0") == "1"
+    ml_executor = None
+    writer_executor = None
+    if _wire_executors:
+        from concurrent.futures import ThreadPoolExecutor
+        from memory._sqlite_executor import WriterExecutor as _Wx
+
+        ml_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bench-ml")
+        mm.set_ml_executor(ml_executor)
+
+        def _wx_conn_factory():
+            return mm._make_pooled_connection()
+
+        writer_executor = _Wx(_wx_conn_factory, name="bench-writer")
+        mm.set_writer_executor(writer_executor)
+
     # Stub sub-brain client — agent-config fetch is irrelevant to latency
     sub_brain = MagicMock()
     sub_brain.execute_tool = AsyncMock(return_value="ok")
@@ -191,3 +214,10 @@ async def test_chat_latency_with_mock_llm(temp_dir, mock_llm_config, capsys):
         "concurrent_samples_ms": concurrent_samples,
     }, indent=2))
     print(f"\nResults JSON: {out}")
+
+    # v2.44g — clean up any executors created above so this benchmark
+    # doesn't leak threads into other tests if run in a larger session.
+    if writer_executor is not None:
+        writer_executor.shutdown(wait=True)
+    if ml_executor is not None:
+        ml_executor.shutdown(wait=True)

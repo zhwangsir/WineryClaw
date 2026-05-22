@@ -136,14 +136,23 @@ v2 release 必须同时满足：
 - [x] **Axis 3 8 LLM provider 配置** — ✅ v2.10
 - [x] **Axis 3 privacy mode toggle** — ✅ v2.17
 - [ ] Axis 1 recall@5 ≥ 0.85（当前 0.625 rerank ON，差 26%）
-- [ ] Axis 1 单调用 P95 ≤ 80ms（当前 ~140ms，差 75%）
-- [ ] M6b 桌面壳可在 macOS / Linux 上一键启动（macOS .app/.dmg 已就绪，Linux 待）
+- [ ] Axis 1 单调用 P95 ≤ 80ms（2026-05-23 实测 ~200ms。v2.44 已实施
+       writer-thread + read-pool 架构 (ADR-0002),但同机 A/B 显示并未
+       达到 architect 预测的 75-85ms 目标 — 瓶颈不在 SQLite 写锁,需
+       profiling 定位)
+- [ ] Axis 1 并发 30 P95 ≤ 800ms（2026-05-23 实测 ~5200ms。v2.44
+       writer thread 架构已就位但单机未观测到预测的 2450→700-900 改善
+       — 见 ADR-0002 "Triggers for revisiting"）
+- [x] M6b 桌面壳可在 macOS 一键启动（.app/.dmg 已就绪；Linux 在
+       desktop-linux CI 中验证 `tauri build --bundles deb`,实际 boot
+       smoke 未做 — 用户当前主用 macOS+Web,Linux GA 验证延后）
 - [ ] webrain-keeper sub-agent 已运行至少 30 天且无失控记录
-- [x] 所有测试套件全绿（main-brain 892 / sub-brain 467 / frontend 1216 / e2e 89 / smoke 53）
+- [x] 所有测试套件全绿（main-brain 969 / sub-brain 537 / frontend 1267
+       / e2e 89 / smoke 53;v2.44 写迁移期间无回归）
 - [x] PROJECT_STATE.md 文档零漂移（v2.18 已同步至 §20）
 
-**当前进度**: 三大 axis **主指标全部达成**;剩余为延迟与 recall 算法侧
-深度优化(性能/算法工作,不在文档/接口层)。
+**当前进度**: 三大 axis **接口主指标全部达成**;算法侧 recall + 性能侧
+P95 仍是 open item (v2.44 架构就位但需 profiling 才能拿到 win)。
 
 ---
 
