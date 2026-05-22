@@ -382,6 +382,18 @@ async def lifespan(app: FastAPI) -> None:
     logger.info("Main Brain initialized. All systems online.")
     yield
 
+    # v2.15 (Axis 2 8/8): notify sub-brain plugin hooks of shutdown BEFORE
+    # we cancel background tasks. Fire-and-forget with 1s timeout so a slow
+    # plugin hook can't block the process exit.
+    try:
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            await client.post(
+                f"{sub_brain_url}/hooks/process/shutdown",
+                json={},
+            )
+    except Exception as e:
+        logger.warning(f"on_shutdown hook notification failed (non-fatal): {e}")
+
     # Cleanup
     if "_heartbeat_task" in _state:
         _state["_heartbeat_task"].cancel()

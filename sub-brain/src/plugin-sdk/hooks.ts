@@ -44,8 +44,9 @@ export const HOOK_STATUS: Record<HookType, HookWiredStatus> = {
   post_llm_call: "wired",
   on_session_start: "wired",
   on_session_end: "wired",
-  // Below: API surface preserved but no call site invokes them today.
-  on_shutdown: "unwired",
+  // v2.15 (Axis 2 8/8): main-brain FastAPI lifespan shutdown 触发
+  // POST /hooks/process/shutdown,sub-brain 跑 runShutdown 通知所有插件。
+  on_shutdown: "wired",
 };
 
 export interface ToolCallContext {

@@ -7,14 +7,19 @@
  * 所以 main-brain 在 _chat_completion 前后 fire-and-forget POST 通知
  * 到这里,这里再调 hookRegistry 让插件作者写的 TS hook 跑起来。
  *
+ * v2.15 — 接通最后一个 on_shutdown(Axis 2 8/8 完成)。main-brain
+ * FastAPI lifespan shutdown 时 fire-and-forget POST 到 /hooks/process/shutdown,
+ * 这里调用 hookRegistry.runShutdown() 让插件清理资源。
+ *
  *   POST /hooks/llm/pre   — body { messages, model?, temperature?, agentId?, sessionId? }
  *                            → runs HookRegistry.runPreLLMCall
  *                            → returns { allowed, modified?, reason? }
  *   POST /hooks/llm/post  — body { context, response }
  *                            → runs HookRegistry.runPostLLMCall
  *                            → returns { ok: true }
- *   POST /hooks/session/start — body { sessionId, meta? }
- *   POST /hooks/session/end   — body { sessionId, meta? }
+ *   POST /hooks/session/start  — body { sessionId, meta? }
+ *   POST /hooks/session/end    — body { sessionId, meta? }
+ *   POST /hooks/process/shutdown — body {} (空体) — 触发 runShutdown
  */
 
 import type { FastifyInstance } from "fastify";
@@ -99,6 +104,22 @@ export function registerHooksRoutes(app: FastifyInstance, deps: HooksRouteDeps):
     if (!body.sessionId) return { ok: false, error: "sessionId required" };
     try {
       await deps.hookRegistry.runSessionEnd(body.sessionId, body.meta);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  /**
+   * v2.15 (Axis 2 8/8): main-brain FastAPI lifespan shutdown 触发,
+   * sub-brain 调用 hookRegistry.runShutdown() 让所有插件清理资源。
+   *
+   * 错误 swallow-and-log:即使某插件 shutdown hook 抛错也不能阻塞
+   * main-brain 退出流程。
+   */
+  app.post("/hooks/process/shutdown", async () => {
+    try {
+      await deps.hookRegistry.runShutdown();
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };

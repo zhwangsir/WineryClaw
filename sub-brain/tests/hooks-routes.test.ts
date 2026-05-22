@@ -164,4 +164,78 @@ describe("HOOK_STATUS surface", () => {
     expect(HOOK_STATUS.on_session_start).toBe("wired");
     expect(HOOK_STATUS.on_session_end).toBe("wired");
   });
+
+  it("v2.15: on_shutdown is now wired (Axis 2 8/8)", async () => {
+    const { HOOK_STATUS } = await import("../src/plugin-sdk/hooks.js");
+    expect(HOOK_STATUS.on_shutdown).toBe("wired");
+  });
+});
+
+describe("POST /hooks/process/shutdown (v2.15)", () => {
+  it("returns ok:true on empty registry", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/hooks/process/shutdown",
+      payload: {},
+    });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ ok: true });
+  });
+
+  it("invokes registered on_shutdown hook", async () => {
+    const seen: string[] = [];
+    registry.register("on_shutdown", async () => {
+      seen.push("called");
+    });
+    const r = await app.inject({
+      method: "POST",
+      url: "/hooks/process/shutdown",
+      payload: {},
+    });
+    expect(r.statusCode).toBe(200);
+    expect(seen).toEqual(["called"]);
+  });
+
+  it("hook throwing returns ok:false but doesn't 500", async () => {
+    registry.register("on_shutdown", async () => {
+      throw new Error("buggy plugin cleanup");
+    });
+    const r = await app.inject({
+      method: "POST",
+      url: "/hooks/process/shutdown",
+      payload: {},
+    });
+    // The route handler returns ok:false with error string,
+    // but Fastify still treats it as 200 (no throw).
+    expect(r.statusCode).toBe(200);
+    const body = r.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/buggy plugin/);
+  });
+
+  it("accepts empty body", async () => {
+    // Different payload formats — all should work.
+    const r1 = await app.inject({
+      method: "POST",
+      url: "/hooks/process/shutdown",
+      payload: {},
+    });
+    expect(r1.statusCode).toBe(200);
+  });
+
+  it("multiple shutdown hooks run sequentially", async () => {
+    const seen: string[] = [];
+    registry.register("on_shutdown", async () => {
+      seen.push("first");
+    });
+    registry.register("on_shutdown", async () => {
+      seen.push("second");
+    });
+    await app.inject({
+      method: "POST",
+      url: "/hooks/process/shutdown",
+      payload: {},
+    });
+    expect(seen).toEqual(["first", "second"]);
+  });
 });
