@@ -278,7 +278,6 @@ export default function ChannelsPage() {
         onClose={() => setPolicyDrawerOpen(false)}
       />
 
-
       <Drawer
         title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>通道消息: {msgChannelId}</span>}
         open={msgDrawerOpen}

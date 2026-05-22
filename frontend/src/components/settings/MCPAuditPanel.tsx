@@ -93,10 +93,8 @@ export default function MCPAuditPanel() {
       style={{ borderRadius: 12, marginBottom: 16 }}
     >
       <p style={{ marginTop: 0, color: "var(--c-text-2)" }}>
-        每次 MCP <code>tools/call</code> 调用都会记录在{" "}
-        <code>{data?.path ?? "~/.webrain/mcp_audit.jsonl"}</code>。
-        bearer token 显示为 sha256:&lt;前12位&gt;,永不存储原始 token;参数仅
-        记录键 + 长度,避免泄露敏感 payload。
+        每次 MCP <code>tools/call</code> 调用都会记录在 <code>{data?.path ?? "~/.webrain/mcp_audit.jsonl"}</code>。
+        bearer token 显示为 sha256:&lt;前12位&gt;,永不存储原始 token;参数仅 记录键 + 长度,避免泄露敏感 payload。
       </p>
 
       {data && (
@@ -105,11 +103,7 @@ export default function MCPAuditPanel() {
           <Statistic
             title="成功率"
             suffix="%"
-            value={
-              data.stats.total > 0
-                ? Math.round((data.stats.success / data.stats.total) * 100)
-                : 0
-            }
+            value={data.stats.total > 0 ? Math.round((data.stats.success / data.stats.total) * 100) : 0}
           />
         </Space>
       )}
@@ -168,57 +162,40 @@ export default function MCPAuditPanel() {
             title: "工具",
             dataIndex: "tool",
             width: 140,
-            render: (v: string, r) => (
-              <Tag color={r.success ? "blue" : "red"}>{v}</Tag>
-            ),
+            render: (v: string, r) => <Tag color={r.success ? "blue" : "red"}>{v}</Tag>,
           },
           {
             title: "scope",
             dataIndex: "scope",
             width: 70,
-            render: (v: string) => (
-              <Tag color={v === "write" ? "orange" : "default"}>{v}</Tag>
-            ),
+            render: (v: string) => <Tag color={v === "write" ? "orange" : "default"}>{v}</Tag>,
           },
           {
             title: "状态",
             dataIndex: "success",
             width: 70,
-            render: (v: boolean) =>
-              v ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag>,
+            render: (v: boolean) => (v ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag>),
           },
           {
             title: "延迟",
             dataIndex: "latency_ms",
             width: 80,
             render: (v: number | null) =>
-              v == null ? (
-                "—"
-              ) : v >= 1000 ? (
-                `${(v / 1000).toFixed(2)} s`
-              ) : (
-                `${Math.round(v)} ms`
-              ),
+              v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${Math.round(v)} ms`,
           },
           {
             title: "bearer",
             dataIndex: "bearer_id",
             width: 130,
             render: (v: string | null) =>
-              v ? (
-                <code style={{ fontSize: 11 }}>{v}</code>
-              ) : (
-                <span style={{ color: "var(--c-text-3)" }}>—</span>
-              ),
+              v ? <code style={{ fontSize: 11 }}>{v}</code> : <span style={{ color: "var(--c-text-3)" }}>—</span>,
           },
           {
             title: "参数 / 错误",
             render: (_: unknown, r) =>
               r.error ? (
                 <Tooltip title={r.error}>
-                  <span style={{ fontSize: 11, color: "#b91c1c" }}>
-                    {r.error.split(":")[0]}
-                  </span>
+                  <span style={{ fontSize: 11, color: "#b91c1c" }}>{r.error.split(":")[0]}</span>
                 </Tooltip>
               ) : (
                 <Tooltip title={JSON.stringify(r.args_summary, null, 2)}>

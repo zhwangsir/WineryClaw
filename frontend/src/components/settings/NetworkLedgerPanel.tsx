@@ -89,8 +89,8 @@ export default function NetworkLedgerPanel() {
       style={{ borderRadius: 12, marginBottom: 16 }}
     >
       <p style={{ marginTop: 0, color: "var(--c-text-2)" }}>
-        所有外发 LLM HTTP 请求都会记录在 <code>{data?.path ?? "~/.webrain/network_ledger.jsonl"}</code>。
-        当前展示最近 50 条:成功 {successCount} / 失败 {failureCount}。
+        所有外发 LLM HTTP 请求都会记录在 <code>{data?.path ?? "~/.webrain/network_ledger.jsonl"}</code>。 当前展示最近
+        50 条:成功 {successCount} / 失败 {failureCount}。
       </p>
 
       <Table<LedgerEntry>
@@ -125,16 +125,13 @@ export default function NetworkLedgerPanel() {
             title: "模型",
             dataIndex: "model",
             width: 200,
-            render: (v: string) => (
-              <code style={{ fontSize: 11 }}>{v}</code>
-            ),
+            render: (v: string) => <code style={{ fontSize: 11 }}>{v}</code>,
           },
           {
             title: "状态",
             dataIndex: "success",
             width: 70,
-            render: (v: boolean) =>
-              v ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag>,
+            render: (v: boolean) => (v ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag>),
           },
           {
             title: "延迟",

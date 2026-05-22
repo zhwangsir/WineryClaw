@@ -57,9 +57,7 @@ describe("PrivacyPanel", () => {
       remote_endpoints: [{ name: "openai", base_url: "https://api.openai.com/v1" }],
     });
     render(<PrivacyPanel />);
-    await waitFor(() =>
-      expect(screen.getByText(/没有本地 endpoint/)).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByText(/没有本地 endpoint/)).toBeInTheDocument());
   });
 
   it("toggling the switch posts /privacy/toggle and refreshes", async () => {

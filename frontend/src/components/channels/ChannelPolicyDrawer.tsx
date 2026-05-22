@@ -33,13 +33,7 @@ import {
   Tooltip,
   message,
 } from "antd";
-import {
-  ClockCircleOutlined,
-  DeleteOutlined,
-  PlusOutlined,
-  ReloadOutlined,
-  SaveOutlined,
-} from "@ant-design/icons";
+import { ClockCircleOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { channelsApi } from "../../api/channels";
 import type { ChannelPolicy, PolicyAuditEntry } from "../../api/channels";
 
@@ -325,10 +319,7 @@ export default function ChannelPolicyDrawer({ channelId, open, onClose }: Props)
                   onClick={() =>
                     setForm({
                       ...form,
-                      timeWindows: [
-                        ...form.timeWindows,
-                        { start: "09:00", end: "18:00" },
-                      ],
+                      timeWindows: [...form.timeWindows, { start: "09:00", end: "18:00" }],
                     })
                   }
                 >
@@ -430,8 +421,7 @@ export default function ChannelPolicyDrawer({ channelId, open, onClose }: Props)
                   title: "判定",
                   dataIndex: "allowed",
                   width: 70,
-                  render: (v: boolean) =>
-                    v ? <Tag color="success">放行</Tag> : <Tag color="error">阻断</Tag>,
+                  render: (v: boolean) => (v ? <Tag color="success">放行</Tag> : <Tag color="error">阻断</Tag>),
                 },
                 {
                   title: "原因 / 内容",

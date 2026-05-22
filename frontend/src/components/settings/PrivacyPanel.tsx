@@ -47,9 +47,7 @@ export default function PrivacyPanel() {
     async (next: boolean) => {
       setToggling(true);
       try {
-        await api.post<{ ok: boolean; mode: string }>(
-          `/brain/privacy/toggle?mode=${next ? "on" : "off"}`
-        );
+        await api.post<{ ok: boolean; mode: string }>(`/brain/privacy/toggle?mode=${next ? "on" : "off"}`);
         message.success(next ? "隐私模式已开启,仅本地 endpoint 生效" : "隐私模式已关闭");
         await refresh();
       } catch (e) {
@@ -70,27 +68,19 @@ export default function PrivacyPanel() {
         <Space>
           <LockOutlined />
           <span>隐私模式</span>
-          {status && (
-            <Tag color={isOn ? "success" : "default"}>{isOn ? "已开启" : "关闭"}</Tag>
-          )}
+          {status && <Tag color={isOn ? "success" : "default"}>{isOn ? "已开启" : "关闭"}</Tag>}
         </Space>
       }
       extra={
         <Tooltip title="重新获取状态">
-          <Button
-            type="text"
-            icon={<ReloadOutlined />}
-            loading={loading}
-            onClick={refresh}
-          />
+          <Button type="text" icon={<ReloadOutlined />} loading={loading} onClick={refresh} />
         </Tooltip>
       }
       style={{ borderRadius: 12, marginBottom: 16 }}
     >
       <p style={{ marginTop: 0, color: "var(--c-text-2)" }}>
-        开启后,LLMRouter 仅使用本地 endpoint(127.* / 10.* / 192.168.* / LM Studio /
-        Ollama)。用户数据不会发送到远程 provider,即使它们配置在模型列表中。
-        状态持久化到 <code>~/.webrain/privacy_mode</code>。
+        开启后,LLMRouter 仅使用本地 endpoint(127.* / 10.* / 192.168.* / LM Studio / Ollama)。用户数据不会发送到远程
+        provider,即使它们配置在模型列表中。 状态持久化到 <code>~/.webrain/privacy_mode</code>。
       </p>
 
       {isOn && !hasLocal && (
@@ -106,13 +96,7 @@ export default function PrivacyPanel() {
       <Space direction="vertical" style={{ width: "100%" }}>
         <Space>
           <span style={{ fontWeight: 500 }}>开关:</span>
-          <Switch
-            checked={isOn}
-            loading={toggling}
-            onChange={toggle}
-            checkedChildren="ON"
-            unCheckedChildren="OFF"
-          />
+          <Switch checked={isOn} loading={toggling} onChange={toggle} checkedChildren="ON" unCheckedChildren="OFF" />
         </Space>
 
         {status && (
@@ -125,8 +109,7 @@ export default function PrivacyPanel() {
                 <ul style={{ marginTop: 4 }}>
                   {status.local_endpoints.map((ep) => (
                     <li key={ep.name}>
-                      <Tag color="green">{ep.name}</Tag>{" "}
-                      <code style={{ fontSize: 12 }}>{ep.base_url}</code>
+                      <Tag color="green">{ep.name}</Tag> <code style={{ fontSize: 12 }}>{ep.base_url}</code>
                     </li>
                   ))}
                 </ul>
