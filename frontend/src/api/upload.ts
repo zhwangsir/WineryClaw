@@ -13,6 +13,79 @@ export interface UploadResult {
   error?: string;
 }
 
+/**
+ * v2.38: mirror of `ALLOWED_EXTENSIONS` from
+ * sub-brain/src/server/uploads-routes.ts. Used for client-side pre-check
+ * so we don't waste bandwidth on a file the server will reject anyway.
+ *
+ * Keep this in sync with the backend allowlist. The shape is a Set of
+ * dotted lowercase extensions, e.g. ".md". A drift would surface as a
+ * mismatched-allowlist test failure (added intentionally below).
+ */
+export const ALLOWED_UPLOAD_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".jsonl",
+  ".csv",
+  ".tsv",
+  ".html",
+  ".htm",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".log",
+  ".py",
+  ".js",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".swift",
+  ".cpp",
+  ".c",
+  ".h",
+  ".hpp",
+  ".rb",
+  ".php",
+  ".sh",
+  ".sql",
+]);
+
+/** v2.38: mirror of MAX_UPLOAD_BYTES from the backend (50 MB). */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Extract the dotted lowercase extension from a filename ("MyDoc.MD" → ".md").
+ * Returns empty string if there's no extension.
+ */
+export function extractExtension(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot < 0 || dot === filename.length - 1) return "";
+  return filename.slice(dot).toLowerCase();
+}
+
+/**
+ * Validate a File against the upload allowlist + size cap.
+ * Returns null if OK, otherwise a user-facing reason string.
+ */
+export function validateUploadCandidate(file: File): string | null {
+  const ext = extractExtension(file.name);
+  if (!ext || !ALLOWED_UPLOAD_EXTENSIONS.has(ext)) {
+    return `不支持的扩展名: "${ext || "(无)"}"。允许的格式: ${[...ALLOWED_UPLOAD_EXTENSIONS].sort().join(", ")}`;
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return `文件过大: ${file.size} 字节超过上限 ${MAX_UPLOAD_BYTES} 字节 (${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB)`;
+  }
+  return null;
+}
+
 export function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

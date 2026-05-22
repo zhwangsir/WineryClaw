@@ -88,7 +88,13 @@ function mainBrainAxiosConfig(): any {
 }
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase() as "fatal" | "error" | "warn" | "info" | "debug" | "trace";
-const app = Fastify({ logger: { level: LOG_LEVEL } });
+// v2.38: bodyLimit must exceed REQUIRED_FASTIFY_BODY_LIMIT from uploads-routes,
+// otherwise the RAG drag-drop dropzone (advertised up to 50 MB after decode)
+// is unreachable — Fastify's default 1 MB caps would silently reject any
+// file >~750 KB binary as 413 Payload Too Large. Bug found 2026-05-22.
+// We import the constant statically to keep the contract in sync.
+import { REQUIRED_FASTIFY_BODY_LIMIT } from "./server/uploads-routes.js";
+const app = Fastify({ logger: { level: LOG_LEVEL }, bodyLimit: REQUIRED_FASTIFY_BODY_LIMIT });
 await app.register(cors, { origin: true, credentials: true });
 await app.register(websocket);
 

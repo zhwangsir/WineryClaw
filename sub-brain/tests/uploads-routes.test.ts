@@ -5,7 +5,10 @@ import { tmpdir } from "os";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 
-import { registerUploadsRoutes } from "../src/server/uploads-routes.js";
+import {
+  registerUploadsRoutes,
+  REQUIRED_FASTIFY_BODY_LIMIT,
+} from "../src/server/uploads-routes.js";
 
 describe("uploads routes", () => {
   let app: FastifyInstance;
@@ -13,7 +16,10 @@ describe("uploads routes", () => {
 
   beforeEach(async () => {
     uploadsDir = mkdtempSync(join(tmpdir(), "webrain-uploads-test-"));
-    app = Fastify();
+    // v2.38: match the prod bodyLimit so the route's MAX_UPLOAD_BYTES check
+    // is actually exercised — Fastify's default 1 MB cap would otherwise
+    // reject any large-payload test at the parser before reaching our route.
+    app = Fastify({ bodyLimit: REQUIRED_FASTIFY_BODY_LIMIT });
     // GET /uploads/:name calls reply.sendFile, which needs fastify-static registered.
     await app.register(fastifyStatic, { root: uploadsDir, prefix: "/__static__/" });
     registerUploadsRoutes(app, { uploadsDir });
@@ -63,10 +69,12 @@ describe("uploads routes", () => {
   });
 
   it("POST /upload defaults type to application/octet-stream", async () => {
+    // v2.38: filename must use an allowlisted extension (was .bin originally,
+    // which is now rejected — the test is about type defaulting, not allowlist).
     const res = await app.inject({
       method: "POST",
       url: "/upload",
-      payload: { filename: "x.bin", data: Buffer.from("x").toString("base64") },
+      payload: { filename: "x.txt", data: Buffer.from("x").toString("base64") },
     });
     expect(res.json().type).toBe("application/octet-stream");
   });
@@ -137,5 +145,98 @@ describe("uploads routes", () => {
     const res = await app.inject({ method: "GET", url: `/uploads/${name}` });
     expect(res.statusCode).toBe(200);
     expect(res.payload).toBe("served-content");
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // v2.38 — extension allowlist + size cap (RAG dropzone hardening).
+  // ─────────────────────────────────────────────────────────────────────
+
+  it("v2.38: POST /upload rejects binary extensions (allowlist)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/upload",
+      payload: {
+        filename: "evil.exe",
+        data: Buffer.from("MZ\x90\x00").toString("base64"),
+      },
+    });
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/Unsupported file extension/);
+    expect(body.error).toMatch(/\.exe/);
+  });
+
+  it("v2.38: POST /upload rejects extension-less filename", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/upload",
+      payload: {
+        filename: "noextension",
+        data: Buffer.from("x").toString("base64"),
+      },
+    });
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/Unsupported file extension/);
+    expect(body.error).toMatch(/\(none\)/);
+  });
+
+  it("v2.38: POST /upload accepts extension case-insensitively", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/upload",
+      payload: { filename: "DOC.MD", data: Buffer.from("# Title").toString("base64") },
+    });
+    expect(res.json().ok).toBe(true);
+  });
+
+  it("v2.38: POST /upload rejects payloads over the size cap", async () => {
+    // Build a payload just over 50 MB after decode. 50 MB = 52428800 bytes.
+    // We use a small buffer + repeat to keep the test runtime tight.
+    const oversized = Buffer.alloc(50 * 1024 * 1024 + 1, 0x41); // 50MB + 1 byte of 'A'
+    const res = await app.inject({
+      method: "POST",
+      url: "/upload",
+      payload: {
+        filename: "big.txt",
+        data: oversized.toString("base64"),
+      },
+    });
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/File too large/);
+    expect(body.error).toMatch(/50 MB/);
+  });
+
+  it("v2.38: POST /upload still accepts at-the-cap payload", async () => {
+    // Exactly at the cap should succeed (it's a strict `>` check, not `>=`).
+    const atCap = Buffer.alloc(50 * 1024 * 1024, 0x41);
+    const res = await app.inject({
+      method: "POST",
+      url: "/upload",
+      payload: {
+        filename: "atcap.txt",
+        data: atCap.toString("base64"),
+      },
+    });
+    expect(res.json().ok).toBe(true);
+  });
+
+  it("v2.38: extension check fires BEFORE size check (cheap-first ordering)", async () => {
+    // An oversized .exe should fail on extension, not size — proves we
+    // don't decode the huge base64 payload before rejecting.
+    const oversized = Buffer.alloc(50 * 1024 * 1024 + 1, 0x41);
+    const res = await app.inject({
+      method: "POST",
+      url: "/upload",
+      payload: {
+        filename: "huge.exe",
+        data: oversized.toString("base64"),
+      },
+    });
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/Unsupported file extension/);
+    expect(body.error).not.toMatch(/File too large/);
   });
 });

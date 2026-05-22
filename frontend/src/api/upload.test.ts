@@ -2,7 +2,14 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { uploadApi, readFileAsBase64 } from "./upload";
+import {
+  uploadApi,
+  readFileAsBase64,
+  ALLOWED_UPLOAD_EXTENSIONS,
+  MAX_UPLOAD_BYTES,
+  extractExtension,
+  validateUploadCandidate,
+} from "./upload";
 
 vi.mock("./client", () => ({
   api: {
@@ -41,5 +48,101 @@ describe("upload API", () => {
       })
     );
     expect(result).toEqual({ ok: true, url: "/uploads/hello.txt" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// v2.38 — pure pre-check helpers (no network).
+// ─────────────────────────────────────────────────────────────────────────
+
+function makeFile(name: string, sizeBytes: number): File {
+  // Build a synthetic File with the requested apparent size. We use a
+  // tiny payload + override `size` because allocating 50MB in a test is
+  // wasteful and slow — File.size is a regular configurable property in
+  // jsdom, so the override is honored by our pre-check logic.
+  const f = new File([new Uint8Array([0])], name);
+  Object.defineProperty(f, "size", { value: sizeBytes, configurable: true });
+  return f;
+}
+
+describe("v2.38 extractExtension", () => {
+  it("returns lowercase dotted extension", () => {
+    expect(extractExtension("notes.MD")).toBe(".md");
+    expect(extractExtension("Doc.Txt")).toBe(".txt");
+  });
+
+  it("returns empty string when no extension", () => {
+    expect(extractExtension("plainname")).toBe("");
+  });
+
+  it("returns empty string when the file ends with a dot", () => {
+    expect(extractExtension("trailing.")).toBe("");
+  });
+
+  it("only the final dotted segment counts (mid-name dots ignored)", () => {
+    expect(extractExtension("archive.tar.gz")).toBe(".gz");
+  });
+});
+
+describe("v2.38 validateUploadCandidate", () => {
+  it("accepts a normal .md text file", () => {
+    expect(validateUploadCandidate(makeFile("notes.md", 1024))).toBeNull();
+  });
+
+  it("rejects unknown extension with helpful message", () => {
+    const reason = validateUploadCandidate(makeFile("evil.exe", 100));
+    expect(reason).not.toBeNull();
+    expect(reason!).toMatch(/不支持的扩展名/);
+    expect(reason!).toMatch(/\.exe/);
+  });
+
+  it("rejects no-extension filename", () => {
+    const reason = validateUploadCandidate(makeFile("noext", 100));
+    expect(reason).not.toBeNull();
+    expect(reason!).toMatch(/不支持的扩展名/);
+    expect(reason!).toMatch(/\(无\)/);
+  });
+
+  it("rejects file over MAX_UPLOAD_BYTES", () => {
+    const reason = validateUploadCandidate(
+      makeFile("big.txt", MAX_UPLOAD_BYTES + 1)
+    );
+    expect(reason).not.toBeNull();
+    expect(reason!).toMatch(/文件过大/);
+    expect(reason!).toMatch(/50 MB/);
+  });
+
+  it("accepts file exactly at MAX_UPLOAD_BYTES (boundary)", () => {
+    expect(
+      validateUploadCandidate(makeFile("atcap.txt", MAX_UPLOAD_BYTES))
+    ).toBeNull();
+  });
+
+  it("extension check fires BEFORE size check (cheap-first)", () => {
+    // Oversized .exe must surface as extension-rejected, not size-rejected.
+    const reason = validateUploadCandidate(
+      makeFile("huge.exe", MAX_UPLOAD_BYTES + 1)
+    );
+    expect(reason!).toMatch(/不支持的扩展名/);
+    expect(reason!).not.toMatch(/文件过大/);
+  });
+
+  it("extension comparison is case-insensitive", () => {
+    expect(validateUploadCandidate(makeFile("DOC.MD", 100))).toBeNull();
+    expect(validateUploadCandidate(makeFile("Script.PY", 100))).toBeNull();
+  });
+});
+
+describe("v2.38 ALLOWED_UPLOAD_EXTENSIONS sanity", () => {
+  it("includes the commonly-claimed text formats", () => {
+    for (const ext of [".txt", ".md", ".json", ".csv", ".yaml", ".py"]) {
+      expect(ALLOWED_UPLOAD_EXTENSIONS.has(ext)).toBe(true);
+    }
+  });
+
+  it("does NOT include known-bad binary formats (RAG can't index them)", () => {
+    for (const ext of [".pdf", ".docx", ".xlsx", ".png", ".jpg", ".exe", ".zip"]) {
+      expect(ALLOWED_UPLOAD_EXTENSIONS.has(ext)).toBe(false);
+    }
   });
 });
