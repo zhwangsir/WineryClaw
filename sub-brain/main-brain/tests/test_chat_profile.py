@@ -100,10 +100,20 @@ async def test_chat_profile_under_concurrency(temp_dir, mock_llm_config, capsys)
     N_WARMUP = 3
     N_SAMPLES = 30
 
+    # v2.46 — patch httpx.AsyncClient.post ONCE here, outside the chat
+    # loop. The previous per-call `with patch(...)` was constructing
+    # ~30 MagicMock+AsyncMock instances per call (one for the mock
+    # itself, plus children for .raise_for_status and .json). The
+    # profile showed mock construction taking 0.20s under conc-30
+    # load — that's purely benchmark machinery overhead, not anything
+    # production users see. Patch once → reuse the same mock across
+    # all calls → measurement reflects real chat() perf only.
+    mock_post = AsyncMock()
+    mock_post.return_value.raise_for_status = MagicMock()
+    mock_post.return_value.json = MagicMock(return_value=plain_resp)
+
     async def _one_chat(seq: int) -> float:
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.raise_for_status = MagicMock()
-            mock_post.return_value.json = MagicMock(return_value=plain_resp)
+        with patch("httpx.AsyncClient.post", mock_post):
             t0 = time.perf_counter()
             await chat.chat(
                 f"profile-{seq}",
