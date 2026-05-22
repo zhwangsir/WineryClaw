@@ -199,7 +199,11 @@ def _spawn_main_brain(
         start_new_session=True,  # process group leader for clean kill
     )
     base_url = f"http://127.0.0.1:{port}"
-    _wait_for_http(f"{base_url}/health", timeout=30.0, label="main-brain", log_path=log_path)
+    # v2.21: Bump from 30s → 90s. CI VMs cold-load sentence-transformers
+    # (~ +20-30s) and also pay first-import overhead for torch / fastapi
+    # graph. 30s was tight even locally; CI consistently fails the wait.
+    # Local devs see no slowdown — main-brain is warm and binds in <2s.
+    _wait_for_http(f"{base_url}/health", timeout=90.0, label="main-brain", log_path=log_path)
     return RunningService("main-brain", proc, port, log_path, base_url)
 
 

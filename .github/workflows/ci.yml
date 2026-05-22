@@ -155,4 +155,9 @@ jobs:
         run: |
           cd sub-brain/main-brain
           ./venv/bin/python -m pytest -m smoke tests/smoke/ -s --no-cov --tb=short
-        timeout-minutes: 5
+        # v2.21: bumped from 5 → 15 min. The smoke spawns real backend services
+        # per module-scoped fixture; on CI's cold VM sentence-transformers
+        # download + torch first-import easily adds 60s vs warm local. Locally
+        # the full smoke takes ~6 min, so 5 min was insufficient even when
+        # nothing's wrong.
+        timeout-minutes: 15
