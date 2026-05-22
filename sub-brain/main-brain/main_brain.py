@@ -167,6 +167,65 @@ async def lifespan(app: FastAPI) -> None:
         _state["ml_executor"]._max_workers,
     )
 
+    # v2.44c (Sprint 0.7 step 3) — WriterExecutor. Single-thread executor
+    # that serializes SQLite writes through ONE long-lived connection
+    # (PRAGMAs match MemoryManager._make_pooled_connection). Pre-v2.44c
+    # 30-concurrent writes contended on the SQLite write lock via
+    # busy_timeout=5000ms — measured P95 2450ms in the chat-latency
+    # benchmark. With queue-level serialization the writes form an
+    # orderly line at the executor's input queue, paying zero
+    # busy_timeout cost.
+    #
+    # v2.44c lands the plumbing only; individual call-site migration
+    # (store / _store_embedding / _increment_access) lands in v2.44d.
+    # Without migration the executor is created + injected but never
+    # actually used — that's intentional (rollback-cheap if benchmarks
+    # disappoint).
+    from memory._sqlite_executor import WriterExecutor as _WriterExecutor
+
+    def _writer_conn_factory():
+        # Mirror MemoryManager._make_pooled_connection PRAGMA setup but
+        # without SQLCipher branching here — the writer connection is
+        # opened the same way the pool connections are. Keep the import
+        # local so this stays scoped to the v2.44c block.
+        import sqlite3 as _sqlite3
+
+        sqlcipher_key = os.environ.get("WEBRAIN_SQLCIPHER_KEY")
+        if sqlcipher_key:
+            try:
+                from pysqlcipher3 import dbapi2 as _sqlcipher
+
+                _conn = _sqlcipher.connect(
+                    str(data_dir / "memory.db"), check_same_thread=False
+                )
+                _escaped = sqlcipher_key.replace("'", "''")
+                _conn.execute(f"PRAGMA key = '{_escaped}'")
+            except ImportError:
+                logger.warning(
+                    "WriterExecutor: WEBRAIN_SQLCIPHER_KEY set but "
+                    "pysqlcipher3 missing — falling back to plain sqlite3."
+                )
+                _conn = _sqlite3.connect(
+                    str(data_dir / "memory.db"), check_same_thread=False
+                )
+        else:
+            _conn = _sqlite3.connect(
+                str(data_dir / "memory.db"), check_same_thread=False
+            )
+        _conn.row_factory = _sqlite3.Row
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA synchronous=NORMAL")
+        _conn.execute("PRAGMA busy_timeout=5000")
+        _conn.execute("PRAGMA cache_size=-8000")
+        _conn.execute("PRAGMA temp_store=MEMORY")
+        return _conn
+
+    _state["writer_executor"] = _WriterExecutor(
+        _writer_conn_factory, name="webrain-writer"
+    )
+    _state["memory"].set_writer_executor(_state["writer_executor"])
+    logger.info("WriterExecutor ready (single-thread, thread_name_prefix='webrain-writer')")
+
     # Warm the local sentence-transformers embedder in the background so the
     # FIRST L3 store doesn't pay a ~20s model load cost (smoke trial
     # 2026-05-20 measured this). Fire-and-forget — if it fails, embedding
@@ -450,13 +509,23 @@ async def lifespan(app: FastAPI) -> None:
     for key in list(_state.keys()):
         if key.startswith("_"):
             continue
-        # Skip the ml_executor here — it doesn't have a `.close()` and
-        # gets shut down explicitly below with a wait so any in-flight
-        # ML calls finish cleanly.
-        if key == "ml_executor":
+        # Skip the executor entries — they get explicit shutdown below
+        # with a wait so any in-flight calls finish cleanly. The generic
+        # `.close()` loop below isn't the right shape for executors.
+        if key in ("ml_executor", "writer_executor"):
             continue
         if hasattr(_state[key], "close"):
             await _state[key].close()
+    # v2.44c — shutdown WriterExecutor BEFORE the ml executor, since any
+    # in-flight memory.store calls inside a chat handler might enqueue
+    # additional writes that an ML embed result triggers. Draining the
+    # writer first guarantees nothing else writes after this point.
+    if "writer_executor" in _state:
+        try:
+            _state["writer_executor"].shutdown(wait=True)
+            logger.info("WriterExecutor shut down cleanly.")
+        except Exception as e:
+            logger.warning(f"WriterExecutor shutdown raised (non-fatal): {e}")
     # v2.44a — shutdown ML executor LAST so any ongoing rerank / embed
     # calls finish before we drop refs. wait=True blocks until current
     # tasks complete; cancel_futures=False because cancelling an

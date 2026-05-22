@@ -14,7 +14,7 @@ import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import httpx
 import numpy as np
@@ -437,6 +437,15 @@ class MemoryManager:
         # dedicated pool so they don't fight SQLite IO for default-pool
         # slots. Wire via set_ml_executor() after construction.
         self._ml_executor: Optional[Any] = None
+        # v2.44c (Sprint 0.7 step 3) — optional WriterExecutor for
+        # single-thread serialized writes. When set (production via
+        # set_writer_executor), `_write_async(fn)` routes through it for
+        # zero busy_timeout contention. When None, `_write_async` falls
+        # back to the legacy pooled-connection path so the existing 944
+        # tests (which construct MemoryManager directly without the
+        # executor) keep passing unchanged. Migration of individual
+        # write call sites happens in v2.44d.
+        self._writer_executor: Optional[Any] = None
         self._init_db()
         self._load_vector_index()  # build index from existing DB vectors
 
@@ -468,6 +477,57 @@ class MemoryManager:
         """Read-only access for ChatEngine + other modules that share
         the same ML thread pool."""
         return self._ml_executor
+
+    def set_writer_executor(self, executor: Optional[Any]) -> None:
+        """v2.44c — inject a WriterExecutor for serialized writes.
+
+        Production main_brain.py lifespan creates one
+        `memory._sqlite_executor.WriterExecutor` per MemoryManager and
+        wires it here. None reverts to the legacy pooled-connection
+        write path used by direct-construction unit tests.
+
+        See ADR docs/adr/0002-sqlite-writer-thread.md (to be written
+        alongside v2.44d/e migration) for the design rationale.
+        """
+        self._writer_executor = executor
+
+    @property
+    def writer_executor(self) -> Optional[Any]:
+        """Read-only access (mostly for introspection / tests)."""
+        return self._writer_executor
+
+    async def _write_async(
+        self, fn: Callable[[sqlite3.Connection], Any]
+    ) -> Any:
+        """v2.44c — submit a write closure for serialized execution.
+
+        Contract:
+        - `fn(conn)` MUST do its own commit (or rollback) before
+          returning. The executor does NOT auto-commit.
+        - Exceptions inside `fn` propagate to the caller.
+        - When `writer_executor` is None (test mode), falls back to a
+          one-shot `_connect()` checkout that mimics the same shape so
+          callers can write the same body either way.
+
+        Migration of individual write call sites (store /
+        _store_embedding / _increment_access / extract_semantic) is
+        scheduled for v2.44d. This method exists in v2.44c so the
+        plumbing lands ahead of behavior change, keeping each commit
+        small and reviewable.
+        """
+        if self._writer_executor is not None:
+            return await self._writer_executor.submit_async(fn)
+        # Fallback path — synchronous pooled connection, wrapped so the
+        # caller can `await` either way without branching at the call
+        # site. asyncio.to_thread keeps the event loop free for the
+        # duration of the sync write.
+        import asyncio as _asyncio
+
+        def _fallback() -> Any:
+            with self._connect() as conn:
+                return fn(conn)
+
+        return await _asyncio.to_thread(_fallback)
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
