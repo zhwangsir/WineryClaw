@@ -446,6 +446,30 @@ class MemoryManager:
         # executor) keep passing unchanged. Migration of individual
         # write call sites happens in v2.44d.
         self._writer_executor: Optional[Any] = None
+        # v2.49 — embed-once-reuse LRU cache. Each chat triggers up to
+        # 3 _get_embedding() calls: (1) user-input L1 store, (2) the
+        # SAME user-input as vector-search query, (3) assistant reply
+        # L1 store. (1) and (2) recompute the exact same vector — pure
+        # waste. A small LRU keyed by exact-text matches the
+        # most-recent N embeddings; same-text-twice in one chat
+        # collapses to one encode. Cap defaults to 64 (10-20 turns ×
+        # 2-3 embeds each; well under runtime memory limits at 384-dim
+        # float32 = ~1.5 KB per entry → ~100 KB total). Configurable
+        # via WEBRAIN_EMBED_CACHE_MAX. Set to 0 to disable.
+        _cache_max_raw = os.environ.get("WEBRAIN_EMBED_CACHE_MAX", "64")
+        try:
+            self._embed_cache_max: int = max(0, int(_cache_max_raw))
+        except ValueError:
+            self._embed_cache_max = 64
+        # OrderedDict gives O(1) move_to_end for LRU bookkeeping.
+        from collections import OrderedDict as _OD
+        self._embed_cache: "_OD[str, List[float]]" = _OD()
+        # Cache reads/writes happen from the asyncio thread (after
+        # awaiting the executor encode call), so we don't strictly need
+        # a Lock — but ml_executor threads may also call _get_embedding
+        # if a future migration moves embedding off the loop, so guard
+        # it now to avoid a re-introducible race later.
+        self._embed_cache_lock = _threading.Lock()
         self._init_db()
         self._load_vector_index()  # build index from existing DB vectors
 
@@ -1629,14 +1653,60 @@ class MemoryManager:
             })
         return providers
 
+    def _embed_cache_get(self, text: str) -> Optional[List[float]]:
+        """v2.49 — LRU lookup. Returns cached vec or None. On hit, moves
+        the entry to the end (most-recently-used position)."""
+        if self._embed_cache_max <= 0:
+            return None
+        with self._embed_cache_lock:
+            vec = self._embed_cache.get(text)
+            if vec is not None:
+                # Move to end so LRU eviction targets the least-recent
+                self._embed_cache.move_to_end(text)
+                # Return a list-copy so caller mutations don't pollute
+                # the cache. We store list, callers tend to wrap in
+                # np.array which copies anyway, but be defensive.
+                return list(vec)
+            return None
+
+    def _embed_cache_put(self, text: str, vec: List[float]) -> None:
+        """v2.49 — store vec under text; evict LRU if over capacity.
+        No-op when cache is disabled (size 0)."""
+        if self._embed_cache_max <= 0 or not vec:
+            return
+        with self._embed_cache_lock:
+            # If text was already there, move_to_end keeps it warm.
+            if text in self._embed_cache:
+                self._embed_cache.move_to_end(text)
+                return
+            self._embed_cache[text] = list(vec)
+            # Evict oldest until under cap.
+            while len(self._embed_cache) > self._embed_cache_max:
+                self._embed_cache.popitem(last=False)
+
     async def _get_embedding(self, text: str) -> List[float]:
-        """Try multiple embedding providers, fallback to local model, then hash."""
+        """Try multiple embedding providers, fallback to local model, then hash.
+
+        v2.49 — LRU cache short-circuit on exact-text match. The chat
+        path naturally embeds the same user_input twice per chat (once
+        for the L1 store, once as a vector-search query). With cache
+        ON, the second call returns in microseconds instead of
+        triggering another sentence-transformers encode. At 30 conc
+        chats that's 30 fewer torch encodes — meaningful share of the
+        conc-30 P95 budget. Cache disable: WEBRAIN_EMBED_CACHE_MAX=0.
+        """
+        # v2.49 — fast path: cache hit
+        cached = self._embed_cache_get(text)
+        if cached is not None:
+            return cached
+
         # Try configured providers
         for provider in self._embedding_providers:
             try:
                 vec = await self._call_embedding_provider(provider, text)
                 if vec:
                     logger.debug(f"[embedding] {provider['name']} succeeded, dim={len(vec)}")
+                    self._embed_cache_put(text, vec)
                     return vec
             except Exception as e:
                 logger.debug(f"[embedding] {provider['name']} failed: {e}")
@@ -1647,13 +1717,18 @@ class MemoryManager:
             vec = await self._local_embedding(text)
             if vec:
                 logger.info(f"[embedding] local sentence-transformers succeeded, dim={len(vec)}")
+                self._embed_cache_put(text, vec)
                 return vec
         except Exception as e:
             logger.debug(f"[embedding] local model failed: {e}")
 
-        # Last resort: hash-based deterministic fallback
+        # Last resort: hash-based deterministic fallback. We CACHE this
+        # too — once we've fallen back to hash, recomputing won't help
+        # and the hash is cheap-but-still-not-free.
         logger.warning("[embedding] All providers failed, using hash fallback")
-        return self._fallback_embedding(text)
+        vec = self._fallback_embedding(text)
+        self._embed_cache_put(text, vec)
+        return vec
 
     async def _call_embedding_provider(self, provider: Dict, text: str) -> Optional[List[float]]:
         """Call a single embedding provider.
