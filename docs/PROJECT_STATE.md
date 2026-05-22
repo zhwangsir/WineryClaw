@@ -1797,4 +1797,26 @@ chat() cumulative time profile: 5.14s → 0.39s (13x 加速)。
 **11/13 = 85% 完成** (v2.45 单调用目标达成);剩余 2 项中 conc P95 距
 目标 20% 内可在后续 round 继续 close,recall 仍是算法侧。
 
+### 22.5 v2.45/v2.46/v2.47 (2026-05-23) — chat() httpx 共享 + smoke 回归修
+
+| 版本 | 提交 | 内容 | 影响 |
+|---|---|---|---|
+| v2.45 | `f75587a` | chat() 路径 `httpx.AsyncClient` 改走 `self._get_client()` 长生命周期共享单例;per-request `timeout=` override 替代构造时 timeout | seq P95 203→**40.7ms** (✅ 目标),conc 30 P95 5184→**960ms** (距标 20%) |
+| v2.46 | `dc4375f` | `tests/test_chat_profile.py` 把 `with patch("httpx.AsyncClient.post", ...)` 移出 `_one_chat` 循环,共享单个 mock。原循环每次构造 ~30 个 MagicMock+AsyncMock 实例,占 0.20s benchmark 自身开销 | profile 测量更纯 |
+| v2.47 | `ab3818c` | smoke conftest 增加 `WEBRAIN_WORKING_MEMORY_ENABLED=0`,沿用 HyDE/Reflection 已有禁用模式 | e2e-boot-smoke 由红转绿 |
+
+**v2.47 根因诊断** (一行总结):v2.45 共享 httpx 客户端意外让 S3
+working_memory 的 fire-and-forget `_chat_completion` 调用从 ~100ms
+SSL setup 延迟变 <5ms,从"在测试 poll 之后命中 mock"提前到"poll
+之前命中",`test_chat_reaches_mock_llm` 的 `after_count - before_count`
+由 1 变 2。修复屏蔽 working_memory 即可——其单测覆盖未受影响。
+
+**v2.45 之后真正未做的事 — Karpathy 诚实记录**:
+
+- conc 30 P95 残余 160ms (960 → 800 目标),profile 指向 asyncio 调度
+  + embedder 编码 (~10ms × N concurrent),需要 batch encode 或
+  uvicorn workers,留待下 round。
+- recall@5 ≥ 0.85 仍是算法侧 (S 系列 + cross-encoder 微调),
+  与 v2.45 perf 工作正交,本 sprint 不动。
+
 ---
