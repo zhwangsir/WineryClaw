@@ -182,6 +182,77 @@ class TestWriteAsyncWithExecutor:
         finally:
             writer.shutdown()
 
+    async def test_increment_access_async_routes_through_writer(
+        self, fresh_mm: MemoryManager
+    ) -> None:
+        """v2.44d — production query() now calls _increment_access_async.
+        Verify it lands on the writer thread when an executor is set,
+        AND that it produces the same row mutations as the sync version
+        (access_count + 1, last_accessed_at updated, importance bumped)."""
+        with fresh_mm._connect() as conn:
+            conn.execute(
+                "INSERT INTO memories (id, content, level, created_at, access_count) "
+                "VALUES ('inc-a', 'a', 'L1', datetime('now'), 0)"
+            )
+            conn.execute(
+                "INSERT INTO memories (id, content, level, created_at, access_count) "
+                "VALUES ('inc-b', 'b', 'L1', datetime('now'), 5)"
+            )
+            conn.commit()
+
+        def factory() -> sqlite3.Connection:
+            return fresh_mm._make_pooled_connection()
+
+        writer = WriterExecutor(factory, name="t-inc")
+        try:
+            fresh_mm.set_writer_executor(writer)
+            await fresh_mm._increment_access_async(["inc-a", "inc-b"])
+            with fresh_mm._connect() as conn:
+                a = conn.execute(
+                    "SELECT access_count FROM memories WHERE id='inc-a'"
+                ).fetchone()
+                b = conn.execute(
+                    "SELECT access_count FROM memories WHERE id='inc-b'"
+                ).fetchone()
+                assert a["access_count"] == 1
+                assert b["access_count"] == 6
+        finally:
+            writer.shutdown()
+
+    async def test_increment_access_async_fallback_matches_sync(
+        self, fresh_mm: MemoryManager
+    ) -> None:
+        """Fallback path (no executor) must yield byte-identical row
+        mutations to the sync `_increment_access` — that's the point of
+        the dual path: prod gets serialization, tests get legacy behavior."""
+        with fresh_mm._connect() as conn:
+            for i in range(3):
+                conn.execute(
+                    "INSERT INTO memories (id, content, level, created_at, access_count) "
+                    "VALUES (?, 'x', 'L1', datetime('now'), 0)",
+                    (f"inc-fb-{i}",),
+                )
+            conn.commit()
+
+        assert fresh_mm.writer_executor is None
+        await fresh_mm._increment_access_async(
+            ["inc-fb-0", "inc-fb-1", "inc-fb-2"]
+        )
+
+        with fresh_mm._connect() as conn:
+            for i in range(3):
+                row = conn.execute(
+                    "SELECT access_count FROM memories WHERE id=?",
+                    (f"inc-fb-{i}",),
+                ).fetchone()
+                assert row["access_count"] == 1
+
+    async def test_increment_access_async_empty_list_is_noop(
+        self, fresh_mm: MemoryManager
+    ) -> None:
+        """Empty list short-circuits before _write_async — matches sync."""
+        await fresh_mm._increment_access_async([])
+
     async def test_set_writer_executor_to_none_reverts_to_fallback(
         self, fresh_mm: MemoryManager
     ) -> None:

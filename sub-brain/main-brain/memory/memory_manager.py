@@ -997,7 +997,11 @@ class MemoryManager:
         # Increment access count + reset last_accessed_at + bump importance.
         # Order matters: blender ran on PRE-bump state so this query's results
         # don't influence their own ranking via the boost they just earned.
-        self._increment_access([r["id"] for r in fused])
+        # v2.44d — went from sync `_increment_access(...)` (which blocked the
+        # asyncio event loop on the UPDATE) to async `_increment_access_async`
+        # which routes through the WriterExecutor when injected. Fallback path
+        # (no executor) uses asyncio.to_thread so it ALSO no longer blocks.
+        await self._increment_access_async([r["id"] for r in fused])
 
         # User-trial #2: the rows we return still hold the PRE-bump values
         # because we fetched them before _increment_access. Reflect the
@@ -1374,6 +1378,11 @@ class MemoryManager:
 
         SQL uses MIN(1.0, importance + boost) for the cap. We do this in
         one statement per call (small N) rather than per-memory.
+
+        v2.44d: kept as the synchronous public path because a handful of
+        unit tests (test_increment_access_*) call it directly. Production
+        callers use `_increment_access_async` instead, which routes
+        through the WriterExecutor.
         """
         if not ids:
             return
@@ -1389,6 +1398,38 @@ class MemoryManager:
                 (now, RETRIEVAL_BOOST, *ids),
             )
             conn.commit()
+
+    async def _increment_access_async(self, ids: List[str]) -> None:
+        """v2.44d — async sibling of `_increment_access`.
+
+        Routes through `_write_async` so it lands on the WriterExecutor
+        when injected (production). When no executor is injected (any
+        direct-construction test), the fallback path inside _write_async
+        runs the SAME UPDATE against the same pooled-connection layer
+        the sync version used — so behavior is byte-identical.
+
+        This is the first write call site migrated to _write_async; it's
+        the smallest (single UPDATE, no FTS triggers, no nested write).
+        store / _store_embedding migrate in v2.44e/f.
+        """
+        if not ids:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        placeholders = ",".join(["?"] * len(ids))
+        sql = (
+            f"UPDATE memories "
+            f"SET access_count = access_count + 1, "
+            f"    last_accessed_at = ?, "
+            f"    importance = MIN(1.0, COALESCE(importance, 0.5) + ?) "
+            f"WHERE id IN ({placeholders})"
+        )
+        params = (now, RETRIEVAL_BOOST, *ids)
+
+        def _do_update(conn: sqlite3.Connection) -> None:
+            conn.execute(sql, params)
+            conn.commit()
+
+        await self._write_async(_do_update)
 
     # ========== Recent / Stats ==========
     async def get_recent(self, level: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
