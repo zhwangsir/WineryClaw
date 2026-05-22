@@ -127,6 +127,16 @@ class TestChatEngine:
 
         call_count = [0]
         async def mock_post(*args, **kwargs):
+            # v2.12: skip cross-process plugin hook URLs
+            # args layout when patching AsyncClient.post: (self, url, ...)
+            url_candidates = [a for a in args if isinstance(a, str)]
+            url = url_candidates[0] if url_candidates else kwargs.get("url", "")
+            if "/hooks/llm/" in url:
+                class HookResp:
+                    status_code = 200
+                    def raise_for_status(self): pass
+                    def json(self): return {"allowed": True}
+                return HookResp()
             call_count[0] += 1
             class MockResp:
                 def raise_for_status(self): pass

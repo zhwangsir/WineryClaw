@@ -222,6 +222,12 @@ class TestChatCompletionFailover:
         calls: list = []
 
         async def fake_post(url, json=None, headers=None, **kwargs):
+            # v2.12: skip cross-process plugin hook notifications
+            if "/hooks/llm/" in url:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json = MagicMock(return_value={"allowed": True})
+                return mock_resp
             calls.append(url)
             if "//p/" in url:
                 raise httpx.ConnectError("primary unreachable")
@@ -266,21 +272,29 @@ class TestChatCompletionFailover:
 
     @pytest.mark.asyncio
     async def test_unhealthy_endpoint_is_retried_last(self, chat_engine) -> None:
+        # v2.12: install fake_post that skips /hooks/llm/* and tracks only
+        # actual LLM endpoint URLs.
         # Pre-mark primary unhealthy. The router should still iterate over it,
         # but secondary should be tried first now.
         chat_engine.router.mark_failure("primary", "pre-existing")
         good_resp = {"choices": [{"message": {"role": "assistant", "content": "secondary won"}}]}
+        llm_urls: list = []
 
         async def fake_post(url, **kwargs):
+            if "/hooks/llm/" not in url:
+                llm_urls.append(url)
             mock_resp = MagicMock()
             mock_resp.raise_for_status = MagicMock()
-            mock_resp.json = MagicMock(return_value=good_resp)
+            mock_resp.status_code = 200
+            mock_resp.json = MagicMock(
+                return_value=good_resp if "/hooks/llm/" not in url else {"allowed": True}
+            )
             return mock_resp
 
-        with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)) as m:
+        with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=fake_post)):
             result = await chat_engine._chat_completion([{"role": "user", "content": "hi"}])
 
-        first_url = m.call_args_list[0].args[0]
+        first_url = llm_urls[0] if llm_urls else ""
         assert "//s/" in first_url  # secondary tried first
         assert result["_endpoint"] == "secondary"
 

@@ -2070,6 +2070,33 @@ class ChatEngine:
             }
         return data
 
+    async def _fire_plugin_hook(
+        self, phase: str, payload: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """v2.12: Cross-process plugin hook notification.
+
+        Fires `POST {sub_brain_url}/hooks/llm/{phase}` so sub-brain plugins
+        registered against `pre_llm_call` / `post_llm_call` can run. The
+        call is "best effort":
+          - 1 second hard timeout (plugins shouldn't block LLM path)
+          - All exceptions swallowed (a buggy plugin can't break chat)
+          - Returns the sub-brain response dict, or None on any failure
+
+        Phase: "pre" or "post" — corresponds to /hooks/llm/pre / /hooks/llm/post.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=1.0) as client:
+                resp = await client.post(
+                    f"{self.sub_brain_url}/hooks/llm/{phase}",
+                    json=payload,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            # plugin error must NEVER break the chat path
+            pass
+        return None
+
     async def _chat_completion(self, messages: List[Dict], tools: Optional[List[Dict]] = None,
                                 max_tokens: int = 2048, temperature: Optional[float] = None) -> Dict[str, Any]:
         """Call an LLM endpoint with automatic failover (M4a).
@@ -2078,9 +2105,31 @@ class ChatEngine:
         Records per-endpoint success/failure stats. Raises only if every
         endpoint has been tried and all failed — the resulting error
         names which endpoint produced the last error for diagnosis.
+
+        v2.12: fires pre_llm_call / post_llm_call plugin hooks via sub-brain
+        cross-process bridge. Plugin can `allowed: false` to short-circuit.
+        Plugin errors / timeouts allow-through (chat path stays robust).
         """
         if not self.router.endpoints:
             raise RuntimeError("No LLM endpoint available")
+
+        # v2.12: pre_llm_call hook
+        pre_payload: Dict[str, Any] = {
+            "messages": messages,
+            "temperature": temperature,
+        }
+        pre_result = await self._fire_plugin_hook("pre", pre_payload)
+        if pre_result is not None and pre_result.get("allowed") is False:
+            raise RuntimeError(
+                f"pre_llm_call hook rejected: {pre_result.get('reason') or 'no reason given'}"
+            )
+        # Honor `modified` envelope from hook (messages / temperature)
+        if pre_result is not None and isinstance(pre_result.get("modified"), dict):
+            mod = pre_result["modified"]
+            if isinstance(mod.get("messages"), list):
+                messages = mod["messages"]
+            if "temperature" in mod and mod["temperature"] is not None:
+                temperature = mod["temperature"]
 
         last_error: Optional[Exception] = None
         last_endpoint_name: Optional[str] = None
@@ -2106,6 +2155,19 @@ class ChatEngine:
                 # downstream consumers that ignore unknown keys.
                 if isinstance(result, dict):
                     result.setdefault("_endpoint", ep.name)
+                # v2.12: post_llm_call hook (fire-and-forget; result still
+                # returned regardless of hook outcome)
+                await self._fire_plugin_hook(
+                    "post",
+                    {
+                        "context": {
+                            "messages": messages,
+                            "temperature": temperature,
+                            "model": ep.model_id,
+                        },
+                        "response": result,
+                    },
+                )
                 return result
             except Exception as e:
                 err_msg = f"{type(e).__name__}: {e}"

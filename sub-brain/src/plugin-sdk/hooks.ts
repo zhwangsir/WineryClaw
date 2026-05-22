@@ -37,11 +37,14 @@ export const HOOK_STATUS: Record<HookType, HookWiredStatus> = {
   pre_tool_call: "wired",
   post_tool_call: "wired",
   on_startup: "wired",
+  // v2.12 (Axis 2): cross-process bridge via /hooks/llm/{pre,post} +
+  // /hooks/session/{start,end} — main-brain Python POSTs into sub-brain
+  // before/after _chat_completion, sub-brain dispatches to plugin hooks.
+  pre_llm_call: "wired",
+  post_llm_call: "wired",
+  on_session_start: "wired",
+  on_session_end: "wired",
   // Below: API surface preserved but no call site invokes them today.
-  pre_llm_call: "unwired",
-  post_llm_call: "unwired",
-  on_session_start: "unwired",
-  on_session_end: "unwired",
   on_shutdown: "unwired",
 };
 

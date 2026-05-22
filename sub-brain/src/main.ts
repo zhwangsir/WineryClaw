@@ -95,6 +95,7 @@ import { registerA2ARoutes } from "./server/a2a-routes.js";
 import { registerCLIRoutes } from "./server/cli-routes.js";
 import { registerDokobotRoutes } from "./server/dokobot-routes.js";
 import { registerMCPRoutes } from "./server/mcp-routes.js";
+import { registerHooksRoutes } from "./server/hooks-routes.js";
 import { registerIdentityRoutes } from "./server/identity-routes.js";
 import { registerEcosystemRoutes } from "./server/ecosystem-routes.js";
 import { registerProposalsRoutes } from "./server/proposals-routes.js";
@@ -417,6 +418,9 @@ registerSkillsRoutes(app, { skillManager: state.skillManager });
 
 // MCP routes — see server/mcp-routes.ts.
 registerMCPRoutes(app, { mcpClient: state.mcpClient });
+
+// v2.12 — Cross-process plugin-hook bridge for main-brain LLM/session events.
+registerHooksRoutes(app, { hookRegistry });
 
 // CLI routes — see server/cli-routes.ts.
 registerCLIRoutes(app, { cli: state.cli });
