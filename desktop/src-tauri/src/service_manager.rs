@@ -38,7 +38,7 @@ fn log_dir() -> PathBuf {
     // macOS: $HOME/Library/Logs, Linux: $XDG_STATE_HOME/log or ~/.local/state/log,
     // Windows: %LOCALAPPDATA% (no first-class "logs" subdir — we suffix below).
     let base = dirs::state_dir()
-        .or_else(|| dirs::data_local_dir())
+        .or_else(dirs::data_local_dir)
         .or_else(|| {
             // macOS: $HOME/Library/Logs
             #[cfg(target_os = "macos")]
@@ -188,7 +188,10 @@ impl ServiceManager {
     fn spawn_sub_brain(&self) -> Result<(Child, PathBuf), String> {
         let sub_brain_dir = self.repo_root.join("sub-brain");
         if !sub_brain_dir.is_dir() {
-            return Err(format!("sub-brain dir missing: {}", sub_brain_dir.display()));
+            return Err(format!(
+                "sub-brain dir missing: {}",
+                sub_brain_dir.display()
+            ));
         }
         let pnpm = resolve_tool("pnpm").ok_or_else(|| {
             "pnpm not found. Install via `npm i -g pnpm` or Homebrew \
@@ -235,9 +238,10 @@ impl ServiceManager {
     pub fn wait_for_health(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if let Ok(stream) =
-                TcpStream::connect_timeout(&"127.0.0.1:3000".parse().expect("ip"), Duration::from_millis(300))
-            {
+            if let Ok(stream) = TcpStream::connect_timeout(
+                &"127.0.0.1:3000".parse().expect("ip"),
+                Duration::from_millis(300),
+            ) {
                 // Send a minimal HTTP/1.1 GET so we get a real status code,
                 // not just a TCP-accept (which Vite's vite serve & a freshly
                 // bound Fastify both produce before /health is wired).
@@ -301,7 +305,9 @@ fn probe_health() -> bool {
         return false;
     }
     let mut buf = [0u8; 64];
-    let Ok(n) = stream.read(&mut buf) else { return false };
+    let Ok(n) = stream.read(&mut buf) else {
+        return false;
+    };
     let head = &buf[..n];
     head.starts_with(b"HTTP/1.1 200") || head.starts_with(b"HTTP/1.0 200")
 }
@@ -309,11 +315,7 @@ fn probe_health() -> bool {
 /// Augmented PATH for child processes — preserves existing PATH and prepends
 /// the locations we know tools live. Idempotent — duplicates are harmless.
 fn augmented_path() -> String {
-    let extras = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/local/sbin",
-    ];
+    let extras = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/local/sbin"];
     let home_paths: Vec<String> = if let Some(home) = dirs::home_dir() {
         vec![
             home.join(".volta/bin").display().to_string(),
@@ -401,7 +403,11 @@ mod tests {
     #[test]
     fn log_dir_creates_subdir() {
         let dir = log_dir();
-        assert!(dir.ends_with("WeBrain"), "log dir should end with WeBrain: {}", dir.display());
+        assert!(
+            dir.ends_with("WeBrain"),
+            "log dir should end with WeBrain: {}",
+            dir.display()
+        );
     }
 
     #[test]

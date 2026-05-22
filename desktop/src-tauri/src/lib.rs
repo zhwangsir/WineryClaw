@@ -8,19 +8,17 @@
 //!   - **Left click**  → directly toggles the compact Quick Chat popup
 //!     (most common path — chat lives one click away from anywhere)
 //!   - **Right click** → context menu with full navigation:
-//!       💬 Quick Chat      — same as left click
-//!       ──────
-//!       🏠 Home            — main window, route `/`
-//!       📊 Dashboard       — `/dashboard`
-//!       💬 Chat            — `/chat`
-//!       🧠 Memory          — `/memory`
-//!       ⚡ Skills           — `/skills`
-//!       🧩 Skillhub        — `/skillhub`
-//!       🔌 MCP             — `/mcp`
-//!       ⚙️ Settings        — `/settings`
-//!       ──────
-//!       🪟 Open Main Window
-//!       ✕ Quit
+//!     * 💬 Quick Chat      — same as left click
+//!     * 🏠 Home            — main window, route `/`
+//!     * 📊 Dashboard       — `/dashboard`
+//!     * 💬 Chat            — `/chat`
+//!     * 🧠 Memory          — `/memory`
+//!     * ⚡ Skills           — `/skills`
+//!     * 🧩 Skillhub        — `/skillhub`
+//!     * 🔌 MCP             — `/mcp`
+//!     * ⚙️ Settings        — `/settings`
+//!     * 🪟 Open Main Window
+//!     * ✕ Quit
 //!
 //! Navigation menu items push the main window to the front and `eval()` a
 //! `location.href` change — the SPA's hash/history router picks it up. No
@@ -254,7 +252,10 @@ fn schedule_health_signal(app: tauri::AppHandle, outcome: SpawnOutcome) {
 pub fn run() {
     env_logger::init();
     let repo_root = resolve_repo_root();
-    log::info!("WeBrain desktop launching, repo root: {}", repo_root.display());
+    log::info!(
+        "WeBrain desktop launching, repo root: {}",
+        repo_root.display()
+    );
 
     let service_mgr = ServiceManager::new(repo_root.clone());
 
@@ -293,9 +294,7 @@ pub fn run() {
                         // We still build the rest of the UI so the user gets
                         // a window with an actionable error, not just a
                         // bouncing dock icon that disappears.
-                        log::error!(
-                            "sub-brain spawn failed: {e} — UI will show an error overlay"
-                        );
+                        log::error!("sub-brain spawn failed: {e} — UI will show an error overlay");
                         SpawnOutcome::Failed
                     }
                 }
@@ -321,7 +320,13 @@ pub fn run() {
                     &MenuItem::with_id(app, "nav:/mcp", "🔌 MCP", true, None::<&str>)?,
                     &MenuItem::with_id(app, "nav:/settings", "⚙️ Settings", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
-                    &MenuItem::with_id(app, "open_main", "🪟 Open Main Window", true, None::<&str>)?,
+                    &MenuItem::with_id(
+                        app,
+                        "open_main",
+                        "🪟 Open Main Window",
+                        true,
+                        None::<&str>,
+                    )?,
                     &MenuItem::with_id(app, "quit", "✕ Quit", true, None::<&str>)?,
                 ],
             )?;

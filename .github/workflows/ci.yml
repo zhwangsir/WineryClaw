@@ -161,3 +161,70 @@ jobs:
         # the full smoke takes ~6 min, so 5 min was insufficient even when
         # nothing's wrong.
         timeout-minutes: 15
+
+  # ---------------------------------------------------------------------
+  # Linux desktop shell — Tauri 2.x cross-platform validation (v2.27).
+  #
+  # Why Linux specifically: macOS Tauri build is exercised locally by the
+  # primary developer; Windows is documented as best-effort (no current
+  # platform owner). Linux is the open-source target and the platform
+  # other contributors will compile on. Without CI, any Linux-breaking
+  # change (e.g. macOS-only API, missing #[cfg] guard) sneaks through.
+  #
+  # Strategy: cargo check + cargo test --lib on Ubuntu, with Tauri's
+  # webview dependencies installed. We deliberately do NOT run the full
+  # `tauri build` (5+ minutes, produces .deb/.AppImage artifacts) on every
+  # PR — that's reserved for release tags via a separate workflow when
+  # we ship binaries. The cheap `cargo check` catches the bug class we
+  # care about: Linux-only Rust compile failures, missing #[cfg(unix)]
+  # guards, dependency resolution issues.
+  # ---------------------------------------------------------------------
+  desktop-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux WebKit dependencies
+        # Tauri 2.x on Linux needs webkit2gtk-4.1, gtk-3, libayatana
+        # (tray indicator), librsvg2 (SVG icon raster). Install via apt
+        # before cargo — Tauri's build.rs probes for these via pkg-config
+        # and fails fast if missing.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Cargo check (desktop)
+        run: |
+          cd desktop/src-tauri
+          cargo check --all-targets
+      - name: Cargo test --lib (desktop)
+        # Three unit tests in service_manager: augmented_path / log_dir /
+        # port_in_use. None require X server or webkit runtime.
+        run: |
+          cd desktop/src-tauri
+          cargo test --lib --no-fail-fast
+      - name: Cargo fmt check
+        run: |
+          cd desktop/src-tauri
+          cargo fmt --all -- --check
+      - name: Cargo clippy
+        run: |
+          cd desktop/src-tauri
+          cargo clippy --all-targets -- -D warnings
+        timeout-minutes: 10

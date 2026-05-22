@@ -1,8 +1,10 @@
 # WeBrain Desktop — Tauri Shell
 
-> Sprint 0.2 输出（v2 路线图最后一块）。本目录把 WeBrain 双脑包成桌面应用。
-> 状态：脚手架 + Rust 端 ServiceManager 已就绪;`cargo check` 通过;
-> 实际打包（dmg / msi / AppImage）仍需 user 手动跑 `cargo tauri build`。
+> v2.27 (2026-05-22) — 跨平台桌面壳。本目录把 WeBrain 双脑包成桌面应用,
+> macOS .app 已发布,Linux .deb/.AppImage 由 CI `desktop-linux` 工作流持续验证。
+> Windows 待 owner。
+>
+> **当前测试**: 3 unit tests (service_manager) + 1 CI 工作流 (cargo check / clippy / fmt / test --lib)。
 
 ## 架构
 
@@ -41,14 +43,21 @@ cd src-tauri && cargo check
 cd src-tauri && cargo build --release
 ```
 
-## 当前状态
+## 当前状态(v2.27)
 
 - ✅ Cargo.toml + tauri.conf.json + main.rs + lib.rs + service_manager.rs
 - ✅ capabilities/default.json（Tauri 2.x ACL）
-- ✅ ServiceManager 实现 spawn/shutdown/status（status 可通过 `service_status` IPC 命令查询）
-- ✅ 桌面窗口配置（1440×900,minimal CSP,Productivity 分类）
-- ⏳ icons/icon.png 占位(必须用 sips/imagemagick 生成多尺寸,见下)
-- ⏳ 真实 `cargo tauri build` 端到端验证（macOS notarization / Windows signing 后续）
+- ✅ ServiceManager v0.2 — PATH 解析(Homebrew/Volta/NVM/pnpm 直装) + 日志重定向
+      (`~/Library/Logs/WeBrain/` / `~/.local/state/WeBrain/`) + 端口探测 +
+      health-wait + SIGTERM/SIGKILL graceful shutdown
+- ✅ Single-instance lock (tauri-plugin-single-instance) — 二次启动焦点
+- ✅ Popup 锚定 tray 屏幕位置(LogicalPosition)
+- ✅ 主窗口启动隐藏直到 /health pass(避免 ERR_CONNECTION_REFUSED 白屏)
+- ✅ CI `desktop-linux` 工作流: cargo check / fmt / clippy(-D warnings) / test --lib
+- ✅ macOS .app 已 v2.25 硬化(6 个真实启动 bug 全修)
+- ✅ Linux 跨平台代码就绪 (nix gated cfg(unix); dirs 跨平台路径; PATH 含 Linux 装路径)
+- ⏳ 真实 `tauri build` 端到端验证 dmg/deb/AppImage(本地 sips/cargo tauri build 可跑出,CI 暂不每 PR build 节省时间)
+- ⏳ macOS notarization / Windows signing(待 owner)
 
 ## 生成图标
 
