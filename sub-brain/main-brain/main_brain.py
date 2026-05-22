@@ -2421,6 +2421,45 @@ async def audit_network_ledger(limit: int = 50):
     }
 
 
+@app.get("/audit/mcp_ledger")
+async def audit_mcp_ledger(
+    limit: int = 50,
+    tool: Optional[str] = None,
+    scope: Optional[str] = None,
+    success: Optional[bool] = None,
+):
+    """v2.29 — Recent MCP `tools/call` invocations (P0 #3).
+
+    Append-only audit of every MCP write/read tool call made through
+    POST /mcp/jsonrpc. Each row: tool / scope / success / latency_ms /
+    args_summary (redacted) / result_preview (200 char) / error /
+    bearer_id (sha256:<12hex>) / ts.
+
+    Filters: ?tool=foo  ?scope=write|read  ?success=true|false
+    Limit clamped to [1, 1000]. Returns most-recent first.
+
+    Returns `{count, entries, path, stats: { total, by_tool, by_scope, ... }}`.
+    """
+    try:
+        from audit.mcp_ledger import get_mcp_ledger
+    except Exception as e:
+        return {"count": 0, "entries": [], "error": f"mcp_ledger import failed: {e}"}
+    safe_limit = max(1, min(int(limit), 1000))
+    ledger = get_mcp_ledger()
+    entries = ledger.recent_entries(
+        limit=safe_limit,
+        tool=tool,
+        scope=scope,
+        success=success,
+    )
+    return {
+        "count": len(entries),
+        "entries": entries,
+        "path": str(ledger.path),
+        "stats": ledger.stats(),
+    }
+
+
 # ========== Privacy Mode (v2.17 Axis 3) ==========
 
 

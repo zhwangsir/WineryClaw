@@ -156,32 +156,117 @@ class MCPServer:
         }
 
     async def _tools_call(self, params: Dict[str, Any], bearer_token: Optional[str]) -> Dict[str, Any]:
+        # v2.29 (ROADMAP V2 P0 #3): record every tools/call in the MCP audit
+        # ledger. We're inside an asyncio handler; the ledger is best-effort
+        # (record() never raises) so this never breaks the actual call path.
+        import time as _time
+
+        try:
+            from audit.mcp_ledger import get_mcp_ledger, hash_bearer, summarize_args
+
+            _ledger = get_mcp_ledger()
+        except Exception:  # noqa: BLE001 — audit module shouldn't break MCP
+            _ledger = None
+
+            def hash_bearer(_: Optional[str]) -> Optional[str]:  # type: ignore[misc]
+                return None
+
+            def summarize_args(_: Any) -> Dict[str, Any]:  # type: ignore[misc]
+                return {}
+
+        _t0 = _time.time()
+        _bearer_id = hash_bearer(bearer_token) if bearer_token else None
+
         name = params.get("name")
         if not isinstance(name, str):
+            # Audit the rejection too — useful when tracking down bad
+            # clients sending malformed payloads.
+            if _ledger is not None:
+                _ledger.record(
+                    tool=str(name) if name is not None else "?",
+                    scope="?",
+                    success=False,
+                    latency_ms=(_time.time() - _t0) * 1000.0,
+                    args_summary={},
+                    result_preview=None,
+                    error="INVALID_PARAMS: 'name' is required",
+                    bearer_id=_bearer_id,
+                )
             raise MCPError(INVALID_PARAMS, "'name' is required")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
+            if _ledger is not None:
+                _ledger.record(
+                    tool=name,
+                    scope="?",
+                    success=False,
+                    latency_ms=(_time.time() - _t0) * 1000.0,
+                    args_summary={},
+                    result_preview=None,
+                    error="INVALID_PARAMS: 'arguments' must be an object",
+                    bearer_id=_bearer_id,
+                )
             raise MCPError(INVALID_PARAMS, "'arguments' must be an object")
 
         spec = find_tool(name)
+        _args_summary = summarize_args(arguments)
 
         # M4b.1: write-scope tools require a valid bearer token. Read-scope
         # tools are open. Missing expected_token (e.g. dev/test) keeps all
         # tools open — by design, since no token was configured.
         if spec.scope == "write" and self._expected_token is not None:
             if not verify(bearer_token, self._expected_token):
+                if _ledger is not None:
+                    _ledger.record(
+                        tool=name,
+                        scope=spec.scope,
+                        success=False,
+                        latency_ms=(_time.time() - _t0) * 1000.0,
+                        args_summary=_args_summary,
+                        result_preview=None,
+                        error="UNAUTHORIZED: missing/invalid bearer",
+                        bearer_id=_bearer_id,
+                    )
                 raise MCPError(
                     UNAUTHORIZED,
                     f"tool {name!r} requires authentication (Authorization: Bearer <token>)",
                 )
 
-        result = await spec.handler(self._state, arguments)
+        try:
+            result = await spec.handler(self._state, arguments)
+        except Exception as e:  # noqa: BLE001 — surface as MCPError; audit then re-raise
+            err_msg = f"{type(e).__name__}: {e}"
+            if _ledger is not None:
+                _ledger.record(
+                    tool=name,
+                    scope=spec.scope,
+                    success=False,
+                    latency_ms=(_time.time() - _t0) * 1000.0,
+                    args_summary=_args_summary,
+                    result_preview=None,
+                    error=err_msg,
+                    bearer_id=_bearer_id,
+                )
+            raise
+
         # MCP convention: tool results are wrapped as content blocks. We
         # always return a single text block containing the JSON-serialised
         # result. Clients that want structured access parse the JSON.
+        result_text = json.dumps(result, ensure_ascii=False, default=str)
+        if _ledger is not None:
+            _ledger.record(
+                tool=name,
+                scope=spec.scope,
+                success=True,
+                latency_ms=(_time.time() - _t0) * 1000.0,
+                args_summary=_args_summary,
+                result_preview=result_text,
+                error=None,
+                bearer_id=_bearer_id,
+            )
         return {
             "content": [
-                {"type": "text", "text": json.dumps(result, ensure_ascii=False, default=str)}
+                {"type": "text", "text": result_text}
             ],
             "isError": False,
         }
