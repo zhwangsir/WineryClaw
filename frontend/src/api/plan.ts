@@ -50,6 +50,7 @@ export interface ExecutePlanParams {
   verify?: PlanVerifyMode;
 }
 
+// v2.51 — M3.5 streaming events (合并自 Kimi backup)
 export interface PlanStreamEvent {
   event: string;
   plan_id?: string;
@@ -71,6 +72,7 @@ export interface PlanStreamEvent {
 export const planApi = {
   execute: (params: ExecutePlanParams) => api.post<PlanExecutionResult>("/brain/plan/execute", params),
 
+  // v2.51 — M3.5 SSE streaming execution (合并自 Kimi backup)
   executeStream: (
     params: ExecutePlanParams,
     onEvent: (event: PlanStreamEvent) => void,
@@ -78,11 +80,16 @@ export const planApi = {
     onError?: (err: Error) => void,
   ) => {
     const { client, url } = api.stream("/brain/plan/execute/stream", params as Record<string, unknown>);
-    client.connect(url, (data) => {
-      if (typeof data === "object" && data !== null) {
-        onEvent(data as PlanStreamEvent);
-      }
-    }, onDone, onError);
+    client.connect(
+      url,
+      (data) => {
+        if (typeof data === "object" && data !== null) {
+          onEvent(data as PlanStreamEvent);
+        }
+      },
+      onDone,
+      onError,
+    );
     return client;
   },
 };

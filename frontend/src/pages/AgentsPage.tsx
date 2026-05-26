@@ -261,8 +261,8 @@ export default function AgentsPage() {
                     width: 44,
                     height: 44,
                     borderRadius: 10,
-                    background: "var(--c-accent-soft)",
-                    color: "var(--c-accent)",
+                    background: "var(--c-primary-soft)",
+                    color: "var(--c-primary)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -503,7 +503,7 @@ export default function AgentsPage() {
                           padding: "10px 12px",
                           borderRadius: 8,
                           border: "1px solid var(--c-border)",
-                          background: tool.enabled ? "var(--c-accent-soft)" : "transparent",
+                          background: tool.enabled ? "var(--c-primary-soft)" : "transparent",
                         }}
                       >
                         <Checkbox

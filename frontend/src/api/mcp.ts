@@ -42,7 +42,21 @@ export interface MCPSelfServerInfo {
   tools: MCPExposedToolSummary[];
 }
 
-/** M4b.2: single audit log entry. */
+export interface McpCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  category: "files" | "dev" | "data" | "web" | "ai" | "system";
+  command: string;
+  args: string[];
+  type: "stdio";
+  requiredEnv?: string[];
+  pathArgHint?: string;
+  sizeEstimateMb?: number;
+  homepage?: string;
+}
+
+// v2.51 — M4b.2 MCP Audit Log entry (合并自 Kimi backup)
 export interface MCPAuditLogEntry {
   id: number;
   timestamp: string;
@@ -62,7 +76,15 @@ export const mcpApi = {
   callTool: (server: string, tool: string, params?: Record<string, unknown>) =>
     api.post(`/api/mcp/${server}/tool`, { tool, params }),
 
+  // Builtin catalog (v2.8) — recommended MCP servers with one-click install.
+  listCatalog: () => api.get<{ catalog: McpCatalogEntry[]; count: number }>("/api/mcp/catalog").then((r) => r.catalog),
+  installFromCatalog: (id: string, body: { env?: Record<string, string>; pathArg?: string }) =>
+    api.post<{ ok: boolean; error?: string; tools?: string[] }>(`/api/mcp/install/${id}`, body),
+
   // Server-side (webrain as provider, M4b)
   selfInfo: () => api.get<MCPSelfServerInfo>("/brain/mcp/info"),
-  auditLog: (limit = 20) => api.get<{ ok: boolean; logs: MCPAuditLogEntry[]; error?: string }>(`/brain/mcp/audit?limit=${limit}`),
+
+  // v2.51 — M4b.2 audit log endpoint (合并自 Kimi backup)
+  auditLog: (limit = 20) =>
+    api.get<{ ok: boolean; logs: MCPAuditLogEntry[]; error?: string }>(`/brain/mcp/audit?limit=${limit}`),
 };

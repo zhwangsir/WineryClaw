@@ -8,12 +8,12 @@ import {
   ReloadOutlined,
   PlusOutlined,
   ExclamationCircleOutlined,
+  SafetyOutlined,
 } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useChannelStore } from "../stores/channelStore";
 import { StatusBadge } from "../components/common/StatusBadge";
-import { agentsApi } from "../api/agents";
-import type { Agent } from "../api/types";
+import ChannelPolicyDrawer from "../components/channels/ChannelPolicyDrawer";
 
 function formatChannelTime(ts: string | undefined): string {
   if (!ts) return "—";
@@ -61,8 +61,6 @@ export default function ChannelsPage() {
     messages,
     deleteChannel,
     setAutoReply,
-    setAgentId,
-    setReplyDelay,
   } = useChannelStore();
 
   const [msgDrawerOpen, setMsgDrawerOpen] = useState(false);
@@ -70,11 +68,12 @@ export default function ChannelsPage() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectForm] = Form.useForm();
   const [connectLoading, setConnectLoading] = useState(false);
-  const [agents, setAgents] = useState<Agent[]>([]);
+  // v2.33: per-channel policy editor
+  const [policyDrawerOpen, setPolicyDrawerOpen] = useState(false);
+  const [policyChannelId, setPolicyChannelId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchChannels();
-    agentsApi.list().then(setAgents).catch(() => setAgents([]));
   }, [fetchChannels]);
 
   const openMessages = async (id: string) => {
@@ -249,45 +248,35 @@ export default function ChannelsPage() {
                   <Switch size="small" checked={!!ch.auto_reply} onChange={(checked) => setAutoReply(ch.id, checked)} />
                 </div>
 
-                {/* M5.1 — per-channel agent + reply delay (only visible when auto-reply is on) */}
-                {ch.auto_reply && (
-                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 12, color: "var(--c-text-3)", minWidth: 60 }}>Agent</span>
-                      <Select
-                        size="small"
-                        style={{ flex: 1 }}
-                        value={ch.agent_id || "agent-default"}
-                        onChange={(val) => setAgentId(ch.id, val)}
-                        options={[
-                          { value: "agent-default", label: "默认 Agent" },
-                          ...agents.map((a) => ({ value: a.id, label: a.name })),
-                        ]}
-                      />
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 12, color: "var(--c-text-3)", minWidth: 60 }}>延迟</span>
-                      <Select
-                        size="small"
-                        style={{ flex: 1 }}
-                        value={ch.reply_delay_ms || 0}
-                        onChange={(val) => setReplyDelay(ch.id, val)}
-                        options={[
-                          { value: 0, label: "无延迟" },
-                          { value: 1000, label: "1 秒" },
-                          { value: 2000, label: "2 秒" },
-                          { value: 3000, label: "3 秒" },
-                          { value: 5000, label: "5 秒" },
-                        ]}
-                      />
-                    </div>
-                  </div>
-                )}
+                {/* v2.33 — open policy editor drawer (per-channel agent /
+                    sender/keyword filters / time windows / rate limit /
+                    reply delay; see ChannelPolicyDrawer for full surface). */}
+                <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+                  <Tooltip title="编辑接收策略 (agent / 过滤 / 时段 / 限速)">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<SafetyOutlined />}
+                      onClick={() => {
+                        setPolicyChannelId(ch.id);
+                        setPolicyDrawerOpen(true);
+                      }}
+                    >
+                      策略
+                    </Button>
+                  </Tooltip>
+                </div>
               </Card>
             </List.Item>
           )}
         />
       )}
+
+      <ChannelPolicyDrawer
+        channelId={policyChannelId}
+        open={policyDrawerOpen}
+        onClose={() => setPolicyDrawerOpen(false)}
+      />
 
       <Drawer
         title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>通道消息: {msgChannelId}</span>}
