@@ -1,11 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * v2.19 — refit tests to v2.8 McpPage redesign:
- *   - default tab is "内置市场" (catalog), so servers/tools tabs need explicit click
- *   - "连接服务器" button renamed to "手动连接"
- *   - drawer title now "手动连接 MCP 服务器" (was "连接 MCP 服务器")
- *   - empty server text now includes "· 去内置市场安装"
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -52,31 +46,6 @@ vi.mock("antd", async () => {
   };
 });
 
-// Mock mcpApi so tests don't depend on real catalog/install endpoints.
-vi.mock("../api/mcp", () => ({
-  mcpApi: {
-    listCatalog: vi.fn().mockResolvedValue([]),
-    installFromCatalog: vi.fn().mockResolvedValue({ ok: true, tools: [] }),
-  },
-}));
-
-/** Open the "已安装" tab — required to see servers UI under v2.8+ Tabs layout. */
-async function openInstalledTab() {
-  // The tab label is "<LinkOutlined /> 已安装 (N)" — match via includes
-  const tabs = screen.getAllByRole("tab");
-  const installed = tabs.find((t) => t.textContent?.includes("已安装"));
-  if (!installed) throw new Error("已安装 tab not found");
-  fireEvent.click(installed);
-}
-
-/** Open the "工具" tab. */
-async function openToolsTab() {
-  const tabs = screen.getAllByRole("tab");
-  const tools = tabs.find((t) => t.textContent?.includes("工具"));
-  if (!tools) throw new Error("工具 tab not found");
-  fireEvent.click(tools);
-}
-
 describe("McpPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -102,84 +71,67 @@ describe("McpPage", () => {
     expect(fetchTools).toHaveBeenCalled();
   });
 
-  it("renders connected and disconnected servers (after opening 已安装 tab)", async () => {
+  it("renders connected and disconnected servers", () => {
     render(
       <BrowserRouter>
         <McpPage />
       </BrowserRouter>
     );
-    await openInstalledTab();
-    await waitFor(() => {
-      expect(screen.getAllByText("fs").length).toBeGreaterThanOrEqual(1);
-    });
+    expect(screen.getAllByText("fs").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("web").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("已连接").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("未连接").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders server tools tags (after opening 已安装 tab)", async () => {
+  it("renders server tools tags", () => {
     render(
       <BrowserRouter>
         <McpPage />
       </BrowserRouter>
     );
-    await openInstalledTab();
-    await waitFor(() => {
-      expect(screen.getAllByText("read").length).toBeGreaterThanOrEqual(1);
-    });
+    expect(screen.getAllByText("read").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("write").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders tools table (after opening 工具 tab)", async () => {
+  it("renders tools table", () => {
     render(
       <BrowserRouter>
         <McpPage />
       </BrowserRouter>
     );
-    await openToolsTab();
-    await waitFor(() => {
-      expect(screen.getByText("Read file")).toBeInTheDocument();
-    });
+    expect(screen.getByText("Read file")).toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
-  it("shows empty hint when no servers (under 已安装 tab)", async () => {
+  it("shows empty when no servers", () => {
     vi.mocked(useMcpStore).mockImplementation(() => createMockStore({ servers: [] }) as any);
     render(
       <BrowserRouter>
         <McpPage />
       </BrowserRouter>
     );
-    await openInstalledTab();
-    // v2.8 changed copy: "暂无 MCP 服务器 · 去内置市场安装"
-    await waitFor(() => {
-      expect(screen.getByText(/暂无 MCP 服务器/)).toBeInTheDocument();
-    });
+    expect(screen.getByText("暂无 MCP 服务器")).toBeInTheDocument();
   });
 
-  it("shows empty when no tools (under 工具 tab)", async () => {
+  it("shows empty when no tools", () => {
     vi.mocked(useMcpStore).mockImplementation(() => createMockStore({ tools: [] }) as any);
     render(
       <BrowserRouter>
         <McpPage />
       </BrowserRouter>
     );
-    await openToolsTab();
-    await waitFor(() => {
-      expect(screen.getByText("暂无 MCP 工具")).toBeInTheDocument();
-    });
+    expect(screen.getByText("暂无 MCP 工具")).toBeInTheDocument();
   });
 
-  it("opens manual-connect drawer and submits", async () => {
+  it("opens connect drawer and submits", async () => {
     connect.mockResolvedValue(undefined);
     render(
       <BrowserRouter>
         <McpPage />
       </BrowserRouter>
     );
-    // v2.8 renamed to "手动连接"
-    fireEvent.click(screen.getByText("手动连接"));
-    expect(screen.getByText("手动连接 MCP 服务器")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("连接服务器"));
+    expect(screen.getByText("连接 MCP 服务器")).toBeInTheDocument();
 
     const nameInput = screen.getByPlaceholderText("例如: filesystem");
     fireEvent.change(nameInput, { target: { value: "db" } });

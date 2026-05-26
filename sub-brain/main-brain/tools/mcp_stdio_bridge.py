@@ -11,11 +11,11 @@ Usage
 Configure your MCP client to spawn:
 
     python /path/to/sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
-        --url http://127.0.0.1:3000/brain/mcp/jsonrpc
+        --url http://127.0.0.1:3456/brain/mcp/jsonrpc
 
 Or set `WEBRAIN_MCP_URL` env var:
 
-    export WEBRAIN_MCP_URL=http://127.0.0.1:3000/brain/mcp/jsonrpc
+    export WEBRAIN_MCP_URL=http://127.0.0.1:3456/brain/mcp/jsonrpc
     python tools/mcp_stdio_bridge.py
 
 Behavior
@@ -95,7 +95,7 @@ def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(description="Stdio bridge to webrain MCP server")
     parser.add_argument(
         "--url",
-        default=os.environ.get("WEBRAIN_MCP_URL", "http://127.0.0.1:3000/brain/mcp/jsonrpc"),
+        default=os.environ.get("WEBRAIN_MCP_URL", "http://127.0.0.1:3456/brain/mcp/jsonrpc"),
         help="MCP HTTP endpoint URL",
     )
     parser.add_argument(

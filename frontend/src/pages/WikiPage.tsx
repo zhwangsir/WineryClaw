@@ -15,6 +15,7 @@ import {
   Empty,
   Skeleton,
   Tabs,
+  Divider,
 } from "antd";
 import {
   BookOutlined,
@@ -25,10 +26,24 @@ import {
   TagsOutlined,
   LinkOutlined,
   EyeOutlined,
+  ArrowLeftOutlined,
 } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useWikiStore } from "../stores/wikiStore";
 import MarkdownRenderer from "../components/common/MarkdownRenderer";
+import type { WikiNote } from "../api/types";
+
+/** Convert [[Note Title]] syntax into markdown links before rendering. */
+function preprocessWikiLinks(content: string, notes: WikiNote[]): string {
+  const titleToId = new Map(notes.map((n) => [n.title, n.id]));
+  return content.replace(/\[\[([^\]]+)\]\]/g, (_match, title) => {
+    const id = titleToId.get(title.trim());
+    if (id) {
+      return `[${title.trim()}](/wiki?note=${encodeURIComponent(id)})`;
+    }
+    return `[[${title.trim()}]]`;
+  });
+}
 
 export default function WikiPage() {
   const {
@@ -321,7 +336,7 @@ export default function WikiPage() {
                   <div
                     style={{
                       minHeight: 320,
-                      maxHeight: 400,
+                      maxHeight: 520,
                       overflow: "auto",
                       padding: 16,
                       borderRadius: 8,
@@ -330,7 +345,44 @@ export default function WikiPage() {
                     }}
                   >
                     {previewContent ? (
-                      <MarkdownRenderer content={previewContent} />
+                      <>
+                        <MarkdownRenderer content={preprocessWikiLinks(previewContent, notes)} />
+                        {editingNote && editingNote.backlinks && editingNote.backlinks.length > 0 && (
+                          <>
+                            <Divider style={{ margin: "16px 0", borderColor: "var(--c-border)" }} />
+                            <div>
+                              <h4 style={{ fontSize: 13, fontWeight: 600, color: "var(--c-text-2)", marginBottom: 8 }}>
+                                <ArrowLeftOutlined style={{ marginRight: 6 }} />
+                                被引用 ({editingNote.backlinks.length})
+                              </h4>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                {editingNote.backlinks.map((bid: string) => {
+                                  const src = notes.find((n) => n.id === bid);
+                                  return (
+                                    <Tag
+                                      key={bid}
+                                      style={{
+                                        cursor: "pointer",
+                                        background: "var(--c-hover)",
+                                        border: "1px solid var(--c-border)",
+                                        color: "var(--c-accent)",
+                                        borderRadius: 6,
+                                      }}
+                                      onClick={() => {
+                                        if (src) {
+                                          openEdit(src);
+                                        }
+                                      }}
+                                    >
+                                      {src?.title || bid.slice(0, 8)}
+                                    </Tag>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </>
                     ) : (
                       <span style={{ color: "var(--c-text-3)", fontSize: 13 }}>开始输入 Markdown 内容以预览...</span>
                     )}

@@ -3,7 +3,7 @@
 **测试日期**：2026-05-21  
 **测试方式**：以真实用户身份通过 Chrome 浏览器操作，提供真实数据  
 **测试人**：自动化 UAT（Chrome MCP 控制，非 mock）  
-**服务状态**：Frontend :8587 ✓ · Sub-brain :3000 ✓ · Main-brain :18790 ✓  
+**服务状态**：Frontend :8587 ✓ · Sub-brain :3456 ✓ · Main-brain :18790 ✓  
 **模型**：moonshotai/Kimi-K2.6 via LMStudio  
 
 ---

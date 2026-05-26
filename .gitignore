@@ -75,3 +75,4 @@ temp/
 .webrain-keeper/logs/
 .webrain-keeper/alerts/
 .webrain-keeper/reports/
+data/backups/

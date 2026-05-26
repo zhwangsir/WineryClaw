@@ -1,83 +1,27 @@
 /**
- * Channel Auto-Reply Engine (M5).
+ * Channel Auto-Reply Engine (M5 + M7a).
  *
  * Subscribes to inbound channel messages and, for channels with
  * `auto_reply` enabled, routes them into the main-brain chat engine and
  * sends the response back through the same channel.
  *
- * Design points:
- *  - The engine is wired in via `channelManager.setInboundHandler(...)`,
- *    so channel-manager itself stays oblivious to chat-engine semantics.
- *  - Per-sender sticky session_id: each remote contact gets a stable
- *    session so chat history accumulates correctly across messages.
- *  - Fire-and-forget reply send: a transient send failure logs but does
- *    not block subsequent inbound messages.
- *  - Loop prevention: empty content is skipped. The bot's own outbound
- *    messages never reach this path (storeMessage with direction
- *    "outbound" doesn't fire the inbound handler), so message loops
- *    from the bot replying to itself are impossible by construction.
- *  - In-flight tracking: a sender → Promise map prevents two concurrent
- *    replies stomping on each other when messages arrive faster than
- *    the LLM responds.
+ * M7a enhancement: persistent reply queue + retry + dead-letter queue.
+ * When `deps.queue` is provided, inbound messages are written to SQLite
+ * and a worker loop processes them asynchronously. When `queue` is absent,
+ * the legacy in-memory Promise-chain behavior is preserved for tests.
  */
 
 import crypto from "node:crypto";
 import type { ChannelManager, InboundMessage } from "./channel-manager.js";
-import { evaluatePolicy } from "./channel-policy.js";
-
-/** Per-channel rolling window of reply timestamps for rate-limit eval.
- * Bounded — we trim entries older than 1 hour on each evaluation. */
-const recentReplyTimestamps = new Map<string, number[]>();
-
-/** Audit ring buffer of recent policy decisions (last 200 per process)
- * for the /channels/:id/policy/audit endpoint. */
-interface PolicyAuditEntry {
-  ts: string;
-  channelId: string;
-  sender: string;
-  contentPreview: string;
-  allowed: boolean;
-  reason: string;
-  delayMs: number;
-}
-const policyAudit: PolicyAuditEntry[] = [];
-const POLICY_AUDIT_MAX = 200;
-
-/** Read-only access to recent policy decisions. Used by the
- * GET /channels/:id/policy/audit route. */
-export function recentPolicyAudit(channelId?: string, limit = 50): PolicyAuditEntry[] {
-  const all = channelId
-    ? policyAudit.filter((e) => e.channelId === channelId)
-    : policyAudit;
-  return all.slice(-Math.max(1, Math.min(limit, POLICY_AUDIT_MAX))).reverse();
-}
-
-function pushPolicyAudit(entry: PolicyAuditEntry): void {
-  policyAudit.push(entry);
-  if (policyAudit.length > POLICY_AUDIT_MAX) {
-    policyAudit.splice(0, policyAudit.length - POLICY_AUDIT_MAX);
-  }
-}
-
-/** Exported for tests — reset the cross-instance audit + rate-limit state. */
-export function _resetPolicyState(): void {
-  policyAudit.length = 0;
-  recentReplyTimestamps.clear();
-}
+import type { PersistentReplyQueue } from "./persistent-reply-queue.js";
 
 export interface AutoReplyDeps {
-  /** Channel manager to look up channels and send outbound replies. */
   channelManager: ChannelManager;
-  /** Async function that turns an inbound user message into a reply.
-   * In production this hits main-brain `/chat`; tests inject a stub. */
   chatFn: (params: { message: string; session_id: string; agent_id: string }) => Promise<{ reply: string }>;
-  /** Default agent id to drive auto-replies. */
   defaultAgentId?: string;
+  queue?: PersistentReplyQueue;
 }
 
-/** Per-sender sticky session id. Sender strings can contain weird chars
- * (display names with spaces, emoji, etc.), so we hash to keep the id
- * URL-safe and bounded in length. */
 function senderToSessionId(channelId: string, sender: string): string {
   const h = crypto.createHash("sha256").update(`${channelId}:${sender}`).digest("hex").slice(0, 12);
   return `ch-${channelId}-${h}`;
@@ -85,16 +29,39 @@ function senderToSessionId(channelId: string, sender: string): string {
 
 export class ChannelAutoReply {
   private inFlight = new Map<string, Promise<void>>();
+  private workerTimer: ReturnType<typeof setInterval> | null = null;
+  private stopped = false;
 
   constructor(private deps: AutoReplyDeps) {}
 
-  /** Public for tests; in production the handler is `handleInbound`. */
   static sessionId(channelId: string, sender: string): string {
     return senderToSessionId(channelId, sender);
   }
 
-  /** Bound inbound handler — pass directly to
-   * `channelManager.setInboundHandler(autoReply.handleInbound)`. */
+  /** Start the background worker loop (idempotent). Only needed when a
+   * persistent queue is in use; no-op otherwise. */
+  startWorker(pollIntervalMs = 5000): void {
+    if (!this.deps.queue) return;
+    if (this.workerTimer) return;
+    this.stopped = false;
+    this.workerTimer = setInterval(() => {
+      this.drainQueue().catch((err) => {
+        console.error("[auto-reply] queue drain error:", err);
+      });
+    }, pollIntervalMs);
+    // Immediate first drain so we don't wait pollIntervalMs for the first message
+    this.drainQueue().catch((err) => console.error("[auto-reply] initial drain error:", err));
+  }
+
+  /** Stop the background worker loop. */
+  stopWorker(): void {
+    this.stopped = true;
+    if (this.workerTimer) {
+      clearInterval(this.workerTimer);
+      this.workerTimer = null;
+    }
+  }
+
   handleInbound = async (
     channelId: string,
     _channelType: string,
@@ -106,13 +73,34 @@ export class ChannelAutoReply {
     const content = (message.content || "").trim();
     if (!content) return;
 
-    // Coalesce: if a previous reply for the same sender is still
-    // in-flight, queue this one to start after it finishes. Without
-    // this, two messages arriving 200ms apart would both spawn LLM
-    // calls and produce out-of-order replies.
+    const sessionId = senderToSessionId(channelId, message.sender);
+    const agentId = channel.agent_id || this.deps.defaultAgentId || "agent-default";
+    const delayMs = channel.reply_delay_ms || 0;
+
+    const replyTo = message.reply_to;
+
+    if (this.deps.queue) {
+      // Persistent queue path (M7a)
+      // TODO: reply_to should be stored in the queue row so drainQueue
+      // can pass it through to runReply. Currently the queue schema does
+      // not have a reply_to column.
+      this.deps.queue.enqueue({
+        channel_id: channelId,
+        sender: message.sender,
+        content,
+        session_id: sessionId,
+        agent_id: agentId,
+      });
+      return;
+    }
+
+    // Legacy in-memory path (tests / backward compat)
     const lockKey = `${channelId}:${message.sender}`;
     const previous = this.inFlight.get(lockKey) ?? Promise.resolve();
-    const next = previous.then(() => this.runReply(channelId, message, content));
+    const next = previous.then(async () => {
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      return this.runReply(channelId, message.sender, content, sessionId, agentId, replyTo);
+    });
     this.inFlight.set(lockKey, next);
 
     next
@@ -120,85 +108,62 @@ export class ChannelAutoReply {
         console.error(`[auto-reply] reply task failed for ${lockKey}:`, err);
       })
       .finally(() => {
-        // Only clear if no newer task replaced us
         if (this.inFlight.get(lockKey) === next) {
           this.inFlight.delete(lockKey);
         }
       });
   };
 
-  private async runReply(channelId: string, message: InboundMessage, content: string): Promise<void> {
-    // v2.30 (M5.1): evaluate channel policy BEFORE calling chat engine.
-    // A blocked message is still stored as inbound (already happened by
-    // the time we get here), but consumes no LLM budget and produces no
-    // outbound reply. The decision is recorded in the policy audit log.
-    const policy = this.deps.channelManager.getPolicy(channelId);
-    const recent = recentReplyTimestamps.get(channelId) ?? [];
-    const decision = evaluatePolicy(policy, { sender: message.sender, content }, {
-      recentReplyTimestamps: recent,
-    });
-    pushPolicyAudit({
-      ts: new Date().toISOString(),
-      channelId,
-      sender: message.sender,
-      contentPreview: content.slice(0, 120),
-      allowed: decision.allow,
-      reason: decision.reason,
-      delayMs: decision.delayMs,
-    });
-    if (!decision.allow) {
-      console.log(
-        `[auto-reply] policy blocked ${channelId} from '${message.sender}': ${decision.reason}`
-      );
-      return;
+  private async drainQueue(): Promise<void> {
+    if (!this.deps.queue || this.stopped) return;
+    // Process up to 10 messages per tick to avoid blocking the event loop
+    for (let i = 0; i < 10; i++) {
+      const row = this.deps.queue.dequeue();
+      if (!row) break;
+      try {
+        // M5.1: honour per-channel reply delay from current channel config
+        const channel = this.deps.channelManager.listChannels().find((c) => c.id === row.channel_id);
+        const delayMs = channel?.reply_delay_ms || 0;
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+        await this.runReply(row.channel_id, row.sender, row.content, row.session_id, row.agent_id);
+        this.deps.queue.markSuccess(row.id);
+      } catch (err: any) {
+        const errorMsg = err?.message || String(err);
+        console.error(`[auto-reply] queue item ${row.id} failed:`, errorMsg);
+        this.deps.queue.markFailed(row.id, errorMsg);
+      }
     }
+  }
 
-    // v2.37.1 — reserve the rate-limit slot AT decision-allow time, not
-    // post-send. Previously we only pushed the timestamp after a successful
-    // send(), which meant N concurrent inbound from different senders would
-    // all see the same zero-count window and all slip through — the cap was
-    // effectively a no-op under concurrency. Reserving up-front means a
-    // failed chatFn/send "eats" a slot, but over-counting is safer than
-    // under-counting for an outbound budget guard.
-    const now = Date.now();
-    const cutoff = now - 3_600_000;
-    const trimmed = recent.filter((t) => t >= cutoff);
-    trimmed.push(now);
-    recentReplyTimestamps.set(channelId, trimmed);
-
-    // Honor policy-mandated reply delay (human-like pacing).
-    if (decision.delayMs > 0) {
-      await new Promise<void>((resolve) => setTimeout(resolve, decision.delayMs));
-    }
-
-    const sessionId = senderToSessionId(channelId, message.sender);
-    // Policy.agentId overrides the dependency default — per-channel agent.
-    const agentId = decision.agentId || this.deps.defaultAgentId || "agent-default";
-
+  private async runReply(
+    channelId: string,
+    sender: string,
+    content: string,
+    sessionId: string,
+    agentId: string,
+    replyTo?: string,
+  ): Promise<void> {
     let reply: string;
     try {
       const res = await this.deps.chatFn({ message: content, session_id: sessionId, agent_id: agentId });
       reply = (res?.reply || "").trim();
     } catch (err: any) {
       console.error(`[auto-reply] chatFn failed for ${channelId}:`, err?.message || err);
-      return;
+      throw err; // Let caller decide retry / DLQ
     }
     if (!reply) {
-      // LLM produced nothing — don't waste a channel message slot
       return;
     }
 
-    const recipient = message.reply_to || message.sender;
+    const recipient = replyTo || sender;
     try {
       const sendResult = await this.deps.channelManager.send(channelId, recipient, reply);
       if (!sendResult.ok) {
-        console.error(`[auto-reply] send failed for ${channelId}:`, sendResult.error);
-        return;
+        throw new Error(sendResult.error || "send failed");
       }
-      // Rate-limit slot was already reserved at decision-allow time above;
-      // a failed send consumes the slot (conservative over-count).
     } catch (err: any) {
       console.error(`[auto-reply] send threw for ${channelId}:`, err?.message || err);
+      throw err; // Let caller decide retry / DLQ
     }
   }
 }

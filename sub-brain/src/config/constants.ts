@@ -3,7 +3,7 @@
  */
 
 // Server
-export const DEFAULT_SUB_BRAIN_PORT = 3000;
+export const DEFAULT_SUB_BRAIN_PORT = 3456;
 export const DEFAULT_MAIN_BRAIN_PORT = 18790;
 
 // Timeouts (milliseconds)

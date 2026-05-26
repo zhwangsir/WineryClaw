@@ -109,58 +109,30 @@ export function registerChannelsRoutes(app: FastifyInstance, deps: ChannelsRoute
     return { ok: true, auto_reply: deps.channelManager.getAutoReply(id) };
   });
 
-  // M5.1 (v2.30) — per-channel policy: agent_id, sender/keyword allow/block,
-  // time windows, rate limit, reply delay. Applied BEFORE chat_engine on
-  // every inbound message; blocked messages still land in the messages
-  // table (audit trail) but do not consume LLM budget.
-  app.get("/channels/:id/policy", async (request, reply) => {
+  // M5.1: set/query per-channel agent_id
+  app.post("/channels/:id/agent", async (request) => {
     const { id } = request.params as { id: string };
-    const policy = deps.channelManager.getPolicy(id);
-    if (policy === undefined) {
-      // Could be either "channel not found" or "no policy set". Check
-      // existence so the UI can distinguish 404 from empty-but-valid.
-      const exists = deps.channelManager
-        .listChannels()
-        .some((c) => c.id === id);
-      if (!exists) {
-        return reply.code(404).send({ ok: false, error: "Channel not found" });
-      }
-      return { ok: true, policy: null };
-    }
-    return { ok: true, policy };
+    const body = (request.body as { agent_id?: string }) ?? {};
+    const agentId = String(body.agent_id ?? "agent-default");
+    return deps.channelManager.setAgentId(id, agentId);
   });
 
-  app.put("/channels/:id/policy", async (request, reply) => {
+  app.get("/channels/:id/agent", async (request) => {
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { policy?: unknown };
-    const result = await deps.channelManager.setPolicy(id, body.policy ?? body);
-    if (!result.ok) {
-      if (/not found/i.test(result.error ?? "")) {
-        return reply.code(404).send({ ok: false, error: result.error });
-      }
-      return reply.code(400).send({ ok: false, error: result.error });
-    }
-    return { ok: true, policy: result.policy };
+    return { ok: true, agent_id: deps.channelManager.getAgentId(id) };
   });
 
-  app.delete("/channels/:id/policy", async (request, reply) => {
+  // M5.1: set/query per-channel reply delay
+  app.post("/channels/:id/reply-delay", async (request) => {
     const { id } = request.params as { id: string };
-    const result = await deps.channelManager.setPolicy(id, null);
-    if (!result.ok) {
-      return reply.code(404).send({ ok: false, error: result.error });
-    }
-    return { ok: true, policy: null };
+    const body = (request.body as { delay_ms?: number }) ?? {};
+    const delayMs = typeof body.delay_ms === "number" ? body.delay_ms : 0;
+    return deps.channelManager.setReplyDelay(id, delayMs);
   });
 
-  app.get("/channels/:id/policy/audit", async (request) => {
+  app.get("/channels/:id/reply-delay", async (request) => {
     const { id } = request.params as { id: string };
-    const qs = (request.query as { limit?: string }) ?? {};
-    const limit = qs.limit ? Math.max(1, Math.min(parseInt(qs.limit, 10) || 50, 200)) : 50;
-    // Dynamic import keeps channels-routes.ts free of a heavy direct
-    // import of the auto-reply module just for the audit accessor.
-    const mod = await import("../channels/channel-auto-reply.js");
-    const entries = mod.recentPolicyAudit(id, limit);
-    return { ok: true, count: entries.length, entries };
+    return { ok: true, delay_ms: deps.channelManager.getReplyDelay(id) };
   });
 
   // POST /channels/:id/inject-inbound — replay or simulate an inbound

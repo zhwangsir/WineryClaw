@@ -55,7 +55,7 @@ for (const { path, label } of PAGES) {
 
     // Mock sub-brain backend calls (port 3000 / vite proxy paths)
     // Only mock paths that the proxy would forward — avoid matching Vite module scripts
-    await page.route("**/localhost:3000/**", (route) =>
+    await page.route("**/localhost:3456/**", (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
     );
 

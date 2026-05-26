@@ -8,6 +8,21 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _prewarm_embedder_and_fast_provider_timeout():
+    """Pre-load the sentence-transformers model once per test session so
+    cold-start cost (~8s) is paid upfront, not inside every test.
+
+    Also drop the embedding-provider timeout to 0.1s so unreachable
+    Ollama/OpenAI endpoints fail fast instead of burning 3-5s per call.
+    Without this, the memory benchmark (60+ embedding calls) times out
+    at 300s because each call waits for localhost:11434 to time out.
+    """
+    os.environ.setdefault("WEBRAIN_EMBEDDING_PROVIDER_TIMEOUT_S", "0.1")
+    from memory.memory_manager import _get_embedder
+    _get_embedder()
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for test data."""

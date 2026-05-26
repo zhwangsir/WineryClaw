@@ -7,6 +7,13 @@ vi.mock("./client", () => ({
     post: vi.fn().mockResolvedValue({ ok: true }),
     put: vi.fn().mockResolvedValue({}),
     delete: vi.fn().mockResolvedValue({}),
+    stream: vi.fn().mockReturnValue({
+      client: {
+        connect: vi.fn(),
+        abort: vi.fn(),
+      },
+      url: "http://localhost/brain/plan/execute/stream?user_input=test",
+    }),
   },
 }));
 
@@ -55,5 +62,50 @@ describe("plan API", () => {
     vi.mocked(api.post).mockResolvedValue(fake);
     const res = await planApi.execute({ user_input: "complex" });
     expect(res).toEqual(fake);
+  });
+});
+
+describe("plan API streaming", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("executeStream connects to /brain/plan/execute/stream", () => {
+    const onEvent = vi.fn();
+    const client = planApi.executeStream({ user_input: "test" }, onEvent);
+    expect(api.stream).toHaveBeenCalledWith("/brain/plan/execute/stream", { user_input: "test" });
+    expect(client).toBeDefined();
+    expect(client.connect).toBeDefined();
+    expect(client.abort).toBeDefined();
+  });
+
+  it("executeStream passes params as query string", () => {
+    const onEvent = vi.fn();
+    planApi.executeStream({ user_input: "hello", verify: "llm" }, onEvent);
+    expect(api.stream).toHaveBeenCalledWith("/brain/plan/execute/stream", { user_input: "hello", verify: "llm" });
+  });
+
+  it("executeStream invokes onEvent with parsed data", () => {
+    const onEvent = vi.fn();
+    const onDone = vi.fn();
+    const onError = vi.fn();
+
+    let capturedOnMessage: ((data: unknown) => void) | undefined;
+
+    vi.mocked(api.stream).mockReturnValue({
+      client: {
+        connect: (_url: string, onMessage: (data: unknown) => void) => {
+          capturedOnMessage = onMessage;
+        },
+        abort: vi.fn(),
+      },
+      url: "mock-url",
+    });
+
+    planApi.executeStream({ user_input: "test" }, onEvent, onDone, onError);
+
+    expect(capturedOnMessage).toBeDefined();
+    capturedOnMessage!({ event: "plan_start", plan_id: "p1", total_tasks: 2 });
+    expect(onEvent).toHaveBeenCalledWith({ event: "plan_start", plan_id: "p1", total_tasks: 2 });
   });
 });

@@ -60,6 +60,10 @@ export interface ChatMessage {
   plan?: ChatPlan;
   isStreaming?: boolean;
   timestamp: string;
+  skillDraftCreated?: {
+    skillId: string;
+    name: string;
+  };
 }
 
 export interface ToolCall {
@@ -146,6 +150,10 @@ export interface ChannelInfo {
   /** M5: when true, inbound messages are auto-routed through chat
    * and a reply is sent back through the same channel. */
   auto_reply?: boolean;
+  /** M5.1: which agent handles auto-reply on this channel. */
+  agent_id?: string;
+  /** M5.1: artificial delay before sending auto-reply (ms). */
+  reply_delay_ms?: number;
   config?: Record<string, unknown>;
 }
 
@@ -164,6 +172,7 @@ export interface WikiNote {
   content: string;
   tags: string[];
   links: string[];
+  backlinks: string[];
   createdAt: string;
   updatedAt: string;
 }

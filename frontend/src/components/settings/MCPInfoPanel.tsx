@@ -8,8 +8,8 @@
 
 import { useEffect, useState } from "react";
 import { Card, Table, Tag, Typography, Empty, message, Alert, Space, Button } from "antd";
-import { ApiOutlined, CopyOutlined, LockOutlined, UnlockOutlined } from "@ant-design/icons";
-import { mcpApi, type MCPSelfServerInfo, type MCPExposedToolSummary } from "../../api/mcp";
+import { ApiOutlined, CopyOutlined, LockOutlined, UnlockOutlined, CheckCircleOutlined, CloseCircleOutlined } from "@ant-design/icons";
+import { mcpApi, type MCPSelfServerInfo, type MCPExposedToolSummary, type MCPAuditLogEntry } from "../../api/mcp";
 
 const { Paragraph, Text } = Typography;
 
@@ -61,6 +61,8 @@ function CopyableSnippet({ code, label }: { code: string; label: string }) {
 export default function MCPInfoPanel() {
   const [info, setInfo] = useState<MCPSelfServerInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<MCPAuditLogEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -73,6 +75,23 @@ export default function MCPInfoPanel() {
         message.error(`MCP server 信息加载失败: ${msg}`);
       } finally {
         setLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      setAuditLoading(true);
+      try {
+        const data = await mcpApi.auditLog(20);
+        if (data.ok) {
+          setAuditLogs(data.logs);
+        }
+      } catch (e) {
+        // Non-critical: audit log failures should not block the panel
+        console.warn("MCP audit log load failed:", e);
+      } finally {
+        setAuditLoading(false);
       }
     })();
   }, []);
@@ -201,6 +220,73 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               title: "描述",
               dataIndex: "description",
               render: (d: string) => <span style={{ fontSize: 12 }}>{d}</span>,
+            },
+          ]}
+        />
+      </div>
+
+      {/* M4b.2 — recent audit log */}
+      <div style={{ marginTop: 24 }}>
+        <Text strong>最近调用:</Text>
+        <Table<MCPAuditLogEntry>
+          dataSource={auditLogs}
+          rowKey="id"
+          pagination={false}
+          size="small"
+          loading={auditLoading}
+          style={{ marginTop: 8 }}
+          locale={{ emptyText: "暂无调用记录" }}
+          columns={[
+            {
+              title: "时间",
+              dataIndex: "timestamp",
+              width: 180,
+              render: (ts: string) => (
+                <span style={{ fontSize: 12 }}>{ts ? new Date(ts).toLocaleString() : "-"}</span>
+              ),
+            },
+            {
+              title: "工具名",
+              dataIndex: "tool_name",
+              width: 200,
+              render: (n: string) => (
+                <Text code style={{ fontSize: 12 }}>
+                  {n}
+                </Text>
+              ),
+            },
+            {
+              title: "scope",
+              dataIndex: "scope",
+              width: 70,
+              render: (s: string) =>
+                s === "write" ? (
+                  <Tag icon={<LockOutlined />} color="warning" style={{ fontSize: 11 }}>
+                    write
+                  </Tag>
+                ) : (
+                  <Tag color="default" style={{ fontSize: 11 }}>
+                    read
+                  </Tag>
+                ),
+            },
+            {
+              title: "结果",
+              dataIndex: "success",
+              width: 60,
+              align: "center" as const,
+              render: (v: number) =>
+                v === 1 ? (
+                  <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                ) : (
+                  <CloseCircleOutlined style={{ color: "#ff4d4f" }} />
+                ),
+            },
+            {
+              title: "错误信息",
+              dataIndex: "error_message",
+              render: (msg: string | null) =>
+                msg ? <span style={{ fontSize: 12, color: "#ff4d4f" }}>{msg}</span> : <span style={{ fontSize: 12, color: "#bfbfbf" }}>-</span>,
             },
           ]}
         />

@@ -149,7 +149,7 @@ def _spawn_main_brain(
 
     sub_brain_port: if known up-front, set WEBRAIN_SUB_BRAIN_URL so main-brain's
     _fetch_llm_config() can reach the smoke's sub-brain rather than the
-    hard-coded :3000 default (which won't be running in smoke).
+    hard-coded :3456 default (which won't be running in smoke).
     Without this, /config/reload silently falls back to the default LM
     Studio URL — the chat-flow smoke test would hit a real dev endpoint
     instead of our mock LLM.

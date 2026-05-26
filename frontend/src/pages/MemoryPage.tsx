@@ -91,6 +91,7 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
   const inConflict = Boolean(mem.conflict_group);
   const importance = mem.effective_importance ?? mem.importance ?? 0;
   const isHighlight = highlightId === mem.id;
+  const [nowTs] = useState(() => Date.now());
 
   return (
     <Card
@@ -99,7 +100,7 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
         marginBottom: 12,
         borderColor: isHighlight ? "var(--c-accent)" : "var(--c-border)",
         opacity: isCurrent ? 1 : 0.6,
-        background: isHighlight ? "rgba(99,102,241,0.06)" : "var(--c-card)",
+        background: isHighlight ? "var(--c-accent-soft)" : "var(--c-card)",
       }}
       styles={{ body: { padding: 16 } }}
     >
@@ -168,7 +169,14 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
               </span>
             </span>
           </Tooltip>
-          <span>访问:{mem.access_count ?? 0} 次</span>
+          <span>
+            访问:{mem.access_count ?? 0} 次
+            {mem.last_accessed_at &&
+              (() => {
+                const last = new Date(mem.last_accessed_at).getTime();
+                return nowTs - last < 30000 ? " (+1 本次查询)" : "";
+              })()}
+          </span>
           <span>{formatRelativeTime(mem.last_accessed_at || mem.createdAt)}</span>
           {mem.vectorScore !== undefined && (
             <span style={{ color: "var(--c-accent)" }}>相似:{(mem.vectorScore * 100).toFixed(1)}%</span>
@@ -212,7 +220,7 @@ function ConflictCard({ group, onMarkCurrent }: ConflictCardProps) {
               marginBottom: 8,
               borderRadius: 6,
               border: `1px solid ${isCurrent ? "var(--c-accent)" : "var(--c-border)"}`,
-              background: isCurrent ? "rgba(99,102,241,0.05)" : "transparent",
+              background: isCurrent ? "var(--c-accent-soft)" : "transparent",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>

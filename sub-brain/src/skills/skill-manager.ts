@@ -202,7 +202,21 @@ export class SkillManager {
    * but reads from ~/.webrain/skills/installed/<id>/skill.json.
    */
   private _loadInstalledHubSkills(): void {
-    if (!existsSync(INSTALLED_DIR)) return;
+    if (!existsSync(INSTALLED_DIR)) {
+      // Seed built-in skills on first launch so the marketplace isn't empty.
+      this._seedInstalledSkills();
+      return;
+    }
+    // If the directory exists but is empty, also seed.
+    try {
+      const entries = readdirSync(INSTALLED_DIR);
+      if (entries.length === 0) {
+        this._seedInstalledSkills();
+        return;
+      }
+    } catch {
+      return;
+    }
     try {
       let count = 0;
       for (const id of readdirSync(INSTALLED_DIR)) {
@@ -221,6 +235,42 @@ export class SkillManager {
       if (count > 0) console.log(`[skills] Loaded ${count} hub-installed skills`);
     } catch (err) {
       console.warn("[skills] Hub-installed load failed:", err);
+    }
+  }
+
+  /**
+   * Seed 2 demo skills from builtins into installed/ on first launch.
+   * This ensures the Skillhub marketplace isn't empty for new users.
+   */
+  private _seedInstalledSkills(): void {
+    try {
+      const __dirname = dirname(fileURLToPath(import.meta.url));
+      const builtinsDir = join(__dirname, "builtins");
+      if (!existsSync(builtinsDir)) return;
+      const seedIds = ["skill-json", "skill-csv"];
+      let seeded = 0;
+      for (const file of readdirSync(builtinsDir).filter((f) => f.endsWith(".json"))) {
+        const raw = JSON.parse(readFileSync(join(builtinsDir, file), "utf-8"));
+        if (!seedIds.includes(raw.id)) continue;
+        const skill: Skill = {
+          ...raw,
+          usageCount: raw.usageCount ?? 0,
+          successRate: raw.successRate ?? 1.0,
+          createdBy: raw.createdBy ?? "webrain-built-in",
+          createdAt: raw.createdAt ?? new Date().toISOString(),
+          updatedAt: raw.updatedAt ?? new Date().toISOString(),
+          source: "hub",
+          version: raw.version ?? 1,
+        };
+        const targetDir = join(INSTALLED_DIR, skill.id);
+        mkdirSync(targetDir, { recursive: true });
+        writeFileSync(join(targetDir, "skill.json"), JSON.stringify(skill, null, 2), "utf-8");
+        this.skills.set(skill.id, skill);
+        seeded++;
+      }
+      if (seeded > 0) console.log(`[skills] Seeded ${seeded} demo skills into marketplace`);
+    } catch (err) {
+      console.warn("[skills] Seed failed:", err);
     }
   }
 

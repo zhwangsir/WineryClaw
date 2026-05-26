@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   main-brain:
     build: ./sub-brain/main-brain
@@ -11,12 +9,12 @@ services:
     environment:
       - WEBRAIN_MODE=local
       - WEBRAIN_MAIN_BRAIN_PORT=18790
-      - WEBRAIN_SUB_BRAIN_URL=http://sub-brain:3000
+      - WEBRAIN_SUB_BRAIN_URL=http://sub-brain:3456
     networks: [webrain-net]
 
   sub-brain:
     build: ./sub-brain
-    ports: ["3000:3000"]
+    ports: ["3456:3456"]
     volumes:
       - ./data/sub-brain:/data
       - ./data/shared:/shared
@@ -31,8 +29,8 @@ services:
     build: ./frontend
     ports: ["8587:8587"]
     environment:
-      - WEBRAIN_API_URL=http://sub-brain:3000
-      - VITE_PROXY_TARGET=http://sub-brain:3000
+      - WEBRAIN_API_URL=http://sub-brain:3456
+      - VITE_PROXY_TARGET=http://sub-brain:3456
     networks: [webrain-net]
 
   dokobot:

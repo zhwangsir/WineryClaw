@@ -163,6 +163,31 @@ export function registerSkillhubRoutes(app: FastifyInstance, deps: SkillhubRoute
 
   // ---------- drafts ----------
 
+  app.post("/api/skillhub/drafts", async (request) => {
+    const body = (request.body as {
+      name?: string;
+      description?: string;
+      code?: string;
+      language?: string;
+      triggerPatterns?: string[];
+      tags?: string[];
+      reason?: string;
+    }) ?? {};
+    if (!body.name || !body.code) {
+      return { ok: false, error: "name and code required" };
+    }
+    const draft = skillManager.createDraft({
+      name: String(body.name),
+      description: String(body.description ?? ""),
+      code: String(body.code),
+      language: (body.language as any) ?? "javascript",
+      triggerPatterns: body.triggerPatterns ?? [],
+      tags: body.tags ?? [],
+      reason: String(body.reason ?? "manual"),
+    });
+    return { ok: true, skill: draft };
+  });
+
   app.get("/api/skillhub/drafts", async () => ({
     drafts: skillManager.listDrafts(),
   }));

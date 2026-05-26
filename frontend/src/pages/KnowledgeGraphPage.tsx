@@ -29,6 +29,7 @@ import {
 } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useKgStore } from "../stores/kgStore";
+import KgGraphView from "../components/common/KgGraphView";
 import type { KgEntity } from "../api/types";
 
 const typeColors: Record<string, string> = {
@@ -65,9 +66,11 @@ export default function KnowledgeGraphPage() {
     entities,
     selectedEntity,
     entityRelations,
+    relations,
     stats,
     loading,
     fetchEntities,
+    fetchRelations,
     selectEntity,
     search,
     fetchStats,
@@ -87,8 +90,9 @@ export default function KnowledgeGraphPage() {
 
   useEffect(() => {
     fetchEntities();
+    fetchRelations();
     fetchStats();
-  }, [fetchEntities, fetchStats]);
+  }, [fetchEntities, fetchRelations, fetchStats]);
 
   const filtered = useMemo<KgEntity[]>(() => {
     return selectedType ? entities.filter((e: KgEntity) => e.type === selectedType) : entities;
@@ -220,6 +224,15 @@ export default function KnowledgeGraphPage() {
           </Button>
         </div>
       </div>
+
+      {/* Graph visualization */}
+      <KgGraphView
+        entities={entities}
+        relations={relations}
+        selectedId={selectedEntity?.id}
+        onSelect={(id) => selectEntity(id)}
+        height={480}
+      />
 
       {/* Selected entity detail */}
       {selectedEntity && (

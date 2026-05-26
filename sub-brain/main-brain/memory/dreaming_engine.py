@@ -349,6 +349,17 @@ class DreamingEngine:
             l2_content = row["content"]
             l2_session = row["session_id"] or ""
 
+            # Unfold L2 provenance so L3 can trace back to original L1 events.
+            l2_refs_raw = row["provenance_refs"] if "provenance_refs" in row.keys() else "[]"
+            if isinstance(l2_refs_raw, str):
+                try:
+                    l2_refs = json.loads(l2_refs_raw)
+                except (ValueError, TypeError):
+                    l2_refs = []
+            else:
+                l2_refs = l2_refs_raw or []
+            l1_ids_from_l2 = [r for r in l2_refs if r != l2_id]
+
             facts = await self._extract_l3_facts(l2_content)
             if not facts:
                 facts_skipped_empty += 1
@@ -374,12 +385,15 @@ class DreamingEngine:
                     merged_content = content if len(content) > len(existing_content) else existing_content
                     new_importance = min(1.0, (similar.get("importance") or 0.7) + 0.05)
                     now_iso = datetime.now(timezone.utc).isoformat()
-                    # 幂等性修复：将此 l2_id 追加到已有行的 provenance_refs，
+                    # 幂等性修复：将此 l2_id 和原始 L1 ids 追加到已有行的 provenance_refs，
                     # 使该 L2 在下次 consolidate_l2_to_l3 时被识别为"已处理"，
                     # 防止全部被去重的 L2 行永远重新参与下一轮 Dreaming 循环。
                     existing_refs = json.loads(similar.get("provenance_refs") or "[]")
                     if l2_id not in existing_refs:
                         existing_refs.append(l2_id)
+                    for l1_id in l1_ids_from_l2:
+                        if l1_id not in existing_refs:
+                            existing_refs.append(l1_id)
                     with self.memory._connect() as conn:
                         conn.execute(
                             """UPDATE memories
@@ -406,8 +420,10 @@ class DreamingEngine:
                     "source": "dreaming_l2_to_l3",
                     "session_id": l2_session,
                     "provenance_source": "fact_extraction_l2_l3",
-                    "provenance_refs": [l2_id],
-                    "importance": 0.7,
+                    # Provenance includes both the L2 source and the original L1
+                    # events so lineage can be walked all the way back.
+                    "provenance_refs": [l2_id] + l1_ids_from_l2,
+                    "importance": 0.55,  # Aligned with DEFAULT_IMPORTANCE_BY_LEVEL["L3"]
                 })
                 facts_created += 1
 

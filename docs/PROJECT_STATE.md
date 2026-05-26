@@ -30,7 +30,7 @@
 Frontend (Vite + React, :8587)
     │  HTTP / WS / SSE，经 vite proxy
     ▼
-Sub Brain (Fastify + TS, :3000)          ← 执行层：工具/插件/通道/浏览器/沙箱/MCP/CLI/SkillHub
+Sub Brain (Fastify + TS, :3456)          ← 执行层：工具/插件/通道/浏览器/沙箱/MCP/CLI/SkillHub
     │  Axios over UDS（默认）或 TCP fallback
     ▼
 Main Brain (FastAPI + Python, UDS /tmp/webrain-main.sock 或 TCP :18790)  ← 推理层：记忆/推理/进化/KG/Wiki/Cron
@@ -471,7 +471,7 @@ frontend    vitest run                                → 119 files / 1193 pass(
 很多 MCP 客户端(IDE / 桌面助手 / agent)用 stdio 传输:派生子进程,通过 stdin/stdout 收发 JSON-RPC line-by-line。webrain 是 HTTP-only 的,这个脚本是桥:
 
 ```bash
-python tools/mcp_stdio_bridge.py --url http://127.0.0.1:3000/brain/mcp/jsonrpc
+python tools/mcp_stdio_bridge.py --url http://127.0.0.1:3456/brain/mcp/jsonrpc
 ```
 
 行为:

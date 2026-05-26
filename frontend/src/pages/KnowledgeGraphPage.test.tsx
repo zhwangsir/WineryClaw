@@ -7,6 +7,7 @@ import { BrowserRouter } from "react-router-dom";
 import KnowledgeGraphPage from "./KnowledgeGraphPage";
 
 const fetchEntities = vi.fn();
+const fetchRelations = vi.fn();
 const fetchStats = vi.fn();
 const search = vi.fn();
 const selectEntity = vi.fn();
@@ -21,10 +22,12 @@ function createMockStore(overrides: any = {}) {
       { id: "ent-1", name: "Entity A", type: "concept", description: "Desc A" },
       { id: "ent-2", name: "Entity B", type: "person", description: "" },
     ],
+    relations: [],
     selectedEntity: null as any,
     entityRelations: [],
     stats: { entity_count: 2, relation_count: 1 },
     fetchEntities,
+    fetchRelations,
     fetchStats,
     search,
     selectEntity,

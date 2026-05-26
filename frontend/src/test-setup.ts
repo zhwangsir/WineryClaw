@@ -146,3 +146,45 @@ console.warn = (...args: unknown[]) => {
   if (msg.includes("React Router Future Flag Warning")) return;
   _origWarn(...args);
 };
+
+// ---------------------------------------------------------------------------
+// Cytoscape mock — cytoscape requires a real HTML canvas which is unavailable
+// in jsdom. We provide a minimal stub so the component renders without crash.
+// ---------------------------------------------------------------------------
+vi.mock("cytoscape", () => {
+  return {
+    default: function cytoscapeStub(this: any, opts: any) {
+      const nodesMap = new Map<string, any>();
+      const edgesMap = new Map<string, any>();
+      if (opts.elements) {
+        for (const el of opts.elements) {
+          if (el.data.source && el.data.target) {
+            edgesMap.set(el.data.id, el);
+          } else {
+            nodesMap.set(el.data.id, el);
+          }
+        }
+      }
+      const cy = {
+        nodes: () => ({
+          unselect: vi.fn(),
+          select: vi.fn(),
+        }),
+        getElementById: (id: string) => ({
+          length: nodesMap.has(id) ? 1 : 0,
+          select: vi.fn(),
+        }),
+        animate: vi.fn(),
+        on: vi.fn(),
+        destroy: vi.fn(),
+        _nodes: nodesMap,
+        _edges: edgesMap,
+      };
+      // schedule layout callback if present
+      if (opts.layout?.fit && typeof opts.layout.animate === "boolean") {
+        // no-op: layout runs synchronously in real cytoscape
+      }
+      return cy;
+    },
+  };
+});
