@@ -41,7 +41,7 @@ Three terminals (or three `&` background processes if you prefer):
 | 2 | `sub-brain`            | `WEBRAIN_NO_MAIN_BRAIN=1 WEBRAIN_MAIN_BRAIN_PORT=18790 pnpm dev` |
 | 3 | `frontend`             | `pnpm dev`                                                       |
 
-**How to know it worked:** `curl -s http://localhost:3000/health` returns
+**How to know it worked:** `curl -s http://localhost:3456/health` returns
 `{"status":"ok"}` and `http://localhost:8587/` loads the user-mode home in
 your browser.
 
@@ -57,7 +57,7 @@ This loads 5 L1 memories + 3 L3 facts + 3 RAG docs + 1 wiki note into the
 running main-brain. Without this step the next four sections work but
 have nothing interesting to demo.
 
-**How to know it worked:** `curl -s http://localhost:3000/brain/rag/stats`
+**How to know it worked:** `curl -s http://localhost:3456/brain/rag/stats`
 shows `docs_count >= 3`.
 
 ---

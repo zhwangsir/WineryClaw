@@ -71,9 +71,12 @@ describe("ToolsPage", () => {
     if (searchInput) {
       fireEvent.change(searchInput, { target: { value: "xyznotfound" } });
     }
-    await waitFor(() => {
-      expect(screen.getByText("没有匹配的工具")).toBeInTheDocument();
-    }, { timeout: 800 });
+    await waitFor(
+      () => {
+        expect(screen.getByText("没有匹配的工具")).toBeInTheDocument();
+      },
+      { timeout: 800 }
+    );
   });
 
   it("toggles tool", () => {
@@ -125,9 +128,12 @@ describe("ToolsPage", () => {
   });
 
   it("renders unknown category tool", () => {
-    vi.mocked(useToolStore).mockImplementation(() => createMockStore({
-      tools: [{ id: "t4", name: "Unknown", description: "Desc", category: "unknown_cat", enabled: true }],
-    }) as any);
+    vi.mocked(useToolStore).mockImplementation(
+      () =>
+        createMockStore({
+          tools: [{ id: "t4", name: "Unknown", description: "Desc", category: "unknown_cat", enabled: true }],
+        }) as any
+    );
     render(<ToolsPage />);
     expect(screen.getByText("Unknown")).toBeInTheDocument();
   });

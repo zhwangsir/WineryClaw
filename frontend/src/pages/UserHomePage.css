@@ -23,8 +23,9 @@
   height: 100vh;
   background: var(--uh-bg);
   color: var(--uh-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Helvetica Neue", Arial, sans-serif;
 }
 
 :root[data-theme="dark"] .user-home {
@@ -177,7 +178,10 @@
   text-align: left;
   font-family: inherit;
   color: inherit;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.15s ease;
 }
 
 .user-home__suggestion:hover {

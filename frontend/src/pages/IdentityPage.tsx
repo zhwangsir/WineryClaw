@@ -50,15 +50,39 @@ export default function IdentityPage() {
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "ID", dataIndex: "id", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span> },
+              {
+                title: "ID",
+                dataIndex: "id",
+                render: (v: string) => (
+                  <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span>
+                ),
+              },
               { title: "名称", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-              { title: "角色", dataIndex: "role", render: (v: string) => <Tag color={v === "admin" ? "red" : v === "user" ? "blue" : "default"}>{v}</Tag> },
-              { title: "工作空间", dataIndex: "workspaces", render: (v: string[]) => (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {v?.map((w) => <Tag key={w} style={{ fontSize: 11, margin: 0 }}>{w}</Tag>)}
-                </div>
-              )},
-              { title: "创建时间", dataIndex: "createdAt", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span> },
+              {
+                title: "角色",
+                dataIndex: "role",
+                render: (v: string) => <Tag color={v === "admin" ? "red" : v === "user" ? "blue" : "default"}>{v}</Tag>,
+              },
+              {
+                title: "工作空间",
+                dataIndex: "workspaces",
+                render: (v: string[]) => (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {v?.map((w) => (
+                      <Tag key={w} style={{ fontSize: 11, margin: 0 }}>
+                        {w}
+                      </Tag>
+                    ))}
+                  </div>
+                ),
+              },
+              {
+                title: "创建时间",
+                dataIndex: "createdAt",
+                render: (v: string) => (
+                  <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span>
+                ),
+              },
               {
                 title: "操作",
                 key: "action",
@@ -106,7 +130,9 @@ export default function IdentityPage() {
             <Input placeholder="逗号分隔，例如: default, dev" />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>创建</Button>
+            <Button type="primary" htmlType="submit" block>
+              创建
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>

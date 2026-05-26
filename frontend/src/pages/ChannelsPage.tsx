@@ -12,6 +12,8 @@ import {
 import { PageShell } from "../components/common/PageShell";
 import { useChannelStore } from "../stores/channelStore";
 import { StatusBadge } from "../components/common/StatusBadge";
+import { agentsApi } from "../api/agents";
+import type { Agent } from "../api/types";
 
 function formatChannelTime(ts: string | undefined): string {
   if (!ts) return "—";
@@ -59,6 +61,8 @@ export default function ChannelsPage() {
     messages,
     deleteChannel,
     setAutoReply,
+    setAgentId,
+    setReplyDelay,
   } = useChannelStore();
 
   const [msgDrawerOpen, setMsgDrawerOpen] = useState(false);
@@ -66,9 +70,11 @@ export default function ChannelsPage() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectForm] = Form.useForm();
   const [connectLoading, setConnectLoading] = useState(false);
+  const [agents, setAgents] = useState<Agent[]>([]);
 
   useEffect(() => {
     fetchChannels();
+    agentsApi.list().then(setAgents).catch(() => setAgents([]));
   }, [fetchChannels]);
 
   const openMessages = async (id: string) => {
@@ -137,7 +143,10 @@ export default function ChannelsPage() {
             <List.Item>
               <Card
                 style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-                styles={{ body: { padding: 32 }, header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" } }}
+                styles={{
+                  body: { padding: 32 },
+                  header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" },
+                }}
                 title={
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <StatusBadge status={ch.connected ? "connected" : "disconnected"} />
@@ -239,6 +248,41 @@ export default function ChannelsPage() {
                   </Tooltip>
                   <Switch size="small" checked={!!ch.auto_reply} onChange={(checked) => setAutoReply(ch.id, checked)} />
                 </div>
+
+                {/* M5.1 — per-channel agent + reply delay (only visible when auto-reply is on) */}
+                {ch.auto_reply && (
+                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 12, color: "var(--c-text-3)", minWidth: 60 }}>Agent</span>
+                      <Select
+                        size="small"
+                        style={{ flex: 1 }}
+                        value={ch.agent_id || "agent-default"}
+                        onChange={(val) => setAgentId(ch.id, val)}
+                        options={[
+                          { value: "agent-default", label: "默认 Agent" },
+                          ...agents.map((a) => ({ value: a.id, label: a.name })),
+                        ]}
+                      />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 12, color: "var(--c-text-3)", minWidth: 60 }}>延迟</span>
+                      <Select
+                        size="small"
+                        style={{ flex: 1 }}
+                        value={ch.reply_delay_ms || 0}
+                        onChange={(val) => setReplyDelay(ch.id, val)}
+                        options={[
+                          { value: 0, label: "无延迟" },
+                          { value: 1000, label: "1 秒" },
+                          { value: 2000, label: "2 秒" },
+                          { value: 3000, label: "3 秒" },
+                          { value: 5000, label: "5 秒" },
+                        ]}
+                      />
+                    </div>
+                  </div>
+                )}
               </Card>
             </List.Item>
           )}

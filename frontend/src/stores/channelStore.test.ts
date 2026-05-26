@@ -108,9 +108,17 @@ describe("channelStore", () => {
   });
 
   it("disconnectChannel optimistically updates then refetches", async () => {
-    useChannelStore.setState({ channels: [{ id: "c1", connected: true }, { id: "c2", connected: true }] });
+    useChannelStore.setState({
+      channels: [
+        { id: "c1", connected: true },
+        { id: "c2", connected: true },
+      ],
+    });
     vi.mocked(channelsApi.disconnect).mockResolvedValue(undefined);
-    vi.mocked(channelsApi.list).mockResolvedValue([{ id: "c1", connected: false }, { id: "c2", connected: true }]);
+    vi.mocked(channelsApi.list).mockResolvedValue([
+      { id: "c1", connected: false },
+      { id: "c2", connected: true },
+    ]);
     await useChannelStore.getState().disconnectChannel("c1");
     expect(channelsApi.disconnect).toHaveBeenCalledWith("c1");
     expect(useChannelStore.getState().channels[1].connected).toBe(true);
@@ -131,7 +139,12 @@ describe("channelStore", () => {
   });
 
   it("toggleChannel toggles optimistically", async () => {
-    useChannelStore.setState({ channels: [{ id: "c1", connected: false }, { id: "c2", connected: false }] });
+    useChannelStore.setState({
+      channels: [
+        { id: "c1", connected: false },
+        { id: "c2", connected: false },
+      ],
+    });
     vi.mocked(channelsApi.toggle).mockResolvedValue(undefined);
     await useChannelStore.getState().toggleChannel("c1");
     expect(useChannelStore.getState().channels[0].connected).toBe(true);

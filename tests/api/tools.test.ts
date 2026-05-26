@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getJson, postJson } from "./fetch-helper";
 
-const SUB_URL = "http://127.0.0.1:3000";
+const SUB_URL = "http://127.0.0.1:3456";
 
 describe("POST /tools/execute", () => {
   it("should execute shell tool", async () => {

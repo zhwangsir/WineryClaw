@@ -50,7 +50,39 @@ export interface ExecutePlanParams {
   verify?: PlanVerifyMode;
 }
 
+export interface PlanStreamEvent {
+  event: string;
+  plan_id?: string;
+  total_tasks?: number;
+  task_id?: string;
+  description?: string;
+  attempt_idx?: number;
+  attempt?: PlanTaskAttempt;
+  succeeded?: boolean;
+  attempts_count?: number;
+  overall_success?: boolean;
+  total_attempts?: number;
+  failed_task_ids?: string[];
+  result?: PlanExecutionResult;
+  message?: string;
+  session_id?: string;
+}
+
 export const planApi = {
-  execute: (params: ExecutePlanParams) =>
-    api.post<PlanExecutionResult>("/brain/plan/execute", params),
+  execute: (params: ExecutePlanParams) => api.post<PlanExecutionResult>("/brain/plan/execute", params),
+
+  executeStream: (
+    params: ExecutePlanParams,
+    onEvent: (event: PlanStreamEvent) => void,
+    onDone?: () => void,
+    onError?: (err: Error) => void,
+  ) => {
+    const { client, url } = api.stream("/brain/plan/execute/stream", params as Record<string, unknown>);
+    client.connect(url, (data) => {
+      if (typeof data === "object" && data !== null) {
+        onEvent(data as PlanStreamEvent);
+      }
+    }, onDone, onError);
+    return client;
+  },
 };

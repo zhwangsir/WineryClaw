@@ -76,9 +76,7 @@ describe("DokobotPage", () => {
   });
 
   it("shows unavailable tag when not available", () => {
-    vi.mocked(useDokobotStore).mockImplementation(() =>
-      createMockStore({ available: false }) as any
-    );
+    vi.mocked(useDokobotStore).mockImplementation(() => createMockStore({ available: false }) as any);
     render(
       <BrowserRouter>
         <DokobotPage />

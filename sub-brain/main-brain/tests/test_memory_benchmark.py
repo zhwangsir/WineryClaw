@@ -275,12 +275,16 @@ def _attach_keyword_preserving_llm(eng: DreamingEngine, l1_contents_by_session: 
 
 @pytest.mark.benchmark
 @pytest.mark.asyncio
-async def test_memory_benchmark_baseline_vs_consolidated(temp_dir, mock_llm_config, capsys):
+async def test_memory_benchmark_baseline_vs_consolidated(temp_dir, mock_llm_config, capsys, monkeypatch):
     """Measure recall against the 7-day fixture before and after dreaming.
 
     Output is printed (not asserted) so the test functions as a benchmark.
     Run with: pytest -m benchmark -s tests/test_memory_benchmark.py
     """
+    # Disable semantic extraction — it calls the LLM endpoint which is not
+    # mocked for MemoryManager (only DreamingEngine's _llm_call is stubbed).
+    monkeypatch.setenv("WEBRAIN_EXTRACT_SEMANTIC", "0")
+
     fixture = _load_fixture()
     mm = MemoryManager(db_path=str(temp_dir / "bench.db"), llm_config=mock_llm_config)
     key_to_id = await _plant_all(mm, fixture)

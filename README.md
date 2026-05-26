@@ -16,7 +16,7 @@ WeBrain 是一个基于**双脑架构**的 AI 集成平台，通过分离"推理
 └─────────────────────────┬───────────────────────────────────┘
                           │ HTTP / WebSocket
 ┌─────────────────────────┴───────────────────────────────────┐
-│                   Sub Brain (port 3000)                      │
+│                   Sub Brain (port 3456)                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
 │  │  Tools   │ │ Channels │ │  Plugins │ │  Agent   │       │
 │  │ Registry │ │  Webhook │ │   SDK    │ │ Manager  │       │
@@ -196,10 +196,10 @@ webrain-integration/
 | 服务 | 地址 | 说明 |
 |------|------|------|
 | 前端开发服务器 | `http://localhost:8587` | Vite HMR 开发服务器 |
-| Sub Brain API | `http://localhost:3000` | API 网关 + Brain 代理 |
+| Sub Brain API | `http://localhost:3456` | API 网关 + Brain 代理 |
 | Main Brain | UDS `/tmp/webrain-main.sock` | Unix Domain Socket |
 | Main Brain (fallback) | `http://localhost:18790` | TCP 回退模式 |
-| Prometheus Metrics | `http://localhost:3000/metrics` | 进程与 HTTP 指标 |
+| Prometheus Metrics | `http://localhost:3456/metrics` | 进程与 HTTP 指标 |
 
 ---
 

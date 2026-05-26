@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, MemoryRouter } from "react-router-dom";
 import { ConfigProvider, theme as antdTheme } from "antd";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -87,6 +87,13 @@ function ReactiveConfigProvider({ children }: { children: React.ReactNode }) {
   return <ConfigProvider theme={buildNotionTheme(isDark)}>{children}</ConfigProvider>;
 }
 
+// Tauri desktop shell detection — use MemoryRouter (no browser history API)
+const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI__;
+if (isTauri) {
+  console.log("[webrain] Running in Tauri desktop shell");
+}
+const Router = isTauri ? MemoryRouter : BrowserRouter;
+
 // Register Service Worker for PWA
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -109,9 +116,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <ReactiveConfigProvider>
-        <BrowserRouter>
+        <Router>
           <App />
-        </BrowserRouter>
+        </Router>
       </ReactiveConfigProvider>
     </ErrorBoundary>
   </React.StrictMode>

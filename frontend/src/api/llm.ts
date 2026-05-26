@@ -47,6 +47,5 @@ export interface LLMRecheckResult {
 
 export const llmApi = {
   stats: () => api.get<LLMStats>("/brain/llm/stats"),
-  recheck: (name?: string) =>
-    api.post<LLMRecheckResult>("/brain/llm/health/recheck", name ? { name } : {}),
+  recheck: (name?: string) => api.post<LLMRecheckResult>("/brain/llm/health/recheck", name ? { name } : {}),
 };

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-const MAIN_URL = "http://127.0.0.1:3000/brain";
+const MAIN_URL = "http://127.0.0.1:3456/brain";
 
 async function isModelAvailable(): Promise<boolean> {
   try {

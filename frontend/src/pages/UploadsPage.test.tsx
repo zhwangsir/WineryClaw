@@ -29,13 +29,21 @@ describe("UploadsPage", () => {
   });
 
   it("renders page shell", () => {
-    render(<BrowserRouter><UploadsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <UploadsPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("上传")).toBeInTheDocument();
   });
 
   it("triggers upload on file selection", async () => {
     upload.mockResolvedValue(undefined);
-    render(<BrowserRouter><UploadsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <UploadsPage />
+      </BrowserRouter>
+    );
 
     const file = new File(["content"], "test.txt", { type: "text/plain" });
     const uploadInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -51,7 +59,11 @@ describe("UploadsPage", () => {
 
   it("shows loading state", () => {
     vi.mocked(useUploadsStore).mockImplementation(() => createMockStore({ loading: true }) as any);
-    render(<BrowserRouter><UploadsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <UploadsPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("选择文件上传")).toBeInTheDocument();
   });
 });

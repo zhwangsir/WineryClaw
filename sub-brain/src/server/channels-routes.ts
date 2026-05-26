@@ -109,6 +109,32 @@ export function registerChannelsRoutes(app: FastifyInstance, deps: ChannelsRoute
     return { ok: true, auto_reply: deps.channelManager.getAutoReply(id) };
   });
 
+  // M5.1: set/query per-channel agent_id
+  app.post("/channels/:id/agent", async (request) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as { agent_id?: string }) ?? {};
+    const agentId = String(body.agent_id ?? "agent-default");
+    return deps.channelManager.setAgentId(id, agentId);
+  });
+
+  app.get("/channels/:id/agent", async (request) => {
+    const { id } = request.params as { id: string };
+    return { ok: true, agent_id: deps.channelManager.getAgentId(id) };
+  });
+
+  // M5.1: set/query per-channel reply delay
+  app.post("/channels/:id/reply-delay", async (request) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body as { delay_ms?: number }) ?? {};
+    const delayMs = typeof body.delay_ms === "number" ? body.delay_ms : 0;
+    return deps.channelManager.setReplyDelay(id, delayMs);
+  });
+
+  app.get("/channels/:id/reply-delay", async (request) => {
+    const { id } = request.params as { id: string };
+    return { ok: true, delay_ms: deps.channelManager.getReplyDelay(id) };
+  });
+
   // POST /channels/:id/inject-inbound — replay or simulate an inbound
   // message. Used by smoke tests (Round C5) to exercise the
   // inbound→auto-reply pipeline against a "memory" channel without

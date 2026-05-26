@@ -32,7 +32,7 @@ async function apiPost(page: Page, path: string, body: unknown) {
       });
       return { status: r.status, body: await r.json().catch(() => null) };
     },
-    { url: `http://localhost:3000${path}`, data: body }
+    { url: `http://localhost:3456${path}`, data: body }
   );
 }
 
@@ -40,7 +40,7 @@ async function apiGet(page: Page, path: string) {
   return page.evaluate(async (url) => {
     const r = await fetch(url);
     return { status: r.status, body: await r.json().catch(() => null) };
-  }, `http://localhost:3000${path}`);
+  }, `http://localhost:3456${path}`);
 }
 
 // ─── 1. 用户模式聊天 ──────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ test("知识库 — API 上传 Markdown 文档并索引", async ({ page }) => {
       });
       return { status: r.status, body: await r.json().catch(() => null) };
     },
-    { url: "http://localhost:3000/upload", b64data: b64 }
+    { url: "http://localhost:3456/upload", b64data: b64 }
   );
   expect(uploadRes.status).toBe(200);
   expect(uploadRes.body?.ok).toBe(true);
@@ -121,7 +121,7 @@ test("知识库 — API 上传 Markdown 文档并索引", async ({ page }) => {
         });
         return { status: r.status, body: await r.json().catch(() => null) };
       },
-      { url: "http://localhost:3000/brain/rag/ingest", filePath: uploadRes.body.url }
+      { url: "http://localhost:3456/brain/rag/ingest", filePath: uploadRes.body.url }
     );
     // 200 表示成功，非 200 不算硬失败（路径可能不支持 ingest）
     expect([200, 202, 404, 422]).toContain(ingestRes.status);
@@ -280,7 +280,7 @@ test("通道 — 连接 memory 通道并验证", async ({ page }) => {
   await nav(page, "/channels");
 
   const res = await page.evaluate(async () => {
-    const r = await fetch("http://localhost:3000/channels/connect", {
+    const r = await fetch("http://localhost:3456/channels/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ channel: "memory", config: {} }),
@@ -348,7 +348,7 @@ test("Dreaming — 触发梦境整合并等待完成", async ({ page }) => {
   await nav(page, "/memory");
 
   const res = await page.evaluate(async () => {
-    const r = await fetch("http://localhost:3000/brain/dreaming/run", {
+    const r = await fetch("http://localhost:3456/brain/dreaming/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),

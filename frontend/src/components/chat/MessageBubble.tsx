@@ -16,7 +16,7 @@ import {
   CloseCircleOutlined,
 } from "@ant-design/icons";
 import type { ChatMessage } from "../../api/types";
-import { planApi, type PlanExecutionResult } from "../../api/plan";
+import { planApi, type PlanExecutionResult, type PlanStreamEvent } from "../../api/plan";
 import MarkdownRenderer from "../common/MarkdownRenderer";
 import StreamingText from "./StreamingText";
 import HighlightedText from "./HighlightedText";
@@ -37,25 +37,88 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
   // each message owns its own run.
   const [executing, setExecuting] = useState(false);
   const [execResult, setExecResult] = useState<PlanExecutionResult | null>(null);
+  const [execProgress, setExecProgress] = useState<{
+    currentTaskIdx: number;
+    currentAttempt: number;
+    taskStatus: Record<string, boolean | null>;
+  } | null>(null);
 
   const handleExecutePlan = async () => {
     if (!msg.plan || executing) return;
     setExecuting(true);
     setExecResult(null);
+    setExecProgress({
+      currentTaskIdx: 0,
+      currentAttempt: 1,
+      taskStatus: Object.fromEntries(msg.plan.tasks.map((t) => [t.id, null])),
+    });
     try {
-      const res = await planApi.execute({ plan: msg.plan, verify: "presence" });
-      setExecResult(res);
-      if (res.ok && res.overall_success) {
-        message.success(`计划执行完成 · ${res.results?.length ?? 0} 个任务全部通过`);
-      } else if (res.ok) {
-        message.warning(`计划执行完成 · ${res.failed_task_ids?.length ?? 0} 个任务失败`);
-      } else {
-        message.error(res.error || "计划执行失败");
-      }
+      const streamClient = planApi.executeStream(
+        { plan: msg.plan, verify: "presence" },
+        (evt: PlanStreamEvent) => {
+          if (evt.event === "plan_start" && msg.plan) {
+            setExecProgress({
+              currentTaskIdx: 0,
+              currentAttempt: 1,
+              taskStatus: Object.fromEntries(msg.plan.tasks.map((t) => [t.id, null])),
+            });
+          } else if (evt.event === "task_start" && msg.plan) {
+            const idx = msg.plan.tasks.findIndex((t) => t.id === evt.task_id);
+            setExecProgress((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    currentTaskIdx: idx >= 0 ? idx : prev.currentTaskIdx,
+                    currentAttempt: evt.attempt_idx ?? 1,
+                  }
+                : prev
+            );
+          } else if (evt.event === "task_attempt" && msg.plan) {
+            setExecProgress((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    currentAttempt: evt.attempt?.attempt_idx ?? prev.currentAttempt,
+                  }
+                : prev
+            );
+          } else if (evt.event === "task_complete" && msg.plan) {
+            setExecProgress((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    taskStatus: {
+                      ...prev.taskStatus,
+                      [evt.task_id!]: evt.succeeded ?? false,
+                    },
+                  }
+                : prev
+            );
+          } else if (evt.event === "plan_complete") {
+            const res = evt.result ?? null;
+            setExecResult(res);
+            if (res && res.ok && res.overall_success) {
+              message.success(`计划执行完成 · ${res.results?.length ?? 0} 个任务全部通过`);
+            } else if (res && res.ok) {
+              message.warning(`计划执行完成 · ${res.failed_task_ids?.length ?? 0} 个任务失败`);
+            } else if (res && !res.ok) {
+              message.error(res.error || "计划执行失败");
+            }
+          }
+        },
+        () => {
+          setExecuting(false);
+        },
+        (err) => {
+          message.error(err.message || "计划执行失败");
+          setExecuting(false);
+        }
+      );
+      // Store client on component for potential abort (not used here but keeps API consistent)
+      (handleExecutePlan as any)._streamClient = streamClient;
     } catch (e: unknown) {
       const msgText = e instanceof Error ? e.message : "计划执行失败";
       message.error(msgText);
-    } finally {
       setExecuting(false);
     }
   };
@@ -269,6 +332,12 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                       {executing ? <LoadingOutlined /> : <PlayCircleOutlined />}
                       {executing ? "执行中..." : "执行计划"}
                     </button>
+                    {executing && execProgress && msg.plan && (
+                      <span style={{ fontSize: 11, color: isDark ? "#a1a1aa" : "#737373" }}>
+                        Task {execProgress.currentTaskIdx + 1}/{msg.plan.tasks.length}
+                        第 {execProgress.currentAttempt} 次尝试中...
+                      </span>
+                    )}
                     {execResult && execResult.ok && (
                       <span style={{ fontSize: 11, color: isDark ? "#a1a1aa" : "#737373" }}>
                         {execResult.overall_success ? (
@@ -283,6 +352,36 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                       </span>
                     )}
                   </div>
+
+                  {/* Real-time task status during execution */}
+                  {executing && execProgress && msg.plan && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 4,
+                      }}
+                    >
+                      {msg.plan.tasks.map((t, i) => {
+                        const status = execProgress.taskStatus[t.id];
+                        return (
+                          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                            {status === true ? (
+                              <CheckCircleOutlined style={{ color: isDark ? "#86efac" : "#15803d", fontSize: 10 }} />
+                            ) : status === false ? (
+                              <CloseCircleOutlined style={{ color: isDark ? "#fca5a5" : "#b91c1c", fontSize: 10 }} />
+                            ) : i === execProgress.currentTaskIdx ? (
+                              <LoadingOutlined style={{ color: isDark ? "#a1a1aa" : "#737373", fontSize: 10 }} />
+                            ) : (
+                              <span style={{ width: 10, height: 10, borderRadius: "50%", background: isDark ? "#3f3f46" : "#d4d4d8", display: "inline-block" }} />
+                            )}
+                            <span style={{ color: isDark ? "#d4d4d8" : "#3f3f46" }}>{t.description}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Per-task result list (after execution) */}
                   {execResult && execResult.ok && execResult.results && execResult.results.length > 0 && (
@@ -522,6 +621,35 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
             </div>
           )}
         </div>
+
+        {/* Phase 6: auto skill draft created hint */}
+        {msg.skillDraftCreated && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "8px 12px",
+              background: isDark ? "rgba(34,197,94,0.10)" : "rgba(34,197,94,0.08)",
+              borderRadius: 8,
+              border: `1px solid ${isDark ? "#22c55e" : "#16a34a"}`,
+              color: isDark ? "#86efac" : "#15803d",
+              fontSize: 13,
+              lineHeight: 1.5,
+              cursor: "pointer",
+            }}
+            onClick={() => {
+              window.location.href = "/skillhub?tab=drafts";
+            }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                window.location.href = "/skillhub?tab=drafts";
+              }
+            }}
+          >
+            🎉 系统已为你自动创建了一个新 skill: {msg.skillDraftCreated.name}，前往 Skillhub → Drafts 查看
+          </div>
+        )}
 
         {/* Meta row: timestamp + copy */}
         <div

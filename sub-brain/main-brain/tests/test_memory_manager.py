@@ -94,8 +94,8 @@ class TestEffectiveImportance:
         now = datetime(2026, 5, 20, tzinfo=timezone.utc)
         two_days_ago = (now - timedelta(days=2)).isoformat()
         result = effective_importance(0.8, "L1", two_days_ago, now=now)
-        # exp(-1) ≈ 0.3679; so 0.8 * 0.3679 ≈ 0.294
-        assert result == pytest.approx(0.8 * 0.36788, abs=0.001)
+        # Half-life = 5.0 days (Round GA: softer decay). At 2 days: exp(-2/5) ≈ 0.6703
+        assert result == pytest.approx(0.8 * 0.6703, abs=0.001)
 
     def test_l3_decays_much_slower_than_l1_at_same_age(self):
         now = datetime(2026, 5, 20, tzinfo=timezone.utc)

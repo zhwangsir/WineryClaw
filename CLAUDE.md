@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
 > `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
 
-> **Current test totals** (2026-05-22, post Round S S5–S19):
-> **450** sub-brain unit + 1216 frontend unit + **645** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+> **Current test totals** (2026-05-22, post Round S S5–S20):
+> **450** sub-brain unit + 1216 frontend unit + **676** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
 >
 > Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
 
@@ -42,7 +42,7 @@ cd frontend && pnpm install && cd ..
 # Terminal 1 — main-brain (FastAPI on UDS by default, or TCP if WEBRAIN_MAIN_BRAIN_PORT set)
 cd sub-brain/main-brain && source venv/bin/activate && python main_brain.py
 
-# Terminal 2 — sub-brain (Fastify on :3000)
+# Terminal 2 — sub-brain (Fastify on :3456)
 cd sub-brain && pnpm dev
 
 # Terminal 3 — frontend (Vite HMR on :8587)
@@ -68,7 +68,7 @@ Note: sub-brain `pnpm dev` will auto-spawn its own main-brain if one isn't alrea
 | Frontend e2e single file | same | `pnpm exec playwright test e2e/chat-flow.spec.ts` |
 | Frontend type-check | same | `pnpm exec tsc --noEmit` |
 | Frontend lint | same | `pnpm lint` (read) or `pnpm lint:fix` (autofix) |
-| Umbrella integration (needs `:3000` + `/brain/health` live) | `webrain-integration/` | `pnpm exec vitest run` |
+| Umbrella integration (needs `:3456` + `/brain/health` live) | `webrain-integration/` | `pnpm exec vitest run` |
 | Single integration by name | same | `pnpm exec vitest run -t "memory search"` |
 
 ### Common verification flow
@@ -126,7 +126,7 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 |---|---|---|---|
 | `WEBRAIN_MAIN_BRAIN_UDS` | sub-brain | `/tmp/webrain-main.sock` | UDS path. Set this OR `WEBRAIN_MAIN_BRAIN_PORT`, not both. |
 | `WEBRAIN_MAIN_BRAIN_PORT` | sub-brain | `18790` | Forces TCP transport to main-brain. |
-| `WEBRAIN_SUB_BRAIN_URL` | main-brain | `http://127.0.0.1:3000` | Where main-brain fetches `/config/model` from. Smoke fixtures set this to the spawned sub-brain's port. |
+| `WEBRAIN_SUB_BRAIN_URL` | main-brain | `http://127.0.0.1:3456` | Where main-brain fetches `/config/model` from. Smoke fixtures set this to the spawned sub-brain's port. |
 | `WEBRAIN_NO_MAIN_BRAIN` | sub-brain | unset | If `1`, sub-brain skips auto-spawning a main-brain child. Useful when running main-brain manually. |
 | `WEBRAIN_DATA_DIR` | main-brain | `<repo>/data/main-brain/` | Override data dir. Smoke uses a tmpdir so it doesn't pollute the dev DB. |
 | `WEBRAIN_MCP_TOKEN` | main-brain | auto-generated to `~/.webrain/mcp_token` | Bearer token for MCP write tools. Smoke fixtures pin it. |
@@ -174,6 +174,7 @@ Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAI
 | `WEBRAIN_MEM_SIGNAL_GUIDE_ENABLED` | main-brain | `1` | Round S17: 记忆信号使用指南。在 memory_text 顶部注入紧凑单行标签说明 `[记忆标签说明: 已验证事实=…; 近期片段=…; 知识缺口=…; 时效低=…]`，教导 AI 正确解读 S11-S16 注入的元信号，使整个 S 系列形成闭环。约 20 token 开销，仅在有实际记忆内容时注入。设为 `0` 禁用。 |
 | `WEBRAIN_QUERY_INTENT_ENABLED` | main-brain | `1` | Round S18: 查询意图感知。纯关键词分类（零 LLM 调用），将用户消息分为 PERSONAL_RECALL / TEMPORAL_RECALL / TASK_ASSIST / GENERAL 四类，在 memory_text 末尾追加对应的行为提示（如 `[查询意图: 个人信息回溯 — …]`），帮助 AI 在不同查询场景下灵活调整记忆引用策略。与 S16 互补：S16 反映"有多少记忆"，S18 反映"如何使用记忆"。设为 `0` 禁用。 |
 | `WEBRAIN_MEM_SOURCE_DIVERSITY_ENABLED` | main-brain | `1` | Round S19: 记忆来源多样性信号。统计 relevant 中 L3/L4（已验证事实，importance ≥ mem_confidence_threshold）与 L1/L2（近期片段）的条数分布，在 memory_text 中追加单行来源标签（如 `[记忆来源: 混合来源(已验证 2条 · 近期片段 1条) — 优先引用已验证事实]`）。与 S11 置信度聚合互补：S11 给整体评级（高/中/低），S19 给条数拆解，帮助 AI 了解当前记忆集的可信度结构。零成本（纯列表统计）。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_ADEQUACY_ENABLED` | main-brain | `1` | Round S20: 记忆充分性信号。综合 S18 查询意图与 relevant 状态，对 PERSONAL_RECALL / TEMPORAL_RECALL 查询给出查询特定的充分性评级与行为处方（"充足 — 可直接引用" / "有限 — 请加限定语" / "不足 — 请向用户确认"）。GENERAL / TASK_ASSIST 查询不注入。不同于 S11（描述整体置信度），S20 将意图与记忆状态相结合给出具体行动建议。零成本（纯列表统计）。设为 `0` 禁用。 |
 
 ---
 

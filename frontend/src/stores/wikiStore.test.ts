@@ -151,7 +151,12 @@ describe("wikiStore", () => {
   });
 
   it("updateNote updates existing note", async () => {
-    useWikiStore.setState({ notes: [{ id: "n1", title: "Old" }, { id: "n2", title: "Other" }] });
+    useWikiStore.setState({
+      notes: [
+        { id: "n1", title: "Old" },
+        { id: "n2", title: "Other" },
+      ],
+    });
     const updated = { id: "n1", title: "New" };
     vi.mocked(wikiApi.update).mockResolvedValue(updated);
     await useWikiStore.getState().updateNote("n1", { title: "New" });

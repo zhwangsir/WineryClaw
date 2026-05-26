@@ -32,7 +32,7 @@ describe('AgentManager', () => {
         }
       } catch {}
     } catch {}
-    manager = new AgentManager({ mainBrainUrl: 'http://127.0.0.1:18790', subBrainUrl: 'http://127.0.0.1:3000' });
+    manager = new AgentManager({ mainBrainUrl: 'http://127.0.0.1:18790', subBrainUrl: 'http://127.0.0.1:3456' });
   });
 
   it('should create default agent on init', () => {

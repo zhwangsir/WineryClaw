@@ -8,6 +8,7 @@ Transport: HTTP via `POST /mcp/jsonrpc`. A separate `tools/mcp_stdio_
 bridge.py` script wraps stdio for MCP clients that spawn subprocesses.
 """
 
+from .audit_log import get_audit_logs, init_audit_db, write_audit_log
 from .auth import extract_bearer, resolve_token, verify
 from .protocol import (
     INVALID_PARAMS,
@@ -39,4 +40,7 @@ __all__ = [
     "resolve_token",
     "extract_bearer",
     "verify",
+    "init_audit_db",
+    "write_audit_log",
+    "get_audit_logs",
 ]

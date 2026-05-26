@@ -122,18 +122,22 @@ describe("BrowserPage", () => {
   });
 
   it("renders session with empty title and url", () => {
-    vi.mocked(useBrowserStore).mockReturnValue(createMockStore({
-      sessions: [{ id: "sess-empty", title: "", url: "" }],
-    }));
+    vi.mocked(useBrowserStore).mockReturnValue(
+      createMockStore({
+        sessions: [{ id: "sess-empty", title: "", url: "" }],
+      })
+    );
     render(<BrowserPage />);
     const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThanOrEqual(2);
   });
 
   it("renders session with long url", () => {
-    vi.mocked(useBrowserStore).mockReturnValue(createMockStore({
-      sessions: [{ id: "sess-long", title: "Long", url: "https://example.com/" + "a".repeat(50) }],
-    }));
+    vi.mocked(useBrowserStore).mockReturnValue(
+      createMockStore({
+        sessions: [{ id: "sess-long", title: "Long", url: "https://example.com/" + "a".repeat(50) }],
+      })
+    );
     render(<BrowserPage />);
     expect(screen.getByText("Long")).toBeInTheDocument();
   });

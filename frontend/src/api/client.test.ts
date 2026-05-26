@@ -10,8 +10,17 @@ vi.mock("axios", () => ({
     create: vi.fn(() => {
       mockAxiosInstance = {
         interceptors: {
-          request: { use: vi.fn((fn: any) => { requestInterceptor = fn; }) },
-          response: { use: vi.fn((s: any, e: any) => { responseSuccessInterceptor = s; responseErrorInterceptor = e; }) },
+          request: {
+            use: vi.fn((fn: any) => {
+              requestInterceptor = fn;
+            }),
+          },
+          response: {
+            use: vi.fn((s: any, e: any) => {
+              responseSuccessInterceptor = s;
+              responseErrorInterceptor = e;
+            }),
+          },
         },
         get: vi.fn(),
         post: vi.fn(),
@@ -64,7 +73,10 @@ describe("ApiClient", () => {
 
   it("clears pending request on response success", () => {
     new ApiClient();
-    const res = responseSuccessInterceptor({ config: { headers: {}, method: "post", url: "/api", data: {} }, data: 42 });
+    const res = responseSuccessInterceptor({
+      config: { headers: {}, method: "post", url: "/api", data: {} },
+      data: 42,
+    });
     expect(res.data).toBe(42);
   });
 

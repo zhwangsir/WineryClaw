@@ -15,7 +15,10 @@ interface TemplateState {
   fetchTags: () => Promise<void>;
   createTemplate: (data: Partial<AgentTemplate>) => Promise<void>;
   deleteTemplate: (id: string) => Promise<void>;
-  instantiate: (id: string, data: { name: string; workspaceId?: string; owner?: string; variables?: Record<string, string> }) => Promise<{ id: string; name: string } | undefined>;
+  instantiate: (
+    id: string,
+    data: { name: string; workspaceId?: string; owner?: string; variables?: Record<string, string> }
+  ) => Promise<{ id: string; name: string } | undefined>;
 }
 
 export const useTemplateStore = create<TemplateState>((set, get) => ({

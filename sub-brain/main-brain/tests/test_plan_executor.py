@@ -572,3 +572,150 @@ class TestPlanExecutorReplan:
         assert task_id == "t-fail"
         assert desc == "describe a thing"
         assert "Output is empty" in reason or "Output too short" in reason
+
+
+# ---------------------------------------------------------------------------
+# M3.5 — SSE streaming events
+# ---------------------------------------------------------------------------
+
+
+class TestPlanExecutorSSE:
+    """Verifies event_callback is invoked at the correct lifecycle nodes."""
+
+    @pytest.mark.asyncio
+    async def test_event_callback_not_called_when_none(self) -> None:
+        # Backward compatibility: no callback = no crash, normal return.
+        execute = _RecordingExecutor(["good answer"])
+        plan = _make_plan([_task("t1", "do it")])
+        executor = PlanExecutor(execute)
+        result = await executor.run(plan, "sess-1")
+        assert result.overall_success is True
+
+    @pytest.mark.asyncio
+    async def test_plan_start_event_fired(self) -> None:
+        events: List[Dict[str, Any]] = []
+
+        async def cb(event: Dict[str, Any]) -> None:
+            events.append(event)
+
+        execute = _RecordingExecutor(["good answer"])
+        plan = _make_plan([_task("t1", "do it")])
+        executor = PlanExecutor(execute)
+        await executor.run(plan, "sess-1", event_callback=cb)
+
+        assert events[0]["event"] == "plan_start"
+        assert events[0]["plan_id"] == "plan-test"
+        assert events[0]["total_tasks"] == 1
+        assert events[0]["session_id"] == "sess-1"
+
+    @pytest.mark.asyncio
+    async def test_task_start_and_attempt_events(self) -> None:
+        events: List[Dict[str, Any]] = []
+
+        async def cb(event: Dict[str, Any]) -> None:
+            events.append(event)
+
+        execute = _RecordingExecutor(["good answer"])
+        plan = _make_plan([_task("t1", "do it")])
+        executor = PlanExecutor(execute)
+        await executor.run(plan, "sess-1", event_callback=cb)
+
+        assert any(e["event"] == "task_start" and e["task_id"] == "t1" for e in events)
+        assert any(e["event"] == "task_attempt" and e["attempt"]["attempt_idx"] == 1 for e in events)
+
+    @pytest.mark.asyncio
+    async def test_task_complete_with_success(self) -> None:
+        events: List[Dict[str, Any]] = []
+
+        async def cb(event: Dict[str, Any]) -> None:
+            events.append(event)
+
+        execute = _RecordingExecutor(["good answer"])
+        plan = _make_plan([_task("t1", "do it")])
+        executor = PlanExecutor(execute)
+        await executor.run(plan, "sess-1", event_callback=cb)
+
+        complete_events = [e for e in events if e["event"] == "task_complete"]
+        assert len(complete_events) == 1
+        assert complete_events[0]["task_id"] == "t1"
+        assert complete_events[0]["succeeded"] is True
+        assert complete_events[0]["attempts_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_task_complete_with_failure(self) -> None:
+        events: List[Dict[str, Any]] = []
+
+        async def cb(event: Dict[str, Any]) -> None:
+            events.append(event)
+
+        execute = _RecordingExecutor([""] * MAX_RETRIES)
+        plan = _make_plan([_task("t1", "fail task")])
+        executor = PlanExecutor(execute)
+        result = await executor.run(plan, "sess-1", event_callback=cb)
+
+        assert result.overall_success is False
+        complete_events = [e for e in events if e["event"] == "task_complete"]
+        assert len(complete_events) == 1
+        assert complete_events[0]["succeeded"] is False
+        assert complete_events[0]["attempts_count"] == MAX_RETRIES
+
+    @pytest.mark.asyncio
+    async def test_plan_complete_event_with_result(self) -> None:
+        events: List[Dict[str, Any]] = []
+
+        async def cb(event: Dict[str, Any]) -> None:
+            events.append(event)
+
+        execute = _RecordingExecutor(["good answer"])
+        plan = _make_plan([_task("t1", "do it")])
+        executor = PlanExecutor(execute)
+        await executor.run(plan, "sess-1", event_callback=cb)
+
+        complete_events = [e for e in events if e["event"] == "plan_complete"]
+        assert len(complete_events) == 1
+        assert complete_events[0]["overall_success"] is True
+        assert complete_events[0]["result"]["plan_id"] == "plan-test"
+
+    @pytest.mark.asyncio
+    async def test_full_event_sequence_for_multi_task(self) -> None:
+        events: List[Dict[str, Any]] = []
+
+        async def cb(event: Dict[str, Any]) -> None:
+            events.append(event)
+
+        # t1 succeeds on 1st try; t2 fails once then succeeds
+        execute = _RecordingExecutor([
+            "first task output here",
+            "",
+            "second task output here",
+        ])
+        plan = _make_plan([_task("t1", "first"), _task("t2", "second")])
+        executor = PlanExecutor(execute)
+        await executor.run(plan, "sess-1", event_callback=cb)
+
+        event_names = [e["event"] for e in events]
+        assert event_names[0] == "plan_start"
+        assert event_names[-1] == "plan_complete"
+        assert event_names.count("task_start") == 2
+        assert event_names.count("task_attempt") == 3  # t1x1 + t2x1 fail + t2x2 success
+        assert event_names.count("task_complete") == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_attempts_emit_multiple_task_attempt_events(self) -> None:
+        events: List[Dict[str, Any]] = []
+
+        async def cb(event: Dict[str, Any]) -> None:
+            events.append(event)
+
+        # Fail 2 times then succeed on 3rd
+        execute = _RecordingExecutor(["", "", "good answer"])
+        plan = _make_plan([_task("t1", "retry task")])
+        executor = PlanExecutor(execute)
+        await executor.run(plan, "sess-1", event_callback=cb)
+
+        attempt_events = [e for e in events if e["event"] == "task_attempt"]
+        assert len(attempt_events) == 3
+        assert [e["attempt"]["attempt_idx"] for e in attempt_events] == [1, 2, 3]
+        assert attempt_events[0]["attempt"]["verification_passed"] is False
+        assert attempt_events[1]["attempt"]["verification_passed"] is False
+        assert attempt_events[2]["attempt"]["verification_passed"] is True

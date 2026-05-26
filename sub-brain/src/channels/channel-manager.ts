@@ -25,6 +25,10 @@ export interface Channel {
   /** M5: when true, inbound messages on this channel are auto-routed
    * to chat_engine and the reply is sent back to the sender. */
   autoReply: boolean;
+  /** M5.1: which agent handles auto-reply on this channel. */
+  agentId: string;
+  /** M5.1: artificial delay before sending auto-reply (ms). */
+  replyDelayMs: number;
   config: ChannelConfig;
   protocol: ChannelProtocol;
 }
@@ -376,6 +380,8 @@ export class ChannelManager {
           name: row.name,
           connected: !!row.connected,
           autoReply: !!row.auto_reply,
+          agentId: row.agent_id || "agent-default",
+          replyDelayMs: row.reply_delay_ms || 0,
           config,
           protocol,
         });
@@ -403,6 +409,8 @@ export class ChannelManager {
       name: (config.channelId as string) || channelType,
       connected: true,
       autoReply: false,
+      agentId: "agent-default",
+      replyDelayMs: 0,
       config,
       protocol,
     };
@@ -411,7 +419,7 @@ export class ChannelManager {
 
     // Persist to SQLite
     const stmt = this.db.prepare(
-      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, auto_reply, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, auto_reply, agent_id, reply_delay_ms, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
     stmt.run(
       id,
@@ -420,6 +428,8 @@ export class ChannelManager {
       1,
       JSON.stringify(config),
       0,
+      channel.agentId,
+      channel.replyDelayMs,
       new Date().toISOString(),
       new Date().toISOString(),
     );
@@ -441,6 +451,38 @@ export class ChannelManager {
   getAutoReply(channelId: string): boolean {
     const channel = this.channels.get(channelId);
     return channel ? channel.autoReply : false;
+  }
+
+  /** M5.1: set agent_id for a channel. */
+  async setAgentId(channelId: string, agentId: string): Promise<{ ok: boolean; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+    channel.agentId = agentId;
+    const stmt = this.db.prepare("UPDATE channels SET agent_id = ?, updated_at = ? WHERE id = ?");
+    stmt.run(agentId, new Date().toISOString(), channelId);
+    return { ok: true };
+  }
+
+  /** M5.1: get agent_id for a channel. */
+  getAgentId(channelId: string): string {
+    const channel = this.channels.get(channelId);
+    return channel ? channel.agentId : "agent-default";
+  }
+
+  /** M5.1: set reply delay for a channel. */
+  async setReplyDelay(channelId: string, delayMs: number): Promise<{ ok: boolean; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+    channel.replyDelayMs = Math.max(0, delayMs);
+    const stmt = this.db.prepare("UPDATE channels SET reply_delay_ms = ?, updated_at = ? WHERE id = ?");
+    stmt.run(channel.replyDelayMs, new Date().toISOString(), channelId);
+    return { ok: true };
+  }
+
+  /** M5.1: get reply delay for a channel. */
+  getReplyDelay(channelId: string): number {
+    const channel = this.channels.get(channelId);
+    return channel ? channel.replyDelayMs : 0;
   }
 
   async send(channelIdOrType: string, recipient: string, content: string): Promise<{ ok: boolean; error?: string; result?: any }> {
@@ -529,13 +571,15 @@ export class ChannelManager {
     return { ok: true };
   }
 
-  listChannels(): Array<{ id: string; name: string; type: string; connected: boolean; auto_reply: boolean }> {
+  listChannels(): Array<{ id: string; name: string; type: string; connected: boolean; auto_reply: boolean; agent_id: string; reply_delay_ms: number }> {
     return Array.from(this.channels.values()).map((c) => ({
       id: c.id,
       name: c.name,
       type: c.type,
       connected: c.connected,
       auto_reply: c.autoReply,
+      agent_id: c.agentId,
+      reply_delay_ms: c.replyDelayMs,
     }));
   }
 
@@ -851,11 +895,11 @@ export class ChannelManager {
   }
 
   // iMessage polling via chat.db
-  private startIMessagePolling(channel: Channel): { ok: boolean; error?: string } {
+  private async startIMessagePolling(channel: Channel): Promise<{ ok: boolean; error?: string }> {
     const handle = channel.config.handle as string || channel.config.recipient as string || "";
     if (!handle) return { ok: false, error: "Missing handle/recipient config" };
 
-    const { startIMessagePolling: startPoll } = require("./imessage-protocol.js");
+    const { startIMessagePolling: startPoll } = await import("./imessage-protocol.js");
     const receiver = startPoll(
       channel.id,
       handle,

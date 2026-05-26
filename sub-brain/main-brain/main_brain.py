@@ -34,12 +34,13 @@ from reasoning.reasoning_engine import ReasoningEngine
 from evolution.evolution_engine import EvolutionEngine
 from evolution.skill_reflector import SkillReflector
 from evolution.skill_improvement_cycle import SkillImprovementCycle
+from evolution.auto_skill_creator import AutoSkillCreator
 from evolution.llm_client import make_llm_call_from_config
 from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
 from chat.llm_health_monitor import LLMHealthMonitor
-from mcp import MCPServer, TOOL_REGISTRY, extract_bearer, resolve_token, verify
+from mcp import MCPServer, TOOL_REGISTRY, extract_bearer, get_audit_logs, init_audit_db, resolve_token, verify
 from planner import Planner
 from wiki.wiki_engine import WikiEngine
 from memory.dreaming_engine import DreamingEngine
@@ -52,6 +53,7 @@ from observability.metrics import MetricsCollector
 from observability.logger import setup_structured_logging, log_request, LogContext
 from dependency_check import check_on_startup
 from cache.cache_manager import cache
+from user_modeling import ProfileBuilder, ProfileUpdater
 
 # Configure logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -141,7 +143,7 @@ async def lifespan(app: FastAPI) -> None:
         logger.error("Critical dependencies missing. Some features may be unavailable.")
 
     # Fetch LLM config from sub-brain first (needed for memory manager)
-    sub_brain_url = os.environ.get("WEBRAIN_SUB_BRAIN_URL", "http://127.0.0.1:3000")
+    sub_brain_url = os.environ.get("WEBRAIN_SUB_BRAIN_URL", "http://127.0.0.1:3456")
     _state["sub_brain"] = SubBrainClient(base_url=sub_brain_url)
     llm_config = await _fetch_llm_config(sub_brain_url)
     logger.info(f"LLM config loaded with {len(llm_config.get('endpoints', []))} endpoint(s)")
@@ -302,12 +304,25 @@ async def lifespan(app: FastAPI) -> None:
     # Held in _state so the /mcp/jsonrpc handler can gate write-class tools.
     _state["mcp_token"] = resolve_token(data_dir)
 
+    # M4b.2: MCP audit log DB — records every tools/call invocation.
+    audit_db_path = data_dir / "mcp_audit.db"
+    init_audit_db(str(audit_db_path))
+    _state["mcp_audit_db_path"] = str(audit_db_path)
+
     # ActiveMemory must exist before ChatEngine so chat() can fire
     # process_conversation() in the background after each successful exchange.
     # Round B2 (2026-05-20) — previously ActiveMemory was orphaned, only
     # reachable via the /active-memory/* HTTP endpoints which no client called.
     _state["active_memory"] = ActiveMemory(memory_manager=_state["memory"], llm_config=llm_config)
 
+    # Initialize Knowledge Graph before ChatEngine (S9: KG context injection)
+    _state["kg"] = KnowledgeGraph(llm_config=llm_config)
+    logger.info(f"Knowledge Graph initialized: {_state['kg'].get_stats()}")
+
+    _state["auto_skill_creator"] = AutoSkillCreator(
+        llm_config=llm_config,
+        sub_brain_url=sub_brain_url,
+    )
     _state["chat"] = ChatEngine(
         memory_manager=_state["memory"],
         sub_brain_client=_state["sub_brain"],
@@ -317,7 +332,24 @@ async def lifespan(app: FastAPI) -> None:
         planner=_state["planner"],
         active_memory=_state["active_memory"],
         kg=_state["kg"],  # S9: KG 上下文注入
+        auto_skill_creator=_state["auto_skill_creator"],
     )
+
+    # Phase 7: User modeling — background profile builder
+    if os.environ.get("WEBRAIN_USER_MODELING_DISABLED") != "1":
+        try:
+            interval = float(os.environ.get("WEBRAIN_USER_MODELING_INTERVAL_HOURS", "24"))
+        except ValueError:
+            interval = 24.0
+        _state["profile_builder"] = ProfileBuilder(
+            llm_config=llm_config,
+            memory_manager=_state["memory"],
+        )
+        _state["profile_updater"] = ProfileUpdater(
+            builder=_state["profile_builder"],
+            interval_hours=interval,
+        )
+        _state["profile_updater"].start()
 
     # LLM health monitor (M4a) — opt out with WEBRAIN_LLM_HEALTH_DISABLED=1.
     # Interval is env-tunable for tests / low-traffic deploys.
@@ -344,10 +376,6 @@ async def lifespan(app: FastAPI) -> None:
 
     # Initialize Canvas Engine
     _state["canvas"] = CanvasEngine()
-
-    # Initialize Knowledge Graph
-    _state["kg"] = KnowledgeGraph(llm_config=llm_config)
-    logger.info(f"Knowledge Graph initialized: {_state['kg'].get_stats()}")
 
     # Initialize Cron Engine
     _state["cron"] = CronEngine()
@@ -400,6 +428,11 @@ async def lifespan(app: FastAPI) -> None:
             await _state["_metrics_persist_task"]
         except asyncio.CancelledError:
             pass
+    if "profile_updater" in _state:
+        try:
+            await _state["profile_updater"].stop()
+        except Exception as e:
+            logger.warning(f"Profile updater stop raised: {e}")
     if "llm_health_monitor" in _state:
         try:
             await _state["llm_health_monitor"].stop()
@@ -717,7 +750,7 @@ async def get_config():
 
 @app.post("/config/reload")
 async def reload_config():
-    sub_brain_url = os.environ.get("WEBRAIN_SUB_BRAIN_URL", "http://127.0.0.1:3000")
+    sub_brain_url = os.environ.get("WEBRAIN_SUB_BRAIN_URL", "http://127.0.0.1:3456")
     llm_config = await _fetch_llm_config(sub_brain_url)
     logger.info(f"Config reloaded: {len(llm_config.get('endpoints', []))} endpoint(s)")
 
@@ -1074,6 +1107,114 @@ async def plan_execute(request: Dict[str, Any]):
     return payload
 
 
+# ========== Planner Execute Stream API (M3.5) ==========
+
+@app.post("/plan/execute/stream")
+async def plan_execute_stream(request: Dict[str, Any]):
+    """Run a plan task-by-task with verify + retry, streaming SSE events.
+
+    Same body schema as /plan/execute. Returns text/event-stream with:
+      - plan_start, task_start, task_attempt, task_complete, plan_complete
+    """
+    from planner import LLMGradeVerifier, PlanExecutor, plan_from_dict, presence_verifier
+
+    planner = _state.get("planner")
+    chat_engine = _state.get("chat")
+    if planner is None or chat_engine is None:
+        async def _error_stream():
+            yield f"data: {json.dumps({'event': 'error', 'message': 'planner/chat not initialized'})}\n\n"
+        return StreamingResponse(_error_stream(), media_type="text/event-stream")
+
+    # 1) Resolve the Plan to execute
+    plan = None
+    if "plan" in request and isinstance(request["plan"], dict):
+        plan = plan_from_dict(request["plan"])
+        if plan is None:
+            async def _error_stream():
+                yield f"data: {json.dumps({'event': 'error', 'message': 'supplied plan has no usable tasks'})}\n\n"
+            return StreamingResponse(_error_stream(), media_type="text/event-stream")
+    else:
+        user_input = str(request.get("user_input", "")).strip()
+        if not user_input:
+            async def _error_stream():
+                yield f"data: {json.dumps({'event': 'error', 'message': 'user_input or plan required'})}\n\n"
+            return StreamingResponse(_error_stream(), media_type="text/event-stream")
+        plan = await planner.plan(user_input)
+        if plan is None:
+            async def _error_stream():
+                yield f"data: {json.dumps({'event': 'error', 'message': 'input is too trivial to plan, or planner unavailable'})}\n\n"
+            return StreamingResponse(_error_stream(), media_type="text/event-stream")
+
+    # 2) Pick verifier strategy
+    verify_mode = str(request.get("verify", "presence")).lower()
+    if verify_mode == "llm":
+        async def _llm_grade(messages):
+            ep = chat_engine.router.get_primary()
+            if not ep:
+                raise RuntimeError("no LLM endpoint for grader")
+            result = await chat_engine._chat_completion(messages, max_tokens=512)
+            return result["choices"][0]["message"].get("content", "")
+        verifier = LLMGradeVerifier(_llm_grade)
+    else:
+        verifier = presence_verifier
+
+    # 3) Wrap chat_engine.chat() as the executor's execute_fn
+    async def _execute(user_input, session_id, agent_id, context=None):
+        result = await chat_engine.chat(user_input, session_id, agent_id, context)
+        return result.get("reply", "")
+
+    async def _replan(failed_plan, failures, session_id):
+        if not failures or planner is None:
+            return None
+        failure_lines = "\n".join(
+            f"  - Task {tid} ({desc!r}) failed: {reason}"
+            for tid, desc, _out, reason in failures
+        )
+        replan_input = (
+            f"Original request: {failed_plan.user_input}\n\n"
+            f"Earlier attempt produced this plan but the following tasks "
+            f"failed to satisfy their verifier:\n{failure_lines}\n\n"
+            "Generate a new plan that avoids the same failure modes. "
+            "Prefer a different approach over re-trying the same steps."
+        )
+        try:
+            new_plan = await planner.plan(replan_input)
+        except Exception as exc:
+            logger.warning("M3 replan: planner.plan raised: %s", exc)
+            return None
+        return new_plan
+
+    try:
+        max_replans = max(0, int(os.environ.get("WEBRAIN_PLAN_MAX_REPLANS", "2")))
+    except ValueError:
+        max_replans = 2
+    executor = PlanExecutor(_execute, verifier=verifier, replan_fn=_replan, max_replans=max_replans)
+
+    session_id = str(request.get("session_id") or "session-plan-exec")
+    agent_id = str(request.get("agent_id") or "agent-default")
+
+    queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+    async def event_callback(event: Dict[str, Any]) -> None:
+        await queue.put(event)
+
+    async def event_generator():
+        try:
+            # Run executor in background task
+            task = asyncio.create_task(executor.run(plan, session_id, agent_id, event_callback=event_callback))
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("event") == "plan_complete":
+                    break
+            await task
+        except Exception as exc:
+            logger.warning("plan_execute_stream error: %s", exc)
+            yield f"data: {json.dumps({'event': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 # ========== MCP Server (M4b) ==========
 
 
@@ -1101,8 +1242,13 @@ async def mcp_jsonrpc(http_request: Request, request: Any = Body(...)):
     """
     expected_token = _state.get("mcp_token")
     bearer = extract_bearer(http_request.headers.get("authorization"))
-    server = MCPServer(_state, expected_token=expected_token)
-    response = await server.handle(request, bearer_token=bearer)
+    client_ip = http_request.client.host if http_request.client else None
+    server = MCPServer(
+        _state,
+        expected_token=expected_token,
+        audit_db_path=_state.get("mcp_audit_db_path"),
+    )
+    response = await server.handle(request, bearer_token=bearer, client_ip=client_ip)
     if response is None:
         # All requests in the batch (or the single request) were
         # notifications — JSON-RPC says don't reply at all.
@@ -1137,6 +1283,19 @@ async def mcp_info():
             for t in TOOL_REGISTRY
         ],
     }
+
+
+@app.get("/mcp/audit")
+async def mcp_audit(limit: int = 50):
+    """Return recent MCP tool call audit records.
+
+    Drives the frontend MCPInfoPanel "Recent Calls" table.
+    """
+    db_path = _state.get("mcp_audit_db_path")
+    if not db_path:
+        return {"ok": False, "error": "audit log not initialized"}
+    logs = get_audit_logs(db_path, limit)
+    return {"ok": True, "logs": logs}
 
 
 # ========== Evolution API ==========
@@ -2241,6 +2400,56 @@ async def cache_clear():
 
 
 # ========== WebSocket for Real-time Communication ==========
+
+
+@app.get("/user/profile")
+async def get_user_profile():
+    """Return the current user profile JSON if it exists."""
+    from pathlib import Path
+    profile_path = Path.home() / ".webrain" / "user" / "profile.json"
+    if not profile_path.exists():
+        return {"profile": None}
+    try:
+        data = json.loads(profile_path.read_text(encoding="utf-8"))
+        return {"profile": data}
+    except Exception as e:
+        logger.warning("Failed to read user profile: %s", e)
+        return JSONResponse(status_code=500, content={"error": "Failed to read profile"})
+
+
+@app.post("/user/profile/refresh")
+async def refresh_user_profile():
+    """Manually trigger a profile rebuild."""
+    updater = _state.get("profile_updater")
+    if updater is None:
+        return JSONResponse(status_code=503, content={"error": "User modeling is disabled"})
+    try:
+        profile = await updater.run_now()
+        if profile is None:
+            return {"profile": None, "message": "No profile produced (insufficient conversations or LLM failure)"}
+        return {"profile": profile.to_dict(), "message": "Profile updated successfully"}
+    except Exception as e:
+        logger.warning("Profile refresh failed: %s", e)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.delete("/user/profile")
+async def delete_user_profile():
+    """Clear persisted user profile files."""
+    from pathlib import Path
+    profile_dir = Path.home() / ".webrain" / "user"
+    removed = []
+    for fname in ("profile.json", "profile.md"):
+        fpath = profile_dir / fname
+        if fpath.exists():
+            try:
+                fpath.unlink()
+                removed.append(fname)
+            except Exception as e:
+                logger.warning("Failed to remove %s: %s", fname, e)
+    return {"removed": removed}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -2308,8 +2517,33 @@ def _probe_bind_or_exit(host: str, port: int) -> None:
         s.bind((host, port))
         s.close()
     except OSError as e:
+        # Try to identify the owning process for a better diagnostic
+        owner_info = ""
+        try:
+            import psutil as _psutil
+            for conn in _psutil.net_connections(kind="inet"):
+                if conn.laddr.port == port and conn.pid:
+                    proc = _psutil.Process(conn.pid)
+                    cmd = " ".join(proc.cmdline() or [proc.name()])
+                    owner_info = f"\nPort {port} is in use by PID {conn.pid} ({cmd})\n"
+                    break
+        except Exception:
+            pass
+        if not owner_info:
+            try:
+                import subprocess as _subprocess
+                result = _subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True, text=True, timeout=2
+                )
+                if result.stdout.strip():
+                    pid = result.stdout.strip().splitlines()[0]
+                    owner_info = f"\nPort {port} is in use by PID {pid}\n"
+            except Exception:
+                pass
         sys.stderr.write(
             f"\n[main-brain] Cannot bind {host}:{port} — {e}\n"
+            f"{owner_info}"
             f"Likely a stale main-brain process. Try:\n"
             f"  lsof -ti :{port} | xargs kill\n"
             f"…then re-run.\n"

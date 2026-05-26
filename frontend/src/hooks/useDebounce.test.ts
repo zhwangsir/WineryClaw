@@ -12,10 +12,7 @@ describe("useDebounce", () => {
   });
 
   it("debounces value changes", async () => {
-    const { result, rerender } = renderHook(
-      ({ value }) => useDebounce(value, 50),
-      { initialProps: { value: "a" } }
-    );
+    const { result, rerender } = renderHook(({ value }) => useDebounce(value, 50), { initialProps: { value: "a" } });
     rerender({ value: "b" });
     expect(result.current).toBe("a");
 

@@ -33,7 +33,8 @@ logger = logging.getLogger("webrain.memory")
 DEFAULT_IMPORTANCE_BY_LEVEL: Dict[str, float] = {
     "L1": 0.4,
     "L2": 0.6,
-    "L3": 0.7,
+    "L3": 0.55,  # Lowered from 0.7 — freshly-created L3 has no decay, so near-0.7
+                  # effective_importance was overpowering more-relevant L1 rows.
     "L4": 0.9,
 }
 
@@ -41,7 +42,7 @@ DEFAULT_IMPORTANCE_BY_LEVEL: Dict[str, float] = {
 # L4 is effectively immortal — a sufficiently large number that decay is
 # imperceptible over any realistic lifetime.
 HALF_LIFE_DAYS_BY_LEVEL: Dict[str, float] = {
-    "L1": 2.0,
+    "L1": 5.0,  # Round GA: softer decay so 7-day L1 memories aren't zeroed out
     "L2": 14.0,
     "L3": 90.0,
     "L4": 1.0e9,
@@ -87,9 +88,9 @@ RETRIEVAL_BOOST = 0.05
 # pair is renormalized to sum==1.
 def _resolve_blender_weights() -> tuple:
     try:
-        rel = float(os.environ.get("WEBRAIN_RELEVANCE_WEIGHT", "0.7"))
+        rel = float(os.environ.get("WEBRAIN_RELEVANCE_WEIGHT", "0.9"))
     except ValueError:
-        rel = 0.7
+        rel = 0.9
     try:
         imp_env = os.environ.get("WEBRAIN_IMPORTANCE_WEIGHT")
         imp = float(imp_env) if imp_env is not None else (1.0 - rel)
@@ -100,7 +101,7 @@ def _resolve_blender_weights() -> tuple:
     total = rel + imp
     if total <= 1e-9:
         # Degenerate input — fall back to default split
-        return 0.7, 0.3
+        return 0.9, 0.1
     return rel / total, imp / total
 
 
@@ -778,8 +779,11 @@ class MemoryManager:
             conn.commit()
 
         # Auto-extract semantic info for L2+ and L3
+        # Can be disabled via env var (useful in benchmarks where LLM is stubbed
+        # and we don't want to pay the extraction latency).
         if level in ("L2", "L3") and len(content) > 10:
-            await self.extract_semantic(content)
+            if os.environ.get("WEBRAIN_EXTRACT_SEMANTIC", "1") != "0":
+                await self.extract_semantic(content)
 
         # Generate embeddings.
         # M-Memory-1: L1 now gets embeddings by default — SQLite FTS5's
@@ -832,7 +836,7 @@ class MemoryManager:
         limit = query_data.get("limit", 10)
         use_vector = query_data.get("use_vector", True)
         use_rerank = query_data.get("use_rerank", True)
-        top_k = query_data.get("top_k", limit * 3)  # Retrieve more for re-ranking
+        top_k = query_data.get("top_k", min(limit * 5, 100))  # Round GA: expanded candidate pool for better recall
 
         if not q.strip():
             return []
@@ -952,7 +956,7 @@ class MemoryManager:
                     # active, since post-filtering may drop matches. 4x is
                     # arbitrary but covers the case where the index has many
                     # L1 rows competing with few L2/L3 rows.
-                    pool_mult = 8 if level_filter else 4
+                    pool_mult = 12 if level_filter else 6  # Round GA: deeper ANN pool for better tail recall
                     n_candidates = min(max(limit * pool_mult, 20), len(self._vector_ids))
                     distances, indices = self._ann_index.kneighbors(qvec.reshape(1, -1), n_neighbors=n_candidates)
                     matched_ids = []
@@ -994,7 +998,7 @@ class MemoryManager:
                 matched_ids = []
                 matched_scores = []
                 # Pull extras for the same reason as ANN path
-                target = limit * (8 if level_filter else 1)
+                target = limit * (12 if level_filter else 2)  # Round GA: deeper brute-force pool for better tail recall
                 for idx in top_idx:
                     mid = self._vector_ids[idx]
                     if mid in exclude_ids:
@@ -1044,7 +1048,7 @@ class MemoryManager:
             return []
 
     # ========== RRF Fusion ==========
-    def _rrf_fuse(self, result_lists: List[List[Dict]], k: int = 60) -> List[Dict]:
+    def _rrf_fuse(self, result_lists: List[List[Dict]], k: int = 40) -> List[Dict]:  # Round GA: moderate k balances head vs tail discrimination
         """Reciprocal Rank Fusion across multiple result lists.
 
         Annotates each surviving item with `rrf_score` so the downstream

@@ -17,7 +17,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const BASE = "http://localhost:8587";
-const API = "http://localhost:3000";
+const API = "http://localhost:3456";
 
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
 

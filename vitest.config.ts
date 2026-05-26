@@ -7,5 +7,11 @@ export default defineConfig({
     testTimeout: 60000,
     hookTimeout: 30000,
     pool: "forks",
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "frontend/e2e/**",
+      ".claude/**",
+    ],
   },
 });

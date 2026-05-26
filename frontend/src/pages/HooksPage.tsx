@@ -19,15 +19,14 @@ export default function HooksPage() {
   const [hooks, setHooks] = useState<string[]>([]);
 
   useEffect(() => {
-    hooksApi.registry().then(setHooks).catch(() => setHooks([]));
+    hooksApi
+      .registry()
+      .then(setHooks)
+      .catch(() => setHooks([]));
   }, []);
 
   return (
-    <PageShell
-      title="Hooks"
-      subtitle="Plugin SDK Hook 注册表"
-      icon={<ApiOutlined />}
-    >
+    <PageShell title="Hooks" subtitle="Plugin SDK Hook 注册表" icon={<ApiOutlined />}>
       {hooks.length === 0 ? (
         <Empty description="暂无 Hook 注册信息" />
       ) : (
@@ -40,11 +39,11 @@ export default function HooksPage() {
               styles={{ body: { padding: 20 } }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>{h}</Tag>
+                <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>
+                  {h}
+                </Tag>
               </div>
-              <div style={{ fontSize: 12, color: "var(--c-text-2)" }}>
-                {hookDescriptions[h] || "自定义钩子"}
-              </div>
+              <div style={{ fontSize: 12, color: "var(--c-text-2)" }}>{hookDescriptions[h] || "自定义钩子"}</div>
             </Card>
           ))}
         </div>

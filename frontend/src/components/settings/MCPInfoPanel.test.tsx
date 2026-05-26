@@ -6,7 +6,7 @@ import { render, screen } from "@testing-library/react";
 import MCPInfoPanel from "./MCPInfoPanel";
 
 vi.mock("../../api/mcp", () => ({
-  mcpApi: { selfInfo: vi.fn() },
+  mcpApi: { selfInfo: vi.fn(), auditLog: vi.fn() },
 }));
 
 vi.mock("antd", async () => {
@@ -30,13 +30,39 @@ const baseInfo = {
   tools: [
     { name: "webrain_memory_query", description: "Semantic search across memory layers.", scope: "read" as const },
     { name: "webrain_rag_query", description: "Retrieve top-k document chunks.", scope: "read" as const },
-    { name: "webrain_memory_store", description: "Append a new memory entry. Requires authentication.", scope: "write" as const },
+    {
+      name: "webrain_memory_store",
+      description: "Append a new memory entry. Requires authentication.",
+      scope: "write" as const,
+    },
   ],
 };
+
+const baseAuditLogs = [
+  {
+    id: 1,
+    timestamp: "2026-05-24T10:00:00+08:00",
+    tool_name: "webrain_kg_search",
+    scope: "read",
+    client_ip: "127.0.0.1",
+    success: 1,
+    error_message: null,
+  },
+  {
+    id: 2,
+    timestamp: "2026-05-24T10:05:00+08:00",
+    tool_name: "webrain_wiki_create",
+    scope: "write",
+    client_ip: "192.168.1.2",
+    success: 0,
+    error_message: "auth failed",
+  },
+];
 
 describe("MCPInfoPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(mcpApi.auditLog).mockResolvedValue({ ok: true, logs: baseAuditLogs });
   });
 
   it("shows server identity tags", async () => {
@@ -110,5 +136,26 @@ describe("MCPInfoPanel", () => {
     // The error message is shown asynchronously after the promise rejects
     await new Promise((r) => setTimeout(r, 50));
     expect((message.error as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+  });
+
+  // M4b.2 — audit log table
+  it("renders audit log section title", async () => {
+    vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
+    render(<MCPInfoPanel />);
+    expect(await screen.findByText("最近调用:")).toBeInTheDocument();
+  });
+
+  it("renders audit log tool names", async () => {
+    vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
+    render(<MCPInfoPanel />);
+    expect(await screen.findByText("webrain_kg_search")).toBeInTheDocument();
+    expect(screen.getByText("webrain_wiki_create")).toBeInTheDocument();
+  });
+
+  it("calls mcpApi.auditLog with limit=20", async () => {
+    vi.mocked(mcpApi.selfInfo).mockResolvedValue(baseInfo);
+    render(<MCPInfoPanel />);
+    await screen.findByText("最近调用:");
+    expect(mcpApi.auditLog).toHaveBeenCalledWith(20);
   });
 });

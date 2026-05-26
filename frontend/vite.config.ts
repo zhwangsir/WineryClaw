@@ -2,8 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // Proxy target for both `vite dev` and `vite preview`.
-// Defaults to localhost:3000 for local dev. In Docker, set VITE_PROXY_TARGET=http://sub-brain:3000.
-const proxyTarget = process.env.VITE_PROXY_TARGET || "http://localhost:3000";
+// Defaults to localhost:3456 for local dev. In Docker, set VITE_PROXY_TARGET=http://sub-brain:3456.
+const proxyTarget = process.env.VITE_PROXY_TARGET || "http://localhost:3456";
 
 const proxyConfig = {
   "/api": { target: proxyTarget, changeOrigin: true },

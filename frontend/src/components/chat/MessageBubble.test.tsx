@@ -29,7 +29,15 @@ vi.mock("antd", async () => {
 
 // Plan execution API mocked for the "execute plan" button tests
 vi.mock("../../api/plan", () => ({
-  planApi: { execute: vi.fn() },
+  planApi: {
+    execute: vi.fn(),
+    executeStream: vi.fn().mockImplementation((_params, onEvent, onDone) => {
+      // Default mock: immediately complete with empty result
+      onEvent?.({ event: "plan_complete", result: { ok: true, overall_success: true, results: [] } });
+      onDone?.();
+      return { connect: vi.fn(), abort: vi.fn() };
+    }),
+  },
 }));
 import { planApi } from "../../api/plan";
 
@@ -255,6 +263,28 @@ describe("MessageBubble", () => {
       tasks: [{ id: "task-1", description: "step one" }],
     };
 
+    vi.mocked(planApi.executeStream).mockImplementation((_params, onEvent, onDone) => {
+      onEvent?.({
+        event: "plan_complete",
+        result: {
+          ok: true,
+          overall_success: true,
+          total_attempts: 1,
+          results: [
+            {
+              task_id: "task-1",
+              description: "step one",
+              final_output: "done",
+              succeeded: true,
+              attempts: [{ attempt_idx: 1, output: "done", verification_passed: true, verification_reason: "ok", strategy: "default", duration_ms: 50 }],
+            },
+          ],
+        },
+      });
+      onDone?.();
+      return { connect: vi.fn(), abort: vi.fn() };
+    });
+
     render(
       <MessageBubble msg={{ id: "1", role: "assistant", content: "Hi", plan, timestamp: Date.now() }} isDark={false} />
     );
@@ -263,50 +293,57 @@ describe("MessageBubble", () => {
     fireEvent.click(button);
 
     await screen.findByText(/全部通过/);
-    expect(planApi.execute).toHaveBeenCalledWith({ plan, verify: "presence" });
+    expect(planApi.executeStream).toHaveBeenCalledWith({ plan, verify: "presence" }, expect.any(Function), expect.any(Function), expect.any(Function));
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 
   it("surfaces failed task summary when execution partially fails", async () => {
-    vi.mocked(planApi.execute).mockResolvedValue({
-      ok: true,
-      overall_success: false,
-      total_attempts: 6,
-      failed_task_ids: ["task-2"],
-      results: [
-        {
-          task_id: "task-1",
-          description: "step one",
-          final_output: "ok",
-          succeeded: true,
-          attempts: [
+    vi.mocked(planApi.executeStream).mockImplementation((_params, onEvent, onDone) => {
+      onEvent?.({
+        event: "plan_complete",
+        result: {
+          ok: true,
+          overall_success: false,
+          total_attempts: 6,
+          failed_task_ids: ["task-2"],
+          results: [
             {
-              attempt_idx: 1,
-              output: "ok",
-              verification_passed: true,
-              verification_reason: "ok",
-              strategy: "default",
-              duration_ms: 10,
+              task_id: "task-1",
+              description: "step one",
+              final_output: "ok",
+              succeeded: true,
+              attempts: [
+                {
+                  attempt_idx: 1,
+                  output: "ok",
+                  verification_passed: true,
+                  verification_reason: "ok",
+                  strategy: "default",
+                  duration_ms: 10,
+                },
+              ],
+            },
+            {
+              task_id: "task-2",
+              description: "broken step",
+              final_output: "",
+              succeeded: false,
+              attempts: [
+                {
+                  attempt_idx: 1,
+                  output: "",
+                  verification_passed: false,
+                  verification_reason: "empty",
+                  strategy: "default",
+                  duration_ms: 5,
+                },
+              ],
             },
           ],
         },
-        {
-          task_id: "task-2",
-          description: "broken step",
-          final_output: "",
-          succeeded: false,
-          attempts: [
-            {
-              attempt_idx: 1,
-              output: "",
-              verification_passed: false,
-              verification_reason: "empty",
-              strategy: "default",
-              duration_ms: 5,
-            },
-          ],
-        },
-      ],
+      });
+      onDone?.();
+      return { connect: vi.fn(), abort: vi.fn() };
     });
 
     render(
@@ -358,5 +395,26 @@ describe("MessageBubble", () => {
     const toggle = screen.getByText(/规划 1 步任务/);
     fireEvent.click(toggle);
     expect(screen.queryByText("step one")).not.toBeInTheDocument();
+  });
+  it("renders skill draft created hint when skillDraftCreated is present", () => {
+    render(
+      <MessageBubble
+        msg={{
+          id: "1",
+          role: "assistant",
+          content: "Hi",
+          skillDraftCreated: { skillId: "draft-1", name: "AutoSkill" },
+          timestamp: Date.now(),
+        }}
+        isDark={false}
+      />
+    );
+    expect(screen.getByText(/系统已为你自动创建了一个新 skill: AutoSkill/)).toBeInTheDocument();
+    expect(screen.getByText(/前往 Skillhub → Drafts 查看/)).toBeInTheDocument();
+  });
+
+  it("omits skill draft hint when skillDraftCreated is absent", () => {
+    render(<MessageBubble msg={{ id: "1", role: "assistant", content: "Hi", timestamp: Date.now() }} isDark={false} />);
+    expect(screen.queryByText(/系统已为你自动创建了一个新 skill/)).not.toBeInTheDocument();
   });
 });

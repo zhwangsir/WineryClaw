@@ -7,6 +7,7 @@ import AboutPanel from "../components/settings/AboutPanel";
 import LLMHealthPanel from "../components/settings/LLMHealthPanel";
 import MCPInfoPanel from "../components/settings/MCPInfoPanel";
 import ApiTokenPanel from "../components/settings/ApiTokenPanel";
+import UserProfilePanel from "../components/settings/UserProfilePanel";
 
 export default function SettingsPage() {
   return (
@@ -39,6 +40,7 @@ export default function SettingsPage() {
                   <ModelConfigPanel />
                   <LLMHealthPanel />
                   <MCPInfoPanel />
+                  <UserProfilePanel />
                 </>
               ),
             },

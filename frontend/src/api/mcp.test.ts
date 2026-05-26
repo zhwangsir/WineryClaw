@@ -18,35 +18,35 @@ describe("mcp API", () => {
   });
 
   it("listServers calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await mcpApi.listServers();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("listTools calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await mcpApi.listTools();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("connect calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await mcpApi.connect({}, "arg");
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("callTool calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await mcpApi.callTool("arg", "arg", "arg", "arg");
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   // M4b — webrain as MCP server
@@ -64,5 +64,4 @@ describe("mcp API", () => {
     expect(api.get).toHaveBeenCalledWith("/brain/mcp/info");
     expect(res).toEqual(fake);
   });
-
 });

@@ -18,19 +18,19 @@ describe("sandbox API", () => {
   });
 
   it("status calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await sandboxApi.status();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("stats calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await sandboxApi.stats();
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("audit calls correct endpoint with params", async () => {
@@ -46,19 +46,18 @@ describe("sandbox API", () => {
   });
 
   it("execute calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await sandboxApi.execute("arg", "data", "arg");
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
 
   it("executePython calls correct endpoint", async () => {
-    vi.mocked(api.get).mockResolvedValue({ data: {} })
-    vi.mocked(api.post).mockResolvedValue({ data: {} })
-    vi.mocked(api.delete).mockResolvedValue({ data: {} })
+    vi.mocked(api.get).mockResolvedValue({ data: {} });
+    vi.mocked(api.post).mockResolvedValue({ data: {} });
+    vi.mocked(api.delete).mockResolvedValue({ data: {} });
     await sandboxApi.executePython("arg");
-    expect(true).toBe(true);  // API call succeeded
+    expect(true).toBe(true); // API call succeeded
   });
-
 });

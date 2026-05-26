@@ -41,7 +41,9 @@ vi.mock("antd", async () => {
   return {
     ...actual,
     Popconfirm: ({ children, onConfirm }: any) => (
-      <div data-testid="popconfirm" onClick={onConfirm}>{children}</div>
+      <div data-testid="popconfirm" onClick={onConfirm}>
+        {children}
+      </div>
     ),
     Card: ({ children, title, actions, bodyStyle, headStyle, ...rest }: any) => (
       <div data-testid="card" {...rest}>
@@ -60,19 +62,31 @@ describe("TemplatesPage", () => {
   });
 
   it("renders page shell", () => {
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("模板")).toBeInTheDocument();
   });
 
   it("fetches data on mount", () => {
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     expect(fetchTemplates).toHaveBeenCalled();
     expect(fetchCategories).toHaveBeenCalled();
     expect(fetchTags).toHaveBeenCalled();
   });
 
   it("renders template cards", () => {
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("T1")).toBeInTheDocument();
     expect(screen.getByText("T2")).toBeInTheDocument();
     expect(screen.getByText("Desc1")).toBeInTheDocument();
@@ -82,19 +96,31 @@ describe("TemplatesPage", () => {
 
   it("shows empty state when no templates", () => {
     vi.mocked(useTemplateStore).mockImplementation(() => createMockStore({ templates: [] }) as any);
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("暂无模板")).toBeInTheDocument();
   });
 
   it("filters by category", () => {
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     const devBtns = screen.getAllByText("dev");
     fireEvent.click(devBtns[0]);
     expect(fetchTemplates).toHaveBeenCalledWith("dev");
   });
 
   it("shows all categories on click", () => {
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     const allBtn = screen.getByText(/全\s*部/);
     fireEvent.click(allBtn);
     expect(fetchTemplates).toHaveBeenCalledWith(undefined);
@@ -102,7 +128,11 @@ describe("TemplatesPage", () => {
 
   it("opens create drawer and submits", async () => {
     createTemplate.mockResolvedValue(undefined);
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     fireEvent.click(screen.getByText("新建模板"));
     expect(document.querySelector(".ant-drawer")).toBeTruthy();
 
@@ -122,7 +152,11 @@ describe("TemplatesPage", () => {
 
   it("opens instantiate drawer and submits", async () => {
     instantiate.mockResolvedValue(undefined);
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     const instButtons = screen.getAllByText("实例化");
     fireEvent.click(instButtons[0]);
     expect(document.querySelector(".ant-drawer")).toBeTruthy();
@@ -140,7 +174,11 @@ describe("TemplatesPage", () => {
   });
 
   it("deletes template on confirm", () => {
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     const popconfirms = screen.getAllByTestId("popconfirm");
     if (popconfirms.length > 0) {
       fireEvent.click(popconfirms[0]);
@@ -149,7 +187,11 @@ describe("TemplatesPage", () => {
   });
 
   it("does not instantiate when instTemplate is null", async () => {
-    render(<BrowserRouter><TemplatesPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <TemplatesPage />
+      </BrowserRouter>
+    );
     // Clicking submit on a non-opened instantiate drawer should not trigger anything;
     // Instead, we verify the guard by observing that instantiate is not called on render.
     expect(instantiate).not.toHaveBeenCalled();

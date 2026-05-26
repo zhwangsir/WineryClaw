@@ -1,5 +1,22 @@
 import { useState, useEffect, useMemo } from "react";
-import { Input, Button, List, Tag, Empty, Spin, Card, Statistic, Row, Col, Drawer, Form, Select, Slider, message, Modal } from "antd";
+import {
+  Input,
+  Button,
+  List,
+  Tag,
+  Empty,
+  Spin,
+  Card,
+  Statistic,
+  Row,
+  Col,
+  Drawer,
+  Form,
+  Select,
+  Slider,
+  message,
+  Modal,
+} from "antd";
 import {
   ShareAltOutlined,
   DatabaseOutlined,
@@ -12,6 +29,7 @@ import {
 } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useKgStore } from "../stores/kgStore";
+import KgGraphView from "../components/common/KgGraphView";
 import type { KgEntity } from "../api/types";
 
 const typeColors: Record<string, string> = {
@@ -44,8 +62,22 @@ const relationTypes = [
 ];
 
 export default function KnowledgeGraphPage() {
-  const { entities, selectedEntity, entityRelations, stats, loading, fetchEntities, selectEntity, search, fetchStats, addEntity, addRelation, deleteEntity } =
-    useKgStore();
+  const {
+    entities,
+    selectedEntity,
+    entityRelations,
+    relations,
+    stats,
+    loading,
+    fetchEntities,
+    fetchRelations,
+    selectEntity,
+    search,
+    fetchStats,
+    addEntity,
+    addRelation,
+    deleteEntity,
+  } = useKgStore();
 
   const [query, setQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("");
@@ -58,8 +90,9 @@ export default function KnowledgeGraphPage() {
 
   useEffect(() => {
     fetchEntities();
+    fetchRelations();
     fetchStats();
-  }, [fetchEntities, fetchStats]);
+  }, [fetchEntities, fetchRelations, fetchStats]);
 
   const filtered = useMemo<KgEntity[]>(() => {
     return selectedType ? entities.filter((e: KgEntity) => e.type === selectedType) : entities;
@@ -191,6 +224,15 @@ export default function KnowledgeGraphPage() {
           </Button>
         </div>
       </div>
+
+      {/* Graph visualization */}
+      <KgGraphView
+        entities={entities}
+        relations={relations}
+        selectedId={selectedEntity?.id}
+        onSelect={(id) => selectEntity(id)}
+        height={480}
+      />
 
       {/* Selected entity detail */}
       {selectedEntity && (

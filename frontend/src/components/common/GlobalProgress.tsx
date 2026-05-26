@@ -20,7 +20,9 @@ export function GlobalProgressBar() {
   useEffect(() => {
     const handler = (count: number) => setVisible(count > 0);
     listeners.add(handler);
-    return () => { listeners.delete(handler); };
+    return () => {
+      listeners.delete(handler);
+    };
   }, []);
 
   if (!visible) return null;

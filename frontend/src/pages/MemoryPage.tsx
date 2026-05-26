@@ -91,6 +91,7 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
   const inConflict = Boolean(mem.conflict_group);
   const importance = mem.effective_importance ?? mem.importance ?? 0;
   const isHighlight = highlightId === mem.id;
+  const [nowTs] = useState(() => Date.now());
 
   return (
     <Card
@@ -99,14 +100,16 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
         marginBottom: 12,
         borderColor: isHighlight ? "var(--c-accent)" : "var(--c-border)",
         opacity: isCurrent ? 1 : 0.6,
-        background: isHighlight ? "rgba(99,102,241,0.06)" : "var(--c-card)",
+        background: isHighlight ? "var(--c-accent-soft)" : "var(--c-card)",
       }}
       styles={{ body: { padding: 16 } }}
     >
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-            <Tag color={LEVEL_COLOR[mem.level] ?? "default"} style={{ margin: 0 }}>{mem.level}</Tag>
+            <Tag color={LEVEL_COLOR[mem.level] ?? "default"} style={{ margin: 0 }}>
+              {mem.level}
+            </Tag>
             {inConflict && (
               <Tooltip title={isCurrent ? "当前版本(冲突组中已被采用)" : "已被新版本替代(在冲突组中)"}>
                 <Tag
@@ -166,14 +169,19 @@ function MemoryCard({ mem, highlightId }: MemoryCardProps) {
               </span>
             </span>
           </Tooltip>
-          <span>访问:{mem.access_count ?? 0} 次</span>
+          <span>
+            访问:{mem.access_count ?? 0} 次
+            {mem.last_accessed_at &&
+              (() => {
+                const last = new Date(mem.last_accessed_at).getTime();
+                return nowTs - last < 30000 ? " (+1 本次查询)" : "";
+              })()}
+          </span>
           <span>{formatRelativeTime(mem.last_accessed_at || mem.createdAt)}</span>
           {mem.vectorScore !== undefined && (
             <span style={{ color: "var(--c-accent)" }}>相似:{(mem.vectorScore * 100).toFixed(1)}%</span>
           )}
-          {mem.final_score !== undefined && (
-            <span>综合:{mem.final_score.toFixed(3)}</span>
-          )}
+          {mem.final_score !== undefined && <span>综合:{mem.final_score.toFixed(3)}</span>}
         </div>
       </div>
     </Card>
@@ -212,7 +220,7 @@ function ConflictCard({ group, onMarkCurrent }: ConflictCardProps) {
               marginBottom: 8,
               borderRadius: 6,
               border: `1px solid ${isCurrent ? "var(--c-accent)" : "var(--c-border)"}`,
-              background: isCurrent ? "rgba(99,102,241,0.05)" : "transparent",
+              background: isCurrent ? "var(--c-accent-soft)" : "transparent",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
@@ -222,9 +230,7 @@ function ConflictCard({ group, onMarkCurrent }: ConflictCardProps) {
                     {isCurrent ? "当前" : "旧版"}
                   </Tag>
                   <Tag style={{ margin: 0 }}>{m.level}</Tag>
-                  <span style={{ fontSize: 11, color: "var(--c-text-3)" }}>
-                    {formatRelativeTime(m.createdAt)}
-                  </span>
+                  <span style={{ fontSize: 11, color: "var(--c-text-3)" }}>{formatRelativeTime(m.createdAt)}</span>
                 </div>
                 <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.content}</div>
               </div>
@@ -339,11 +345,7 @@ export default function MemoryPage() {
           allowClear
         />
         <Tooltip title="立即运行 Dreaming 周期:把安静的 L1 合并成 L2,从 L2 抽取 L3 事实">
-          <Button
-            icon={<ThunderboltOutlined />}
-            onClick={() => runDreaming()}
-            loading={dreamingRunning}
-          >
+          <Button icon={<ThunderboltOutlined />} onClick={() => runDreaming()} loading={dreamingRunning}>
             运行 Dreaming
           </Button>
         </Tooltip>
@@ -419,9 +421,7 @@ export default function MemoryPage() {
                     }
                   />
                 ) : (
-                  conflicts.map((g) => (
-                    <ConflictCard key={g.conflict_group} group={g} onMarkCurrent={markCurrent} />
-                  ))
+                  conflicts.map((g) => <ConflictCard key={g.conflict_group} group={g} onMarkCurrent={markCurrent} />)
                 )}
               </>
             ),

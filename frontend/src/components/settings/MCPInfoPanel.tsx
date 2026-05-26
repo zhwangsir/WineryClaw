@@ -8,8 +8,8 @@
 
 import { useEffect, useState } from "react";
 import { Card, Table, Tag, Typography, Empty, message, Alert, Space, Button } from "antd";
-import { ApiOutlined, CopyOutlined, LockOutlined, UnlockOutlined } from "@ant-design/icons";
-import { mcpApi, type MCPSelfServerInfo, type MCPExposedToolSummary } from "../../api/mcp";
+import { ApiOutlined, CopyOutlined, LockOutlined, UnlockOutlined, CheckCircleOutlined, CloseCircleOutlined } from "@ant-design/icons";
+import { mcpApi, type MCPSelfServerInfo, type MCPExposedToolSummary, type MCPAuditLogEntry } from "../../api/mcp";
 
 const { Paragraph, Text } = Typography;
 
@@ -61,6 +61,8 @@ function CopyableSnippet({ code, label }: { code: string; label: string }) {
 export default function MCPInfoPanel() {
   const [info, setInfo] = useState<MCPSelfServerInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<MCPAuditLogEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -73,6 +75,23 @@ export default function MCPInfoPanel() {
         message.error(`MCP server 信息加载失败: ${msg}`);
       } finally {
         setLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      setAuditLoading(true);
+      try {
+        const data = await mcpApi.auditLog(20);
+        if (data.ok) {
+          setAuditLogs(data.logs);
+        }
+      } catch (e) {
+        // Non-critical: audit log failures should not block the panel
+        console.warn("MCP audit log load failed:", e);
+      } finally {
+        setAuditLoading(false);
       }
     })();
   }, []);
@@ -106,7 +125,9 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
         <Space>
           <ApiOutlined />
           <span>webrain MCP server</span>
-          <Tag color="success">{info.server.name} v{info.server.version}</Tag>
+          <Tag color="success">
+            {info.server.name} v{info.server.version}
+          </Tag>
           <Tag>{info.transport}</Tag>
         </Space>
       }
@@ -118,8 +139,8 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
         message="把 webrain 作为 MCP server 暴露给外部客户端使用"
         description={
           <Paragraph style={{ marginBottom: 0 }}>
-            外部 MCP 客户端可以通过下方 HTTP 端点直接调用 webrain 的 memory / RAG / wiki /
-            knowledge graph 能力。需要 stdio 传输的客户端请用下方 stdio bridge 脚本作为子进程。
+            外部 MCP 客户端可以通过下方 HTTP 端点直接调用 webrain 的 memory / RAG / wiki / knowledge graph 能力。需要
+            stdio 传输的客户端请用下方 stdio bridge 脚本作为子进程。
           </Paragraph>
         }
         style={{ marginBottom: 16 }}
@@ -150,21 +171,20 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
                 write 工具开放(未配置 token)
               </Tag>
             )}
-            {tokenConfigured && (
-              <Tag color="success">已配置 token</Tag>
-            )}
+            {tokenConfigured && <Tag color="success">已配置 token</Tag>}
           </Space>
           <Text style={{ fontSize: 12, color: "var(--c-text-3)" }}>
-            Token 通过 <Text code>WEBRAIN_MCP_TOKEN</Text> 环境变量 或 <Text code>~/.webrain/mcp_token</Text> 文件
-            提供 / 自动生成。read 类工具(query / search / stats)不需要 token,write 类工具(memory_store /
-            wiki_create / rag_index_file)需要 <Text code>Authorization: Bearer &lt;token&gt;</Text> 头。
+            Token 通过 <Text code>WEBRAIN_MCP_TOKEN</Text> 环境变量 或 <Text code>~/.webrain/mcp_token</Text> 文件 提供
+            / 自动生成。read 类工具(query / search / stats)不需要 token,write 类工具(memory_store / wiki_create /
+            rag_index_file)需要 <Text code>Authorization: Bearer &lt;token&gt;</Text> 头。
           </Text>
         </Space>
       </div>
 
       <div style={{ marginTop: 24 }}>
         <Text strong>
-          暴露的工具 ({info.tool_count}{writeToolCount > 0 && ` · ${writeToolCount} 个 write`}):
+          暴露的工具 ({info.tool_count}
+          {writeToolCount > 0 && ` · ${writeToolCount} 个 write`}):
         </Text>
         <Table<MCPExposedToolSummary>
           dataSource={info.tools}
@@ -177,7 +197,11 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               title: "工具名",
               dataIndex: "name",
               width: 240,
-              render: (n: string) => <Text code style={{ fontSize: 12 }}>{n}</Text>,
+              render: (n: string) => (
+                <Text code style={{ fontSize: 12 }}>
+                  {n}
+                </Text>
+              ),
             },
             {
               title: "scope",
@@ -185,7 +209,9 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               width: 80,
               render: (s: string | undefined) =>
                 s === "write" ? (
-                  <Tag icon={<LockOutlined />} color="warning">write</Tag>
+                  <Tag icon={<LockOutlined />} color="warning">
+                    write
+                  </Tag>
                 ) : (
                   <Tag color="default">read</Tag>
                 ),
@@ -194,6 +220,73 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               title: "描述",
               dataIndex: "description",
               render: (d: string) => <span style={{ fontSize: 12 }}>{d}</span>,
+            },
+          ]}
+        />
+      </div>
+
+      {/* M4b.2 — recent audit log */}
+      <div style={{ marginTop: 24 }}>
+        <Text strong>最近调用:</Text>
+        <Table<MCPAuditLogEntry>
+          dataSource={auditLogs}
+          rowKey="id"
+          pagination={false}
+          size="small"
+          loading={auditLoading}
+          style={{ marginTop: 8 }}
+          locale={{ emptyText: "暂无调用记录" }}
+          columns={[
+            {
+              title: "时间",
+              dataIndex: "timestamp",
+              width: 180,
+              render: (ts: string) => (
+                <span style={{ fontSize: 12 }}>{ts ? new Date(ts).toLocaleString() : "-"}</span>
+              ),
+            },
+            {
+              title: "工具名",
+              dataIndex: "tool_name",
+              width: 200,
+              render: (n: string) => (
+                <Text code style={{ fontSize: 12 }}>
+                  {n}
+                </Text>
+              ),
+            },
+            {
+              title: "scope",
+              dataIndex: "scope",
+              width: 70,
+              render: (s: string) =>
+                s === "write" ? (
+                  <Tag icon={<LockOutlined />} color="warning" style={{ fontSize: 11 }}>
+                    write
+                  </Tag>
+                ) : (
+                  <Tag color="default" style={{ fontSize: 11 }}>
+                    read
+                  </Tag>
+                ),
+            },
+            {
+              title: "结果",
+              dataIndex: "success",
+              width: 60,
+              align: "center" as const,
+              render: (v: number) =>
+                v === 1 ? (
+                  <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                ) : (
+                  <CloseCircleOutlined style={{ color: "#ff4d4f" }} />
+                ),
+            },
+            {
+              title: "错误信息",
+              dataIndex: "error_message",
+              render: (msg: string | null) =>
+                msg ? <span style={{ fontSize: 12, color: "#ff4d4f" }}>{msg}</span> : <span style={{ fontSize: 12, color: "#bfbfbf" }}>-</span>,
             },
           ]}
         />

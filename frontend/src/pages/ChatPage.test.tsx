@@ -93,7 +93,13 @@ vi.mock("../components/chat/ChatHeader", () => ({
 
 vi.mock("../components/chat/MessageList", () => ({
   default: ({ onScroll, onScrollToBottom, containerRef }: any) => (
-    <div data-testid="messagelist" ref={(el: any) => { if (containerRef) containerRef.current = el; }} onScroll={onScroll}>
+    <div
+      data-testid="messagelist"
+      ref={(el: any) => {
+        if (containerRef) containerRef.current = el;
+      }}
+      onScroll={onScroll}
+    >
       <button onClick={onScrollToBottom}>ScrollBottom</button>
     </div>
   ),
@@ -211,7 +217,9 @@ describe("ChatPage", () => {
       const self = this as any;
       self.readAsText = readAsText;
       Object.defineProperty(self, "onload", {
-        set: (fn: any) => { onloadHandler = fn; },
+        set: (fn: any) => {
+          onloadHandler = fn;
+        },
         get: () => onloadHandler,
       });
     });
@@ -311,7 +319,9 @@ describe("ChatPage", () => {
       (this as any).stop = vi.fn();
       (this as any).onresult = null;
       Object.defineProperty(this, "onresult", {
-        set: (fn) => { resultHandler = fn; },
+        set: (fn) => {
+          resultHandler = fn;
+        },
         get: () => resultHandler,
       });
       (this as any).onerror = null;
@@ -324,9 +334,7 @@ describe("ChatPage", () => {
 
     const event = {
       resultIndex: 0,
-      results: [
-        { isFinal: true, 0: { transcript: "hello" } },
-      ],
+      results: [{ isFinal: true, 0: { transcript: "hello" } }],
     };
     resultHandler(event);
   });
@@ -339,7 +347,9 @@ describe("ChatPage", () => {
       (this as any).onresult = null;
       (this as any).onerror = null;
       Object.defineProperty(this, "onerror", {
-        set: (fn) => { errorHandler = fn; },
+        set: (fn) => {
+          errorHandler = fn;
+        },
         get: () => errorHandler,
       });
       (this as any).onend = null;
@@ -394,7 +404,9 @@ describe("ChatPage", () => {
       (this as any).onerror = null;
       (this as any).onend = null;
       Object.defineProperty(this, "onend", {
-        set: (fn) => { endHandler = fn; },
+        set: (fn) => {
+          endHandler = fn;
+        },
         get: () => endHandler,
       });
     };
@@ -430,13 +442,15 @@ describe("ChatPage", () => {
 
   it("auto-scrolls when streaming and near bottom", () => {
     const scrollToSpy = vi.spyOn(Element.prototype, "scrollTo").mockImplementation(() => {});
-    vi.mocked(useChatStore).mockReturnValue(createMockStore({
-      streaming: true,
-      messages: [
-        { id: "m1", role: "user", content: "hello", timestamp: new Date().toISOString() },
-        { id: "m2", role: "assistant", content: "hi", timestamp: new Date().toISOString() },
-      ],
-    }));
+    vi.mocked(useChatStore).mockReturnValue(
+      createMockStore({
+        streaming: true,
+        messages: [
+          { id: "m1", role: "user", content: "hello", timestamp: new Date().toISOString() },
+          { id: "m2", role: "assistant", content: "hi", timestamp: new Date().toISOString() },
+        ],
+      })
+    );
     const { rerender } = render(<ChatPage />);
     const msgList = screen.getByTestId("messagelist");
     Object.defineProperty(msgList, "scrollHeight", { value: 500, configurable: true });
@@ -450,21 +464,25 @@ describe("ChatPage", () => {
   });
 
   it("shows scroll button when messages grow and not near bottom", () => {
-    vi.mocked(useChatStore).mockReturnValue(createMockStore({
-      messages: [{ id: "m1", role: "user", content: "hello", timestamp: new Date().toISOString() }],
-    }));
+    vi.mocked(useChatStore).mockReturnValue(
+      createMockStore({
+        messages: [{ id: "m1", role: "user", content: "hello", timestamp: new Date().toISOString() }],
+      })
+    );
     const { rerender } = render(<ChatPage />);
     const msgList = screen.getByTestId("messagelist");
     Object.defineProperty(msgList, "scrollHeight", { value: 500, configurable: true });
     Object.defineProperty(msgList, "clientHeight", { value: 100, configurable: true });
     Object.defineProperty(msgList, "scrollTop", { value: 0, configurable: true, writable: true }); // dist=400, nearBottom=false
 
-    vi.mocked(useChatStore).mockReturnValue(createMockStore({
-      messages: [
-        { id: "m1", role: "user", content: "hello", timestamp: new Date().toISOString() },
-        { id: "m2", role: "assistant", content: "hi", timestamp: new Date().toISOString() },
-      ],
-    }));
+    vi.mocked(useChatStore).mockReturnValue(
+      createMockStore({
+        messages: [
+          { id: "m1", role: "user", content: "hello", timestamp: new Date().toISOString() },
+          { id: "m2", role: "assistant", content: "hi", timestamp: new Date().toISOString() },
+        ],
+      })
+    );
     rerender(<ChatPage />);
     // Should not crash; scroll button state may have changed
   });

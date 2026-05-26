@@ -42,6 +42,17 @@ export interface MCPSelfServerInfo {
   tools: MCPExposedToolSummary[];
 }
 
+/** M4b.2: single audit log entry. */
+export interface MCPAuditLogEntry {
+  id: number;
+  timestamp: string;
+  tool_name: string;
+  scope: string;
+  client_ip: string | null;
+  success: number;
+  error_message: string | null;
+}
+
 export const mcpApi = {
   // Client-side (webrain as consumer)
   listServers: () => api.get<{ servers: McpServer[] }>("/api/mcp/servers").then((r) => r.servers),
@@ -53,4 +64,5 @@ export const mcpApi = {
 
   // Server-side (webrain as provider, M4b)
   selfInfo: () => api.get<MCPSelfServerInfo>("/brain/mcp/info"),
+  auditLog: (limit = 20) => api.get<{ ok: boolean; logs: MCPAuditLogEntry[]; error?: string }>(`/brain/mcp/audit?limit=${limit}`),
 };

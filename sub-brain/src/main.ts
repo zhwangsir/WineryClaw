@@ -48,12 +48,14 @@ import staticPlugin from "@fastify/static";
 import { spawn, ChildProcess } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join, resolve as pathResolve, sep as pathSep } from "path";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from "fs";
 import { homedir } from "os";
 import { pickPythonInterpreter } from "./main-brain-spawn.js";
 import { ToolExecutor } from "./tools/tool-executor.js";
 import { ChannelManager } from "./channels/channel-manager.js";
 import { ChannelAutoReply } from "./channels/channel-auto-reply.js";
+import { PersistentReplyQueue } from "./channels/persistent-reply-queue.js";
+import { subBrainDB } from "./db/sub-brain-db.js";
 import { PluginLoader } from "./plugins/plugin-loader.js";
 import { EcosystemHub } from "./ecosystem/ecosystem-hub.js";
 import { DokobotClient } from "./dokobot/dokobot-client.js";
@@ -68,8 +70,9 @@ import { SkillManager } from "./skills/skill-manager.js";
 import { SkillHubClient } from "./skills/skill-hub-client.js";
 import { MCPClient } from "./mcp/mcp-client.js";
 import { WeBrainCLI } from "./cli/webrain-cli.js";
+import { DEFAULT_SUB_BRAIN_PORT } from "./config/constants.js";
 
-const PORT = parseInt(process.env.WEBRAIN_SUB_BRAIN_PORT || "3000", 10);
+const PORT = parseInt(process.env.WEBRAIN_SUB_BRAIN_PORT || String(DEFAULT_SUB_BRAIN_PORT), 10);
 const MAIN_BRAIN_PORT = parseInt(process.env.WEBRAIN_MAIN_BRAIN_PORT || "18790", 10);
 const MAIN_BRAIN_UDS = process.env.WEBRAIN_MAIN_BRAIN_UDS || "/tmp/webrain-main.sock";
 const USE_UDS = !process.env.WEBRAIN_MAIN_BRAIN_UDS && !process.env.WEBRAIN_MAIN_BRAIN_PORT;
@@ -257,6 +260,7 @@ state.channelManager.setBroadcastHandler((msg: unknown) => wsHub.broadcast(msg))
 // M5: wire channel auto-reply — inbound messages on auto_reply-enabled
 // channels are forwarded to main-brain /chat and the reply is sent
 // back through the same channel.
+const replyQueue = new PersistentReplyQueue(subBrainDB.getDb());
 const channelAutoReply = new ChannelAutoReply({
   channelManager: state.channelManager,
   chatFn: async ({ message, session_id, agent_id }) => {
@@ -270,7 +274,9 @@ const channelAutoReply = new ChannelAutoReply({
     );
     return { reply: resp.data?.reply ?? "" };
   },
+  queue: replyQueue,
 });
+channelAutoReply.startWorker(5000);
 state.channelManager.setInboundHandler(channelAutoReply.handleInbound);
 await Promise.all([
   state.pluginLoader.initialize(),
@@ -320,13 +326,13 @@ function startMainBrain(): Promise<void> {
       );
     }
     // Clean up stale UDS socket
-    try { if (USE_UDS) require("fs").unlinkSync(MAIN_BRAIN_UDS); } catch (err) { console.error("[main] Error:", err); console.error("[cleanup] Error:", err); }
+    try { if (USE_UDS) unlinkSync(MAIN_BRAIN_UDS); } catch (err) { console.error("[main] Error:", err); console.error("[cleanup] Error:", err); }
     const args = USE_UDS
       ? [mainBrainScript, "--uds", MAIN_BRAIN_UDS]
       : [mainBrainScript, "--host", "127.0.0.1", "--port", String(MAIN_BRAIN_PORT)];
     mainBrainProc = spawn(pythonCmd, args, {
       stdio: "inherit",
-      env: { ...process.env, WEBRAIN_EMBEDDED: "1", WEBRAIN_SUB_BRAIN_URL: "http://127.0.0.1:3000" },
+      env: { ...process.env, WEBRAIN_EMBEDDED: "1", WEBRAIN_SUB_BRAIN_URL: "http://127.0.0.1:3456" },
     });
 
     mainBrainProc.on("error", (err) => {

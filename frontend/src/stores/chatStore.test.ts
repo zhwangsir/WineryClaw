@@ -142,11 +142,13 @@ describe("chatStore", () => {
   });
 
   it("sendStream sets streaming state and adds messages", async () => {
-    const mockConnect = vi.fn().mockImplementation((_url: string, onChunk: (chunk: any) => void, onDone: () => void) => {
-      onChunk({ type: "content", data: "Hello" });
-      onDone();
-      return Promise.resolve();
-    });
+    const mockConnect = vi
+      .fn()
+      .mockImplementation((_url: string, onChunk: (chunk: any) => void, onDone: () => void) => {
+        onChunk({ type: "content", data: "Hello" });
+        onDone();
+        return Promise.resolve();
+      });
     const mockSseClient = { connect: mockConnect, abort: vi.fn(), close: vi.fn() };
     vi.mocked(chatApi.stream).mockReturnValue({ client: mockSseClient, url: "/api/chat/stream" });
 
@@ -225,11 +227,13 @@ describe("chatStore", () => {
   });
 
   it("sendStream handles reasoning chunks", async () => {
-    const mockConnect = vi.fn().mockImplementation((_url: string, onChunk: (chunk: any) => void, onDone: () => void) => {
-      onChunk({ type: "reasoning", data: "thinking..." });
-      onDone();
-      return Promise.resolve();
-    });
+    const mockConnect = vi
+      .fn()
+      .mockImplementation((_url: string, onChunk: (chunk: any) => void, onDone: () => void) => {
+        onChunk({ type: "reasoning", data: "thinking..." });
+        onDone();
+        return Promise.resolve();
+      });
     const mockSseClient = { connect: mockConnect, abort: vi.fn() };
     vi.mocked(chatApi.stream).mockReturnValue({ client: mockSseClient, url: "/stream" });
     await useChatStore.getState().sendStream("hi");
@@ -237,10 +241,12 @@ describe("chatStore", () => {
   });
 
   it("sendStream handles abort error", async () => {
-    const mockConnect = vi.fn().mockImplementation((_url: string, _onChunk: any, _onDone: any, onError: (err: Error) => void) => {
-      onError(new Error("Connection aborted"));
-      return Promise.resolve();
-    });
+    const mockConnect = vi
+      .fn()
+      .mockImplementation((_url: string, _onChunk: any, _onDone: any, onError: (err: Error) => void) => {
+        onError(new Error("Connection aborted"));
+        return Promise.resolve();
+      });
     const mockSseClient = { connect: mockConnect, abort: vi.fn() };
     vi.mocked(chatApi.stream).mockReturnValue({ client: mockSseClient, url: "/stream" });
     await useChatStore.getState().sendStream("hi");
@@ -260,10 +266,12 @@ describe("chatStore", () => {
   });
 
   it("sendStream handles non-abort error", async () => {
-    const mockConnect = vi.fn().mockImplementation((_url: string, _onChunk: any, _onDone: any, onError: (err: Error) => void) => {
-      onError(new Error("network fail"));
-      return Promise.resolve();
-    });
+    const mockConnect = vi
+      .fn()
+      .mockImplementation((_url: string, _onChunk: any, _onDone: any, onError: (err: Error) => void) => {
+        onError(new Error("network fail"));
+        return Promise.resolve();
+      });
     const mockSseClient = { connect: mockConnect, abort: vi.fn() };
     vi.mocked(chatApi.stream).mockReturnValue({ client: mockSseClient, url: "/stream" });
     await useChatStore.getState().sendStream("hi");
@@ -315,7 +323,11 @@ describe("chatStore", () => {
   });
 
   it("deleteSession keeps messages when different session", async () => {
-    useChatStore.setState({ sessions: [{ id: "s1" }, { id: "s2" }] as any, currentSessionId: "s2", messages: [{ id: "m1" }] as any });
+    useChatStore.setState({
+      sessions: [{ id: "s1" }, { id: "s2" }] as any,
+      currentSessionId: "s2",
+      messages: [{ id: "m1" }] as any,
+    });
     vi.mocked(chatApi.deleteSession).mockResolvedValue(undefined);
     await useChatStore.getState().deleteSession("s1");
     expect(useChatStore.getState().messages).toHaveLength(1);

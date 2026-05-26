@@ -23,6 +23,8 @@ interface ChannelState {
   disconnectChannel: (channelId: string) => Promise<void>;
   toggleChannel: (id: string) => Promise<void>;
   setAutoReply: (id: string, enabled: boolean) => Promise<void>;
+  setAgentId: (id: string, agent_id: string) => Promise<void>;
+  setReplyDelay: (id: string, delay_ms: number) => Promise<void>;
   deleteChannel: (id: string) => Promise<void>;
 }
 
@@ -107,6 +109,35 @@ export const useChannelStore = create<ChannelState>((set, get) => ({
       message.success(enabled ? "已开启自动回复" : "已关闭自动回复");
     } catch (e: any) {
       message.error(e.message || "设置自动回复失败");
+      set({ channels: prev });
+    }
+  },
+
+  // M5.1 — per-channel agent_id
+  setAgentId: async (id: string, agent_id: string) => {
+    const prev = get().channels;
+    set((s) => ({
+      channels: s.channels.map((c) => (c.id === id ? { ...c, agent_id } : c)),
+    }));
+    try {
+      await channelsApi.setAgentId(id, agent_id);
+      message.success("Agent 已更新");
+    } catch (e: any) {
+      message.error(e.message || "设置 Agent 失败");
+      set({ channels: prev });
+    }
+  },
+
+  // M5.1 — per-channel reply delay
+  setReplyDelay: async (id: string, delay_ms: number) => {
+    const prev = get().channels;
+    set((s) => ({
+      channels: s.channels.map((c) => (c.id === id ? { ...c, reply_delay_ms: delay_ms } : c)),
+    }));
+    try {
+      await channelsApi.setReplyDelay(id, delay_ms);
+    } catch (e: any) {
+      message.error(e.message || "设置回复延迟失败");
       set({ channels: prev });
     }
   },

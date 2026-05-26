@@ -129,6 +129,8 @@ ReplanFn = Callable[
     [Plan, List[Tuple[str, str, str, str]], str],
     Awaitable[Optional[Plan]],
 ]
+# M3.5 — SSE streaming callback: async (event_dict) -> None
+EventCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +222,13 @@ class PlanExecutor:
         self._replan_fn = replan_fn
         self._max_replans = max(0, max_replans)
 
-    async def run(self, plan: Plan, session_id: str, agent_id: str = "agent-default") -> ExecutionResult:
+    async def run(
+        self,
+        plan: Plan,
+        session_id: str,
+        agent_id: str = "agent-default",
+        event_callback: Optional[EventCallback] = None,
+    ) -> ExecutionResult:
         """Execute every task in plan, return aggregated result.
 
         Tasks run sequentially. Successful task outputs are passed forward
@@ -233,6 +241,9 @@ class PlanExecutor:
         `max_replans` retries before giving up and surfacing the partial
         result. The original_plan_id is preserved on the ExecutionResult;
         final_plan_id tracks which plan actually succeeded.
+
+        M3.5 — optional `event_callback` receives real-time events for SSE
+        streaming. When None, behavior is identical to pre-M3.5.
         """
         original_plan_id = plan.plan_id
         current_plan = plan
@@ -240,12 +251,20 @@ class PlanExecutor:
         total_attempts = 0
         replan_count = 0
 
+        if event_callback is not None:
+            await event_callback({
+                "event": "plan_start",
+                "plan_id": original_plan_id,
+                "total_tasks": len(current_plan.tasks),
+                "session_id": session_id,
+            })
+
         while True:
             results: List[TaskResult] = []
             prior_outputs: List[Tuple[str, str]] = []  # [(description, output), ...]
 
             for task in current_plan.tasks:
-                r = await self._run_task(task, session_id, agent_id, prior_outputs)
+                r = await self._run_task(task, session_id, agent_id, prior_outputs, event_callback)
                 results.append(r)
                 total_attempts += len(r.attempts)
                 if r.succeeded and r.final_output.strip():
@@ -255,7 +274,7 @@ class PlanExecutor:
 
             # Happy path: every task passed verification.
             if not failed_ids:
-                return ExecutionResult(
+                payload = ExecutionResult(
                     plan_id=original_plan_id,
                     results=results,
                     total_attempts=total_attempts,
@@ -264,12 +283,22 @@ class PlanExecutor:
                     replan_count=replan_count,
                     final_plan_id=current_plan.plan_id if replan_count else None,
                 )
+                if event_callback is not None:
+                    await event_callback({
+                        "event": "plan_complete",
+                        "plan_id": original_plan_id,
+                        "overall_success": True,
+                        "total_attempts": total_attempts,
+                        "failed_task_ids": [],
+                        "result": payload.to_dict(),
+                    })
+                return payload
 
             # At least one task failed.
             # If no replan_fn was wired OR we've burned our replan budget,
             # surface the partial result (legacy M2 behavior).
             if self._replan_fn is None or replan_count >= self._max_replans:
-                return ExecutionResult(
+                payload = ExecutionResult(
                     plan_id=original_plan_id,
                     results=results,
                     total_attempts=total_attempts,
@@ -278,6 +307,16 @@ class PlanExecutor:
                     replan_count=replan_count,
                     final_plan_id=current_plan.plan_id if replan_count else None,
                 )
+                if event_callback is not None:
+                    await event_callback({
+                        "event": "plan_complete",
+                        "plan_id": original_plan_id,
+                        "overall_success": False,
+                        "total_attempts": total_attempts,
+                        "failed_task_ids": failed_ids,
+                        "result": payload.to_dict(),
+                    })
+                return payload
 
             # Round M3 — assemble the failure summary and ask for a new plan.
             failures: List[Tuple[str, str, str, str]] = []
@@ -295,7 +334,7 @@ class PlanExecutor:
                 # Replanner couldn't produce something usable — bail with the
                 # partial result rather than spinning.
                 logger.info("replan returned None / empty — surfacing partial result")
-                return ExecutionResult(
+                payload = ExecutionResult(
                     plan_id=original_plan_id,
                     results=results,
                     total_attempts=total_attempts,
@@ -304,6 +343,16 @@ class PlanExecutor:
                     replan_count=replan_count,
                     final_plan_id=current_plan.plan_id if replan_count else None,
                 )
+                if event_callback is not None:
+                    await event_callback({
+                        "event": "plan_complete",
+                        "plan_id": original_plan_id,
+                        "overall_success": False,
+                        "total_attempts": total_attempts,
+                        "failed_task_ids": failed_ids,
+                        "result": payload.to_dict(),
+                    })
+                return payload
 
             # Successful replan — record + loop with the new plan.
             replan_count += 1
@@ -321,9 +370,19 @@ class PlanExecutor:
         session_id: str,
         agent_id: str,
         prior_outputs: List[Tuple[str, str]],
+        event_callback: Optional[EventCallback] = None,
     ) -> TaskResult:
         attempts: List[TaskAttempt] = []
         last_output = ""
+
+        if event_callback is not None:
+            await event_callback({
+                "event": "task_start",
+                "task_id": task.id,
+                "description": task.description,
+                "attempt_idx": 1,
+                "session_id": session_id,
+            })
 
         for idx in range(1, self._max_retries + 1):
             strategy = "augmented" if idx > self._strategy_switch_at else "default"
@@ -349,35 +408,63 @@ class PlanExecutor:
                 logger.warning("verifier raised on task %s attempt %d: %s", task.id, idx, e)
                 passed, reason = False, f"verifier error: {type(e).__name__}"
 
-            attempts.append(
-                TaskAttempt(
-                    attempt_idx=idx,
-                    output=output or "",
-                    verification_passed=passed,
-                    verification_reason=reason,
-                    strategy=strategy,
-                    duration_ms=duration_ms,
-                )
+            attempt = TaskAttempt(
+                attempt_idx=idx,
+                output=output or "",
+                verification_passed=passed,
+                verification_reason=reason,
+                strategy=strategy,
+                duration_ms=duration_ms,
             )
+            attempts.append(attempt)
+
+            if event_callback is not None:
+                await event_callback({
+                    "event": "task_attempt",
+                    "task_id": task.id,
+                    "description": task.description,
+                    "attempt": attempt.to_dict(),
+                    "session_id": session_id,
+                })
 
             if passed:
-                return TaskResult(
+                result = TaskResult(
                     task_id=task.id,
                     description=task.description,
                     final_output=output or "",
                     attempts=attempts,
                     succeeded=True,
                 )
+                if event_callback is not None:
+                    await event_callback({
+                        "event": "task_complete",
+                        "task_id": task.id,
+                        "description": task.description,
+                        "succeeded": True,
+                        "attempts_count": len(attempts),
+                        "session_id": session_id,
+                    })
+                return result
 
         # All retries exhausted — return the last output as best-effort so the
         # caller can still surface something useful.
-        return TaskResult(
+        result = TaskResult(
             task_id=task.id,
             description=task.description,
             final_output=last_output,
             attempts=attempts,
             succeeded=False,
         )
+        if event_callback is not None:
+            await event_callback({
+                "event": "task_complete",
+                "task_id": task.id,
+                "description": task.description,
+                "succeeded": False,
+                "attempts_count": len(attempts),
+                "session_id": session_id,
+            })
+        return result
 
     def _build_prompt(
         self,

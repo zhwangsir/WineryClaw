@@ -344,3 +344,144 @@ class TestLLMHealthMonitor:
         router = MagicMock()
         monitor = LLMHealthMonitor(router, interval_sec=0.1)
         assert monitor._interval == 5.0
+
+
+# Mock helpers for streaming tests
+class _MockStreamCtxMgr:
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self._response
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _MockStreamResponse:
+    def __init__(self, lines, status_raise=None):
+        self._lines = lines
+        self._status_raise = status_raise
+
+    def raise_for_status(self):
+        if self._status_raise:
+            raise self._status_raise
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+# ---------------------------------------------------------------------------
+# ChatEngine._chat_completion_stream failover
+# ---------------------------------------------------------------------------
+
+
+class TestChatCompletionStreamFailover:
+    @pytest.fixture
+    def chat_engine(self):
+        mm = MagicMock()
+        mm.query = AsyncMock(return_value=[])
+        mm.store = AsyncMock()
+        sb = MagicMock()
+        sb.execute_tool = AsyncMock(return_value="x")
+        config = {
+            "endpoints": [
+                {"name": "primary", "base_url": "http://p/v1", "model_id": "m", "priority": 10},
+                {"name": "secondary", "base_url": "http://s/v1", "model_id": "m", "priority": 5},
+            ]
+        }
+        return ChatEngine(mm, sb, llm_config=config)
+
+    @pytest.mark.asyncio
+    async def test_uses_primary_when_healthy(self, chat_engine) -> None:
+        lines = [
+            'data: {"choices":[{"delta":{"content":"hello"}}]}',
+            "data: [DONE]",
+        ]
+        mock_resp = _MockStreamResponse(lines)
+
+        with patch("httpx.AsyncClient.stream", return_value=_MockStreamCtxMgr(mock_resp)):
+            chunks = []
+            async for chunk in chat_engine._chat_completion_stream([{"role": "user", "content": "hi"}]):
+                chunks.append(chunk)
+
+        assert any(c["type"] == "content" and c["data"] == "hello" for c in chunks)
+        primary = chat_engine.router.find_by_name("primary")
+        assert primary.success_count == 1
+        assert primary.healthy is True
+        assert primary.latency_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_fails_over_to_secondary_when_primary_returns_502(self, chat_engine) -> None:
+        primary_fail = httpx.HTTPStatusError(
+            "502 Bad Gateway",
+            request=MagicMock(),
+            response=MagicMock(status_code=502),
+        )
+        primary_resp = _MockStreamResponse([], status_raise=primary_fail)
+        secondary_lines = [
+            'data: {"choices":[{"delta":{"content":"from-secondary"}}]}',
+            "data: [DONE]",
+        ]
+        secondary_resp = _MockStreamResponse(secondary_lines)
+
+        calls: list = []
+
+        def fake_stream(method, url, **kwargs):
+            calls.append(url)
+            if "//p/" in url:
+                return _MockStreamCtxMgr(primary_resp)
+            return _MockStreamCtxMgr(secondary_resp)
+
+        with patch("httpx.AsyncClient.stream", side_effect=fake_stream):
+            chunks = []
+            async for chunk in chat_engine._chat_completion_stream([{"role": "user", "content": "hi"}]):
+                chunks.append(chunk)
+
+        assert any(c["type"] == "content" and c["data"] == "from-secondary" for c in chunks)
+        assert "//p/" in calls[0]
+        assert "//s/" in calls[1]
+        primary = chat_engine.router.find_by_name("primary")
+        secondary = chat_engine.router.find_by_name("secondary")
+        assert primary.failure_count == 1
+        assert primary.healthy is False
+        assert "HTTPStatusError" in (primary.last_error or "")
+        assert secondary.success_count == 1
+        assert secondary.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_raises_descriptive_error_when_all_endpoints_fail(self, chat_engine) -> None:
+        def always_fail(method, url, **kwargs):
+            raise httpx.ConnectError(f"down: {url}")
+
+        with patch("httpx.AsyncClient.stream", side_effect=always_fail):
+            with pytest.raises(RuntimeError) as exc_info:
+                async for _ in chat_engine._chat_completion_stream([{"role": "user", "content": "hi"}]):
+                    pass
+
+        msg = str(exc_info.value)
+        assert "All 2 LLM endpoint(s) failed" in msg
+        assert "secondary" in msg
+        assert chat_engine.router.find_by_name("primary").failure_count == 1
+        assert chat_engine.router.find_by_name("secondary").failure_count == 1
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_error_does_not_failover(self, chat_engine) -> None:
+        """Once chunks start flowing, a mid-stream error yields error but does not failover."""
+        class _BrokenStreamResponse(_MockStreamResponse):
+            async def aiter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
+                raise httpx.ReadError("connection dropped")
+
+        broken_resp = _BrokenStreamResponse([])
+        with patch("httpx.AsyncClient.stream", return_value=_MockStreamCtxMgr(broken_resp)):
+            chunks = []
+            async for chunk in chat_engine._chat_completion_stream([{"role": "user", "content": "hi"}]):
+                chunks.append(chunk)
+
+        assert any(c["type"] == "content" and c["data"] == "partial" for c in chunks)
+        assert chunks[-1]["type"] == "error"
+        # Only primary was tried — no failover to secondary
+        assert chat_engine.router.find_by_name("primary").failure_count == 1
+        assert chat_engine.router.find_by_name("secondary").failure_count == 0

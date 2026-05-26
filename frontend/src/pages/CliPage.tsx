@@ -31,18 +31,24 @@ export default function CliPage() {
     const text = input;
     setInput("");
     const reply = await chat(text);
-    const assistantMsg: ChatMessage = { role: "assistant", content: reply || "(无响应)", timestamp: new Date().toISOString() };
+    const assistantMsg: ChatMessage = {
+      role: "assistant",
+      content: reply || "(无响应)",
+      timestamp: new Date().toISOString(),
+    };
     setMessages((m) => [...m, assistantMsg]);
   };
 
   return (
-    <PageShell
-      title="CLI"
-      subtitle={`命令行交互 — ${status || "Loading..."}`}
-      icon={<CodeOutlined />}
-    >
+    <PageShell title="CLI" subtitle={`命令行交互 — ${status || "Loading..."}`} icon={<CodeOutlined />}>
       <Card
-        style={{ borderRadius: 12, border: "1px solid var(--c-border)", height: "calc(100vh - 240px)", display: "flex", flexDirection: "column" }}
+        style={{
+          borderRadius: 12,
+          border: "1px solid var(--c-border)",
+          height: "calc(100vh - 240px)",
+          display: "flex",
+          flexDirection: "column",
+        }}
         styles={{ body: { padding: 0, display: "flex", flexDirection: "column", height: "100%" } }}
       >
         {/* Messages */}

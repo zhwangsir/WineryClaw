@@ -43,9 +43,7 @@ export default function ChatInput({
   };
 
   return (
-    <div
-      style={{ borderTop: `1px solid ${C.border}`, padding: "16px 32px 24px", flexShrink: 0, background: C.pageBg }}
-    >
+    <div style={{ borderTop: `1px solid ${C.border}`, padding: "16px 32px 24px", flexShrink: 0, background: C.pageBg }}>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 10, maxWidth: 800, margin: "0 auto" }}>
         {/* Voice input button */}
         <Tooltip title={isRecording ? "停止录音" : "语音输入"}>
@@ -65,11 +63,7 @@ export default function ChatInput({
               animation: isRecording ? "pulse 1.5s infinite" : undefined,
             }}
             icon={
-              isRecording ? (
-                <AudioOutlined style={{ fontSize: 16 }} />
-              ) : (
-                <AudioMutedOutlined style={{ fontSize: 16 }} />
-              )
+              isRecording ? <AudioOutlined style={{ fontSize: 16 }} /> : <AudioMutedOutlined style={{ fontSize: 16 }} />
             }
           />
         </Tooltip>

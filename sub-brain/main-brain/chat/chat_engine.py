@@ -103,10 +103,10 @@ class LLMEndpoint:
         """
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                urls_to_try = [
-                    f"{self.base_url}/models",
-                    f"{self.base_url}/v1/models",
-                ]
+                base = self.base_url.rstrip("/")
+                urls_to_try = [f"{base}/models"]
+                if not base.endswith("/v1"):
+                    urls_to_try.append(f"{base}/v1/models")
                 for url in urls_to_try:
                     try:
                         resp = await client.get(url)
@@ -261,8 +261,9 @@ MAX_TOOL_ITERATIONS = 10
 
 class ChatEngine:
     def __init__(self, memory_manager: Any, sub_brain_client: Any, llm_config: Optional[Dict[str, Any]] = None,
-                 sub_brain_url: str = "http://127.0.0.1:3000", rag_retriever: Any = None,
-                 planner: Any = None, active_memory: Any = None, kg: Optional[Any] = None):
+                 sub_brain_url: str = "http://127.0.0.1:3456", rag_retriever: Any = None,
+                 planner: Any = None, active_memory: Any = None, kg: Optional[Any] = None,
+                 auto_skill_creator: Any = None):
         self.memory = memory_manager
         self.sub_brain = sub_brain_client
         self.sub_brain_url = sub_brain_url
@@ -282,6 +283,8 @@ class ChatEngine:
         # S9: 知识图谱上下文注入 (KG Context Injection) — 将 KG 中与当前消息相关的
         # 实体及其关联无条件注入系统提示。零成本：纯内存子串匹配，无 LLM 调用/DB 查询。
         self.kg = kg
+        # Phase 6: auto skill creation
+        self.auto_skill_creator = auto_skill_creator
         # Round E1 fix: retain strong refs to background tasks so CPython's
         # GC can't collect them mid-flight. asyncio.create_task returns a
         # Task object that the event loop only weakly references; without
@@ -464,6 +467,15 @@ class ChatEngine:
             os.environ.get("WEBRAIN_MEM_SOURCE_DIVERSITY_ENABLED", "1") != "0"
         )
 
+        # S20: 记忆充分性信号 (Memory Adequacy Signal) — 综合 S18 查询意图与 relevant
+        # 状态，对 PERSONAL_RECALL / TEMPORAL_RECALL 查询给出查询特定的充分性判断
+        # 与行为处方（"充足 — 可直接回答" / "有限 — 请加限定语" / "不足 — 请向用户确认"）。
+        # 不同于 S11（描述记忆集整体置信度），S20 将意图与记忆状态相结合，给出具体的
+        # 行动建议。GENERAL / TASK_ASSIST 查询不注入（记忆对此类查询仅为背景参考）。
+        self.mem_adequacy_enabled: bool = (
+            os.environ.get("WEBRAIN_MEM_ADEQUACY_ENABLED", "1") != "0"
+        )
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(timeout=120.0)
@@ -488,6 +500,53 @@ class ChatEngine:
     # enabled rule × N rules); blocking the chat reply on it would be a
     # regression. So we hand it to the event loop and return immediately —
     # if extraction fails or hangs, the chat reply is unaffected.
+    def _fire_auto_skill_creation(
+        self,
+        user_input: str,
+        plan_dict: Optional[Dict[str, Any]],
+        execution_result: Any,
+    ) -> None:
+        """Phase 6 — fire-and-forget auto skill draft creation after a
+        successful plan execution. Never blocks the chat reply."""
+        if not self.auto_skill_creator or not plan_dict:
+            return
+        from planner.planner import Plan, PlanTask
+
+        async def _run() -> None:
+            try:
+                plan = Plan(
+                    plan_id=str(plan_dict.get("plan_id", "")),
+                    user_input=user_input,
+                    tasks=[
+                        PlanTask(
+                            id=t.get("id", f"task-{i}"),
+                            description=t.get("description", ""),
+                            requires_tool=bool(t.get("requires_tool", False)),
+                            tool_hint=str(t.get("tool_hint", "")),
+                            expected_output=str(t.get("expected_output", "")),
+                        )
+                        for i, t in enumerate(plan_dict.get("tasks", []), start=1)
+                    ],
+                    confidence=float(plan_dict.get("confidence", 0.0)),
+                    reasoning=str(plan_dict.get("reasoning", "")),
+                )
+                should = await self.auto_skill_creator.should_create_skill(user_input, plan)
+                if not should:
+                    return
+                draft = await self.auto_skill_creator.create_skill_draft(user_input, plan, execution_result)
+                if draft is None:
+                    return
+                await self.auto_skill_creator.submit_draft(draft)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("auto_skill_creation background task failed: %s", exc)
+
+        try:
+            task = asyncio.create_task(_run())
+        except RuntimeError:
+            return
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     def _fire_session_summarize_async(self, session_id: str) -> None:
         """Round M2 — when a session crosses a turn threshold, summarize
         the earliest L1 messages into one L2 entry so we never lose
@@ -1161,6 +1220,69 @@ class ChatEngine:
             "时效低=记忆陈旧引用时加保留措辞]"
         )
 
+    def _compute_memory_adequacy_line(self, relevant: List[Dict], intent: str) -> str:
+        """S20: 记忆充分性信号 — 综合查询意图与 relevant 状态，输出查询特定的行为处方。
+
+        针对两种需要记忆回溯的意图输出不同评级：
+
+        PERSONAL_RECALL（个人信息回溯）：
+          - 充足：已验证事实 >= 2 条，可直接引用
+          - 有限：已验证事实 == 1 条，建议加"据我所知"限定语
+          - 不足：已验证事实 == 0 条但有片段，建议告知用户并主动确认
+
+        TEMPORAL_RECALL（历史回溯）：
+          - 充足：有 >= 2 条历史记录，可回溯时序
+          - 有限：仅 1 条记录，时序重建可能不完整
+
+        GENERAL / TASK_ASSIST：返回空字符串（记忆对此类查询仅为背景参考）。
+        relevant 为空时返回空字符串（S16 已处理"无记忆"情形，避免重复）。
+
+        Args:
+            relevant: 从记忆库检索到的记忆记录列表。
+            intent:   _classify_query_intent 返回的意图字符串。
+
+        Returns:
+            格式化的单行充分性标签（不含换行符），或空字符串。
+        """
+        if not self.mem_adequacy_enabled:
+            return ""
+        if not relevant or intent in ("GENERAL", "TASK_ASSIST"):
+            return ""
+
+        if intent == "PERSONAL_RECALL":
+            validated = sum(
+                1 for m in relevant
+                if (m.get("importance") or 0.0) >= self.mem_confidence_threshold
+            )
+            if validated >= 2:
+                # 不重复 S11/S19 的条数，聚焦 S20 独有的"意图特定判断"价值
+                return "[记忆充分性: 充足 — 个人信息有据可查，可自信回答]"
+            elif validated == 1:
+                return (
+                    "[记忆充分性: 有限(仅 1 条已验证) — "
+                    "引用时请加'据我所知'等限定语以保持严谨]"
+                )
+            else:
+                return (
+                    "[记忆充分性: 不足(无已验证个人信息) — "
+                    "建议明确告知用户当前无可靠记录，并主动向其确认]"
+                )
+
+        if intent == "TEMPORAL_RECALL":
+            # total 仅在此分支使用，移入分支内部避免跨分支变量泄漏
+            total = len(relevant)
+            if total >= 2:
+                return (
+                    f"[记忆充分性: 充足(共 {total} 条历史记录) — 可整合时序脉络回溯]"
+                )
+            elif total == 1:
+                return (
+                    "[记忆充分性: 有限(仅 1 条历史记录) — "
+                    "时序重建有限，请说明信息可能不完整]"
+                )
+
+        return ""
+
     def _classify_query_intent(self, user_message: str) -> str:
         """S18: 查询意图分类 — 纯关键词/模式匹配，零额外 LLM 调用。
 
@@ -1197,7 +1319,6 @@ class ChatEngine:
             return "TEMPORAL_RECALL"
         # TASK_ASSIST: 编程、写作、计算等执行型任务（中英文混合）。
         # 英文词汇使用 \b 词边界匹配，避免 trailing-space 漏匹配和内部词干误匹配。
-        import re as _re
         msg_lower = user_message.lower()
         chinese_task_patterns = [
             "帮我写", "帮我做", "帮我实现", "帮我分析", "帮我生成", "帮我创建",
@@ -1206,7 +1327,7 @@ class ChatEngine:
         ]
         if any(p in msg_lower for p in chinese_task_patterns):
             return "TASK_ASSIST"
-        if _re.search(r"\b(write|generate|create|implement|code)\b", msg_lower):
+        if re.search(r"\b(write|generate|create|implement|code)\b", msg_lower):
             return "TASK_ASSIST"
         return "GENERAL"
 
@@ -1283,7 +1404,8 @@ class ChatEngine:
     async def _load_user_profile(self) -> str:
         """S8: 持久化用户上下文 — 从 L3/L4 加载 [preference]/[goal] 事实注入系统提示。
 
-        结果按 TTL 缓存，避免每轮对话都查 DB。失败时静默降级，返回空字符串。
+        Phase 7: 同时读取 ~/.webrain/user/profile.md（Honcho 用户建模产物），
+        若存在则追加到系统提示。结果按 TTL 缓存，避免每轮对话都查 DB。
         锁防止 TTL 到期瞬间多个并发请求同时穿透缓存（惊群效应）。
         """
         if not self.user_profile_enabled:
@@ -1307,6 +1429,7 @@ class ChatEngine:
             ):
                 return self._user_profile_cache
             try:
+                # S8 legacy: L3/L4 preference/goal facts
                 results = await self.memory.query({
                     "query": "[preference] [goal]",
                     "levels": ["L3", "L4"],
@@ -1318,7 +1441,19 @@ class ChatEngine:
                     for r in results
                     if r.get("content", "").startswith(("[preference]", "[goal]"))
                 ]
-                profile_text = "\n".join([f"- {f}" for f in profile_facts]) if profile_facts else ""
+                parts: List[str] = []
+                if profile_facts:
+                    parts.append("\n".join([f"- {f}" for f in profile_facts]))
+
+                # Phase 7: file-based user profile
+                from pathlib import Path
+                profile_md = Path.home() / ".webrain" / "user" / "profile.md"
+                if profile_md.exists():
+                    md_text = profile_md.read_text(encoding="utf-8")
+                    if md_text.strip():
+                        parts.append(f"## User Profile\n{md_text.strip()}")
+
+                profile_text = "\n\n".join(parts) if parts else ""
                 self._user_profile_cache = profile_text
                 self._user_profile_cached_at = now
                 return profile_text
@@ -1575,58 +1710,110 @@ class ChatEngine:
     # -----------------------------------------------------------------------
     async def _chat_completion_stream(self, messages: List[Dict], tools: Optional[List[Dict]] = None,
                                        max_tokens: int = 2048, temperature: Optional[float] = None) -> AsyncGenerator[Dict[str, Any], None]:
-        ep = self.router.get_primary()
-        if not ep:
-            yield {"type": "error", "data": "No LLM endpoint available"}
-            return
+        """Stream from an LLM endpoint with automatic failover before the first chunk.
 
-        url, payload, headers = self._build_request(ep, messages, tools, max_tokens, temperature, stream=True)
+        Walks endpoints in priority-desc order, healthy ones first.
+        If an endpoint fails *before* yielding any chunks (connection error,
+        HTTP 4xx/5xx, etc.), the router marks it failed and tries the next
+        endpoint. Once the first chunk has been yielded we commit to that
+        endpoint — partial output has already been sent to the client.
 
-        client = self._get_client()
-        async with client.stream("POST", url, json=payload, headers=headers, timeout=ep.timeout) as resp:
-                resp.raise_for_status()
-                if ep.provider == "anthropic":
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            yield {"type": "done"}
-                            break
+        Records per-endpoint success/failure stats. Raises only if every
+        endpoint has been tried and all failed.
+        """
+        if not self.router.endpoints:
+            raise RuntimeError("No LLM endpoint available")
+
+        last_error: Optional[Exception] = None
+        last_endpoint_name: Optional[str] = None
+        tried = 0
+
+        for ep in self.router.iter_failover():
+            tried += 1
+            last_endpoint_name = ep.name
+            url, payload, headers = self._build_request(
+                ep, messages, tools, max_tokens, temperature, stream=True
+            )
+            client = self._get_client()
+            try:
+                async with client.stream("POST", url, json=payload, headers=headers, timeout=ep.timeout) as resp:
+                        resp.raise_for_status()
+                        t0 = time.time()
+                        chunk_count = 0
                         try:
-                            chunk = json.loads(data)
-                            if chunk.get("type") == "content_block_delta":
-                                text = chunk.get("delta", {}).get("text", "")
-                                if text:
-                                    yield {"type": "content", "data": text}
-                            elif chunk.get("type") == "message_stop":
-                                yield {"type": "done"}
-                                break
+                            if ep.provider == "anthropic":
+                                async for line in resp.aiter_lines():
+                                    if not line or not line.startswith("data: "):
+                                        continue
+                                    data = line[6:]
+                                    if data == "[DONE]":
+                                        yield {"type": "done"}
+                                        break
+                                    try:
+                                        chunk = json.loads(data)
+                                        if chunk.get("type") == "content_block_delta":
+                                            text = chunk.get("delta", {}).get("text", "")
+                                            if text:
+                                                chunk_count += 1
+                                                yield {"type": "content", "data": text}
+                                        elif chunk.get("type") == "message_stop":
+                                            yield {"type": "done"}
+                                            break
+                                    except Exception as e:
+                                        logger.warning(f"Anthropic stream parse error: {e}")
+                                        continue
+                            else:
+                                async for line in resp.aiter_lines():
+                                    if not line or not line.startswith("data: "):
+                                        continue
+                                    data = line[6:]
+                                    if data == "[DONE]":
+                                        yield {"type": "done"}
+                                        break
+                                    try:
+                                        chunk = json.loads(data)
+                                        delta = chunk["choices"][0].get("delta", {})
+                                        if delta.get("reasoning_content"):
+                                            chunk_count += 1
+                                            yield {"type": "reasoning", "data": delta["reasoning_content"]}
+                                        if delta.get("content"):
+                                            chunk_count += 1
+                                            yield {"type": "content", "data": delta["content"]}
+                                        elif delta.get("tool_calls"):
+                                            yield {"type": "tool_call_delta", "data": delta["tool_calls"]}
+                                        elif chunk["choices"][0].get("finish_reason") == "tool_calls":
+                                            yield {"type": "tool_calls_ready", "data": chunk}
+                                    except Exception as e:
+                                        logger.warning(f"Stream parse error: {e}")
+                                        continue
+                            # Stream completed successfully
+                            latency_ms = (time.time() - t0) * 1000.0
+                            self.router.mark_success(ep.name, latency_ms)
+                            return
                         except Exception as e:
-                            logger.warning(f"Anthropic stream parse error: {e}")
-                            continue
-                else:
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            yield {"type": "done"}
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            delta = chunk["choices"][0].get("delta", {})
-                            if delta.get("reasoning_content"):
-                                yield {"type": "reasoning", "data": delta["reasoning_content"]}
-                            if delta.get("content"):
-                                yield {"type": "content", "data": delta["content"]}
-                            elif delta.get("tool_calls"):
-                                yield {"type": "tool_call_delta", "data": delta["tool_calls"]}
-                            elif chunk["choices"][0].get("finish_reason") == "tool_calls":
-                                yield {"type": "tool_calls_ready", "data": chunk}
-                        except Exception as e:
-                            logger.warning(f"Stream parse error: {e}")
-                            continue
+                            err_msg = f"{type(e).__name__}: {e}"
+                            self.router.mark_failure(ep.name, err_msg)
+                            logger.warning(
+                                "LLM stream error on endpoint %s after %d chunks: %s",
+                                ep.name, chunk_count, err_msg,
+                            )
+                            yield {"type": "error", "data": f"Stream broken: {err_msg}"}
+                            return
+            except Exception as e:
+                err_msg = f"{type(e).__name__}: {e}"
+                self.router.mark_failure(ep.name, err_msg)
+                last_error = e
+                logger.warning(
+                    "LLM endpoint %s failed (%s) — failing over to next endpoint",
+                    ep.name,
+                    err_msg,
+                )
+                continue
+
+        raise RuntimeError(
+            f"All {tried} LLM endpoint(s) failed; last endpoint {last_endpoint_name!r} "
+            f"raised {type(last_error).__name__ if last_error else 'unknown'}: {last_error}"
+        )
 
     # -----------------------------------------------------------------------
     # Round S: AI 能力升级 — 四大新方法
@@ -1933,6 +2120,13 @@ class ChatEngine:
         intent_hint = self._get_query_intent_hint(intent)
         if intent_hint:
             memory_text = f"{memory_text}\n{intent_hint}"
+        # S20: 记忆充分性信号 — 综合 S18 意图与 relevant 状态，给出查询特定的行为处方。
+        # 仅对 PERSONAL_RECALL / TEMPORAL_RECALL 意图注入（其他意图记忆仅为背景参考）。
+        # 注意：S16 gap_hint 已对低置信情形发出"请澄清"指令；若同时注入 S20 的
+        # "充足(共 N 条)" 会与 S16 产生语义矛盾，因此当 gap_hint 非空时跳过 S20。
+        adequacy_line = self._compute_memory_adequacy_line(relevant, intent)
+        if adequacy_line and not gap_hint:
+            memory_text = f"{memory_text}\n{adequacy_line}"
 
         # Plan-execution call sites set these flags to prevent recursion
         # (the executor already has a plan; running it shouldn't re-plan) and
@@ -2011,6 +2205,17 @@ class ChatEngine:
                 self._fire_session_summarize_async(session_id)
                 # S3: 工作记忆 — 异步提取当前轮次关键信息供下一轮使用
                 self._fire_working_memory_async(session_id, user_input, reply)
+                # Phase 6: auto skill creation on successful plan execution
+                if plan_dict:
+                    from planner.executor import ExecutionResult
+                    exec_result = ExecutionResult(
+                        plan_id=plan_dict.get("plan_id", ""),
+                        results=[],
+                        total_attempts=iteration,
+                        overall_success=True,
+                        failed_task_ids=[],
+                    )
+                    self._fire_auto_skill_creation(user_input, plan_dict, exec_result)
                 return {
                     "reply": reply,
                     "tool_calls": all_tool_calls,
@@ -2129,6 +2334,13 @@ class ChatEngine:
         intent_hint = self._get_query_intent_hint(intent)
         if intent_hint:
             memory_text = f"{memory_text}\n{intent_hint}"
+        # S20: 记忆充分性信号 — 综合 S18 意图与 relevant 状态，给出查询特定的行为处方。
+        # 仅对 PERSONAL_RECALL / TEMPORAL_RECALL 意图注入（其他意图记忆仅为背景参考）。
+        # 注意：S16 gap_hint 已对低置信情形发出"请澄清"指令；若同时注入 S20 的
+        # "充足(共 N 条)" 会与 S16 产生语义矛盾，因此当 gap_hint 非空时跳过 S20。
+        adequacy_line = self._compute_memory_adequacy_line(relevant, intent)
+        if adequacy_line and not gap_hint:
+            memory_text = f"{memory_text}\n{adequacy_line}"
 
         # Mirror the chat() flags so PlanExecutor + ChatEngine.chat_stream
         # can share a code path without re-planning recursively.
@@ -2194,19 +2406,23 @@ class ChatEngine:
                 collected_tool_calls: List[Dict] = []
                 has_tool_calls = False
 
-                async for chunk in self._chat_completion_stream(messages, tools=available_tools):
-                    if chunk["type"] == "content":
-                        full_content += chunk["data"]
-                        yield chunk
-                    elif chunk["type"] == "tool_call_delta":
-                        has_tool_calls = True
-                        # Accumulate tool call deltas (simplified)
-                        yield {"type": "thinking", "data": "正在思考使用工具..."}
-                    elif chunk["type"] == "done":
-                        break
-                    elif chunk["type"] == "error":
-                        yield chunk
-                        return
+                try:
+                    async for chunk in self._chat_completion_stream(messages, tools=available_tools):
+                        if chunk["type"] == "content":
+                            full_content += chunk["data"]
+                            yield chunk
+                        elif chunk["type"] == "tool_call_delta":
+                            has_tool_calls = True
+                            # Accumulate tool call deltas (simplified)
+                            yield {"type": "thinking", "data": "正在思考使用工具..."}
+                        elif chunk["type"] == "done":
+                            break
+                        elif chunk["type"] == "error":
+                            yield chunk
+                            return
+                except RuntimeError as e:
+                    yield {"type": "error", "data": str(e)}
+                    return
 
                 if not has_tool_calls:
                     # No tool calls needed — done
@@ -2215,6 +2431,17 @@ class ChatEngine:
                     self._fire_session_summarize_async(session_id)
                     # S3: 工作记忆异步提取
                     self._fire_working_memory_async(session_id, user_input, full_content)
+                    # Phase 6: auto skill creation on successful plan execution
+                    if plan_dict:
+                        from planner.executor import ExecutionResult
+                        exec_result = ExecutionResult(
+                            plan_id=plan_dict.get("plan_id", ""),
+                            results=[],
+                            total_attempts=iteration,
+                            overall_success=True,
+                            failed_task_ids=[],
+                        )
+                        self._fire_auto_skill_creation(user_input, plan_dict, exec_result)
                     yield {"type": "done", "data": full_content}
                     return
 
@@ -2234,6 +2461,17 @@ class ChatEngine:
                 self._fire_session_summarize_async(session_id)
                 # S3: 工作记忆异步提取
                 self._fire_working_memory_async(session_id, user_input, reply)
+                # Phase 6: auto skill creation on successful plan execution
+                if plan_dict:
+                    from planner.executor import ExecutionResult
+                    exec_result = ExecutionResult(
+                        plan_id=plan_dict.get("plan_id", ""),
+                        results=[],
+                        total_attempts=iteration,
+                        overall_success=True,
+                        failed_task_ids=[],
+                    )
+                    self._fire_auto_skill_creation(user_input, plan_dict, exec_result)
                 yield {"type": "content", "data": reply}
                 yield {"type": "done", "data": reply}
                 return
