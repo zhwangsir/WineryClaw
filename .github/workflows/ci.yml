@@ -11,7 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.11"]
+        # v2.51 — 3.9 dropped from matrix:spacy>=3.8 没有 Python 3.9 linux
+        # wheel,CI 强制 source build → 失败。本地 dev 通过 cached wheel
+        # 仍可在 3.9 上跑(venv 已有 spacy 3.8.11)。生产部署用 3.11。
+        python-version: ["3.11"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
