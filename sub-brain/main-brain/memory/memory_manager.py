@@ -188,8 +188,17 @@ def _get_reranker():
         if _reranker is None:
             try:
                 from sentence_transformers import CrossEncoder
-                _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-                logger.info("[memory] Re-ranker loaded: ms-marco-MiniLM-L-6-v2")
+                # v2.52 — env knob 同 _get_embedder。默认 BAAI/bge-reranker-base
+                # (中文优化,~278MB) 配套 v2.52 BGE-zh embedder。
+                # 老 cross-encoder/ms-marco-MiniLM-L-6-v2 是英文 only,
+                # 配中文 embedder 会把 recall@10 从 0.975 拖到 0.750(实测
+                # test_rerank_impact 失败),换中文 reranker 修复。
+                # 退回旧模型:WEBRAIN_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+                model_name = os.environ.get(
+                    "WEBRAIN_RERANKER_MODEL", "BAAI/bge-reranker-base"
+                )
+                _reranker = CrossEncoder(model_name)
+                logger.info(f"[memory] Re-ranker loaded: {model_name}")
             except Exception as e:
                 logger.warning(f"[memory] Failed to load re-ranker: {e}")
                 _reranker = False
