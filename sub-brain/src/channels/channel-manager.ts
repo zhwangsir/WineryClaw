@@ -8,6 +8,8 @@ import WebSocket from "ws";
 import { IMessageProtocol, startIMessagePolling } from "./imessage-protocol.js";
 import { EmailProtocol, startEmailPolling } from "./email-protocol.js";
 import { WebPushProtocol } from "./webpush-protocol.js";
+import type { ChannelPolicy } from "./channel-policy.js";
+import { validatePolicy } from "./channel-policy.js";
 
 export interface ChannelConfig {
   botToken?: string;
@@ -25,10 +27,9 @@ export interface Channel {
   /** M5: when true, inbound messages on this channel are auto-routed
    * to chat_engine and the reply is sent back to the sender. */
   autoReply: boolean;
-  /** M5.1: which agent handles auto-reply on this channel. */
-  agentId: string;
-  /** M5.1: artificial delay before sending auto-reply (ms). */
-  replyDelayMs: number;
+  /** M5.1 (v2.30): optional policy controlling which inbound messages
+   * trigger auto-reply. Empty / undefined = "no constraint" (legacy). */
+  policy?: ChannelPolicy;
   config: ChannelConfig;
   protocol: ChannelProtocol;
 }
@@ -368,10 +369,39 @@ export class ChannelManager {
   }
 
   async initialize(): Promise<void> {
+    // v2.30 (M5.1): one-shot ALTER TABLE adding the `policy` column. ADD
+    // COLUMN succeeds at most once on SQLite; subsequent boots throw
+    // "duplicate column name" which we swallow. Same idempotency
+    // pattern used for the M5 `auto_reply` column.
+    try {
+      this.db.exec("ALTER TABLE channels ADD COLUMN policy TEXT DEFAULT '{}'");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("duplicate column")) {
+        console.warn("[channels] policy column migration warning:", msg);
+      }
+    }
+
     // Load persisted channels from SQLite
     const rows = this.db.prepare("SELECT * FROM channels").all() as any[];
     for (const row of rows) {
       const config = JSON.parse(row.config || "{}");
+      let policy: ChannelPolicy | undefined;
+      if (row.policy && row.policy !== "{}") {
+        try {
+          const parsed = JSON.parse(row.policy);
+          const validated = validatePolicy(parsed);
+          if (validated.ok) {
+            policy = validated.policy;
+          } else {
+            console.warn(
+              `[channels] dropping invalid policy for ${row.id}: ${validated.error}`
+            );
+          }
+        } catch (e) {
+          console.warn(`[channels] policy JSON parse failed for ${row.id}:`, e);
+        }
+      }
       const protocol = PROTOCOL_REGISTRY[row.type];
       if (protocol) {
         this.channels.set(row.id, {
@@ -380,14 +410,54 @@ export class ChannelManager {
           name: row.name,
           connected: !!row.connected,
           autoReply: !!row.auto_reply,
-          agentId: row.agent_id || "agent-default",
-          replyDelayMs: row.reply_delay_ms || 0,
+          policy,
           config,
           protocol,
         });
       }
     }
     console.log(`[channels] Loaded ${this.channels.size} persisted channels`);
+  }
+
+  /** M5.1: read the current policy for a channel. Returns undefined if
+   * no policy is set OR the channel doesn't exist. Callers should treat
+   * "no policy" as "allow everything" (legacy compatibility). */
+  getPolicy(channelId: string): ChannelPolicy | undefined {
+    return this.channels.get(channelId)?.policy;
+  }
+
+  /** M5.1: set/replace the policy for a channel. Validates input and
+   * persists to SQLite. Returns the sanitized policy on success.
+   *
+   * Pass `null` (or an empty object) to clear the policy and revert to
+   * legacy "allow everything" behavior. */
+  async setPolicy(
+    channelId: string,
+    rawPolicy: unknown
+  ): Promise<{ ok: boolean; policy?: ChannelPolicy; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+
+    // null / empty object → clear
+    if (rawPolicy === null) {
+      channel.policy = undefined;
+      const stmt = this.db.prepare(
+        "UPDATE channels SET policy = ?, updated_at = ? WHERE id = ?"
+      );
+      stmt.run("{}", new Date().toISOString(), channelId);
+      return { ok: true, policy: {} };
+    }
+
+    const validation = validatePolicy(rawPolicy);
+    if (!validation.ok) {
+      return { ok: false, error: validation.error };
+    }
+    channel.policy = validation.policy;
+    const stmt = this.db.prepare(
+      "UPDATE channels SET policy = ?, updated_at = ? WHERE id = ?"
+    );
+    stmt.run(JSON.stringify(validation.policy), new Date().toISOString(), channelId);
+    return { ok: true, policy: validation.policy };
   }
 
   async connect(channelType: string, config: ChannelConfig): Promise<{ ok: boolean; channel_id?: string; error?: string }> {
@@ -409,8 +479,6 @@ export class ChannelManager {
       name: (config.channelId as string) || channelType,
       connected: true,
       autoReply: false,
-      agentId: "agent-default",
-      replyDelayMs: 0,
       config,
       protocol,
     };
@@ -419,7 +487,7 @@ export class ChannelManager {
 
     // Persist to SQLite
     const stmt = this.db.prepare(
-      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, auto_reply, agent_id, reply_delay_ms, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, auto_reply, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
     stmt.run(
       id,
@@ -428,8 +496,6 @@ export class ChannelManager {
       1,
       JSON.stringify(config),
       0,
-      channel.agentId,
-      channel.replyDelayMs,
       new Date().toISOString(),
       new Date().toISOString(),
     );
@@ -451,38 +517,6 @@ export class ChannelManager {
   getAutoReply(channelId: string): boolean {
     const channel = this.channels.get(channelId);
     return channel ? channel.autoReply : false;
-  }
-
-  /** M5.1: set agent_id for a channel. */
-  async setAgentId(channelId: string, agentId: string): Promise<{ ok: boolean; error?: string }> {
-    const channel = this.channels.get(channelId);
-    if (!channel) return { ok: false, error: "Channel not found" };
-    channel.agentId = agentId;
-    const stmt = this.db.prepare("UPDATE channels SET agent_id = ?, updated_at = ? WHERE id = ?");
-    stmt.run(agentId, new Date().toISOString(), channelId);
-    return { ok: true };
-  }
-
-  /** M5.1: get agent_id for a channel. */
-  getAgentId(channelId: string): string {
-    const channel = this.channels.get(channelId);
-    return channel ? channel.agentId : "agent-default";
-  }
-
-  /** M5.1: set reply delay for a channel. */
-  async setReplyDelay(channelId: string, delayMs: number): Promise<{ ok: boolean; error?: string }> {
-    const channel = this.channels.get(channelId);
-    if (!channel) return { ok: false, error: "Channel not found" };
-    channel.replyDelayMs = Math.max(0, delayMs);
-    const stmt = this.db.prepare("UPDATE channels SET reply_delay_ms = ?, updated_at = ? WHERE id = ?");
-    stmt.run(channel.replyDelayMs, new Date().toISOString(), channelId);
-    return { ok: true };
-  }
-
-  /** M5.1: get reply delay for a channel. */
-  getReplyDelay(channelId: string): number {
-    const channel = this.channels.get(channelId);
-    return channel ? channel.replyDelayMs : 0;
   }
 
   async send(channelIdOrType: string, recipient: string, content: string): Promise<{ ok: boolean; error?: string; result?: any }> {
@@ -571,15 +605,22 @@ export class ChannelManager {
     return { ok: true };
   }
 
-  listChannels(): Array<{ id: string; name: string; type: string; connected: boolean; auto_reply: boolean; agent_id: string; reply_delay_ms: number }> {
+  listChannels(): Array<{
+    id: string;
+    name: string;
+    type: string;
+    connected: boolean;
+    auto_reply: boolean;
+    /** M5.1 (v2.30): policy summary. `null` means "no policy configured". */
+    policy: ChannelPolicy | null;
+  }> {
     return Array.from(this.channels.values()).map((c) => ({
       id: c.id,
       name: c.name,
       type: c.type,
       connected: c.connected,
       auto_reply: c.autoReply,
-      agent_id: c.agentId,
-      reply_delay_ms: c.replyDelayMs,
+      policy: c.policy ?? null,
     }));
   }
 
@@ -895,11 +936,11 @@ export class ChannelManager {
   }
 
   // iMessage polling via chat.db
-  private async startIMessagePolling(channel: Channel): Promise<{ ok: boolean; error?: string }> {
+  private startIMessagePolling(channel: Channel): { ok: boolean; error?: string } {
     const handle = channel.config.handle as string || channel.config.recipient as string || "";
     if (!handle) return { ok: false, error: "Missing handle/recipient config" };
 
-    const { startIMessagePolling: startPoll } = await import("./imessage-protocol.js");
+    const { startIMessagePolling: startPoll } = require("./imessage-protocol.js");
     const receiver = startPoll(
       channel.id,
       handle,
