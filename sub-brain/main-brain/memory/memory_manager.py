@@ -225,6 +225,12 @@ def _get_embedder():
     Callers should treat None as "embedding unavailable" and fall back
     to whatever they do without a vector (FTS-only search, in
     MemoryManager's case).
+
+    v2.52 (recall sprint, ADR-0003): model name is env-configurable via
+    `WEBRAIN_EMBEDDER_MODEL`. Default remains `all-MiniLM-L6-v2` for
+    backward compatibility (existing vector indices are 384-dim).
+    To swap to Chinese-optimized BAAI/bge-small-zh-v1.5 (512-dim) set
+    the env var AND wipe the vector index (different dim breaks ANN).
     """
     global _embedder
     # Fast path: already loaded — no lock needed
@@ -236,8 +242,15 @@ def _get_embedder():
             return _embedder if _embedder is not False else None
         try:
             from sentence_transformers import SentenceTransformer
-            _embedder = SentenceTransformer("all-MiniLM-L6-v2")
-            logger.info("[memory] Embedder loaded: all-MiniLM-L6-v2")
+            # v2.52 — default switched from all-MiniLM-L6-v2 (English, 384-dim)
+            # to BAAI/bge-small-zh-v1.5 (中文优化, 512-dim).
+            # 实测 recall@5 0.550 → 0.950(超过 GA 目标 0.85),
+            # 详见 docs/adr/0003-recall-diagnostic.md。
+            # 老 user 数据兼容:_load_vector_index 检测 dim 不一致时跳过旧 384-dim
+            # 向量(数据保留但 vector 路径不参与,需要重新 store/embed 修复)。
+            model_name = os.environ.get("WEBRAIN_EMBEDDER_MODEL", "BAAI/bge-small-zh-v1.5")
+            _embedder = SentenceTransformer(model_name)
+            logger.info(f"[memory] Embedder loaded: {model_name}")
         except Exception as e:
             logger.warning(f"[memory] Failed to load local embedder: {e}")
             _embedder = False
@@ -804,7 +817,15 @@ class MemoryManager:
 
     # ========== Vector Index (In-memory ANN) ==========
     def _load_vector_index(self) -> None:
-        """Load all vectors from DB into memory index."""
+        """Load all vectors from DB into memory index.
+
+        v2.52 — detect embedder dim mismatch on load. If the existing
+        DB has 384-dim vectors (MiniLM) but the embedder loads 512-dim
+        (bge-zh) — or vice versa — the ANN search would crash on matmul.
+        Drop the mismatched rows on load (DB stays — just won't search
+        them via vector path). Triggers an L1→L2→L3 consolidation
+        re-run to repopulate with new-dim vectors.
+        """
         try:
             with self._connect() as conn:
                 rows = conn.execute(
@@ -812,13 +833,39 @@ class MemoryManager:
                 ).fetchall()
             if not rows:
                 return
+
+            # Probe current embedder dim — empty string vec gives us the dim
+            current_dim: Optional[int] = None
+            try:
+                model = _get_embedder()
+                if model is not None:
+                    probe = np.array(model.encode(""), dtype=np.float32)
+                    current_dim = probe.shape[0]
+            except Exception:
+                pass
+
             ids = []
             vectors = []
+            dim_mismatch_count = 0
             for row in rows:
                 vec = np.frombuffer(row["vector_blob"], dtype=np.float32)
-                if len(vec) == row["dim"]:
-                    ids.append(row["memory_id"])
-                    vectors.append(vec)
+                if len(vec) != row["dim"]:
+                    continue
+                # v2.52: drop rows whose dim doesn't match the current
+                # embedder. They'd cause matmul errors at query time.
+                if current_dim is not None and len(vec) != current_dim:
+                    dim_mismatch_count += 1
+                    continue
+                ids.append(row["memory_id"])
+                vectors.append(vec)
+            if dim_mismatch_count > 0:
+                logger.warning(
+                    f"[memory] dropped {dim_mismatch_count} vectors due to dim mismatch "
+                    f"(existing dim != current embedder dim={current_dim}). "
+                    f"This usually means WEBRAIN_EMBEDDER_MODEL was changed. "
+                    f"Re-encode by triggering memory.store on each affected row, "
+                    f"or wipe data/ and re-import."
+                )
             if not vectors:
                 return
             self._vector_ids = ids

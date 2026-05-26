@@ -135,7 +135,14 @@ v2 release 必须同时满足：
 - [x] **Axis 3 网络出站审计 ledger** — ✅ v2.16
 - [x] **Axis 3 8 LLM provider 配置** — ✅ v2.10
 - [x] **Axis 3 privacy mode toggle** — ✅ v2.17
-- [ ] Axis 1 recall@5 ≥ 0.85（当前 0.625 rerank ON，差 26%）
+- [x] **Axis 1 recall@5 ≥ 0.85** — ✅ v2.52 达成 **0.950**(超 GA 目标 12%)。
+       诊断(详见 `docs/adr/0003-recall-diagnostic.md`)定位根因:
+       `all-MiniLM-L6-v2` 在中文短语/同义/抽象查询上失效(如"用户的咖啡偏好"→
+       top-5 全无关,但单字"咖啡"能命中)。换 `BAAI/bge-small-zh-v1.5`
+       (中文 STS 优化,512-dim) 后 19/20 query 完美命中 recall@5,
+       recall@10 = 1.000,MRR = 0.950。drop-in 替换 + env knob
+       `WEBRAIN_EMBEDDER_MODEL` 可逆;dim 不一致时 _load_vector_index
+       自动检测并跳过旧 384-dim 向量。
 - [x] **Axis 1 单调用 P95 ≤ 80ms** — ✅ v2.45 达成 **40.7 ms** (远优于
        目标)。cProfile 定位真瓶颈是每次 chat 重新 `httpx.AsyncClient()`
        创建 SSL context (`load_verify_locations` 占 65% CPU),改走共享
