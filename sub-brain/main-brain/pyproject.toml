@@ -3,7 +3,15 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["."]
-addopts = "-v --cov=. --cov-report=term-missing --cov-report=html:htmlcov --tb=short"
+# `--ignore=tests/smoke` keeps the e2e smoke suite out of normal sweeps
+# (it spawns real subprocesses and takes ~20s even when green).
+# Run smoke explicitly via:
+#   pytest -m smoke tests/smoke/ -s --no-cov
+addopts = "-v --cov=. --cov-report=term-missing --cov-report=html:htmlcov --tb=short --ignore=tests/smoke"
+markers = [
+    "benchmark: long-running retrieval benchmarks; opt-in via -m benchmark",
+    "smoke: e2e boot tests that spawn real main-brain + sub-brain subprocesses; opt-in via -m smoke",
+]
 
 [tool.coverage.run]
 source = ["."]

@@ -126,26 +126,18 @@ export const useKgStore = create<KgState>((set, get) => ({
     }
   },
 
-  deleteEntity: createOptimisticDelete<KgEntity>(
-    get,
-    set,
-    "entities",
-    kgApi.deleteEntity,
-    {
-      successMsg: "实体已删除",
-      errorMsg: "删除实体失败",
-      extraUpdate: (id) => ({
-        selectedEntity: get().selectedEntity?.id === id ? null : get().selectedEntity,
-      }),
-      onSuccess: () => get().fetchRelations(),
-    }
-  ),
+  deleteEntity: createOptimisticDelete<KgEntity>(get, set, "entities", kgApi.deleteEntity, {
+    successMsg: "实体已删除",
+    errorMsg: "删除实体失败",
+    extraUpdate: (id) => ({
+      selectedEntity: get().selectedEntity?.id === id ? null : get().selectedEntity,
+    }),
+    onSuccess: () => get().fetchRelations(),
+  }),
 
-  deleteRelation: createOptimisticDelete<{ id: string }>(
-    get,
-    set,
-    "relations",
-    kgApi.deleteRelation,
-    { successMsg: "关系已删除", errorMsg: "删除关系失败", onSuccess: () => get().fetchRelations() }
-  ),
+  deleteRelation: createOptimisticDelete<{ id: string }>(get, set, "relations", kgApi.deleteRelation, {
+    successMsg: "关系已删除",
+    errorMsg: "删除关系失败",
+    onSuccess: () => get().fetchRelations(),
+  }),
 }));

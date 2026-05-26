@@ -13,6 +13,23 @@ export function HeaderBar({ onMenuClick }: HeaderBarProps) {
 
   const unreadCount = notifications.filter((n) => !n.read).length;
   const isHealthy = health?.status === "ok";
+  // v2.42 — distinguish "never connected yet" (health === null/undefined,
+  // still polling) from "actively reported failure" (status !== ok). The
+  // former is a transient startup state that doesn't deserve a red alarm
+  // tag; the latter is. Pre-v2.42 both cases rendered the same loud red
+  // "系统异常" label.
+  const healthState: "loading" | "ok" | "down" =
+    health === null || health === undefined ? "loading" : isHealthy ? "ok" : "down";
+  const statusColor: Record<typeof healthState, string> = {
+    loading: "var(--c-text-3)",
+    ok: "var(--c-success)",
+    down: "var(--c-error)",
+  };
+  const statusLabel: Record<typeof healthState, string> = {
+    loading: "连接中…",
+    ok: "系统正常运行",
+    down: "系统异常",
+  };
 
   const notificationItems = notifications.slice(0, 8).map((n) => ({
     key: n.id,
@@ -85,21 +102,28 @@ export function HeaderBar({ onMenuClick }: HeaderBarProps) {
             width: 8,
             height: 8,
             borderRadius: "50%",
-            background: isHealthy ? "var(--c-success)" : "var(--c-error)",
+            background: statusColor[healthState],
             display: "inline-block",
             flexShrink: 0,
+            // Soft pulse only when waiting for first health response so the
+            // user knows it's still trying (vs an unresponsive UI).
+            animation: healthState === "loading" ? "webrain-pulse 1.4s ease-in-out infinite" : undefined,
           }}
         />
         <span
           style={{
             fontSize: 13,
             fontWeight: 400,
-            color: isHealthy ? "var(--c-success)" : "var(--c-error)",
+            color: statusColor[healthState],
             letterSpacing: "0.01em",
           }}
         >
-          {isHealthy ? "系统正常运行" : "系统异常"}
+          {statusLabel[healthState]}
         </span>
+        <style>{`@keyframes webrain-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }`}</style>
       </div>
 
       {/* Actions */}

@@ -1,6 +1,13 @@
 import { useEffect } from "react";
 import { Row, Col, Card, List, Skeleton, Button } from "antd";
-import { TeamOutlined, ToolOutlined, GlobalOutlined, RobotOutlined, ReloadOutlined, SafetyOutlined } from "@ant-design/icons";
+import {
+  TeamOutlined,
+  ToolOutlined,
+  GlobalOutlined,
+  RobotOutlined,
+  ReloadOutlined,
+  SafetyOutlined,
+} from "@ant-design/icons";
 import { useSystemStore } from "../stores/systemStore";
 import { useAgentStore } from "../stores/agentStore";
 import { useToolStore } from "../stores/toolStore";
@@ -69,7 +76,7 @@ export default function DashboardPage() {
                 transition: "box-shadow 200ms",
                 cursor: "default",
               }}
-              bodyStyle={{ padding: 32 }}
+              styles={{ body: { padding: 32 } }}
               onMouseEnter={(e) => {
                 (e.currentTarget as HTMLElement).style.boxShadow = "var(--shadow-hover)";
               }}
@@ -131,15 +138,17 @@ export default function DashboardPage() {
           <Card
             title="模块健康状态"
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            headStyle={{
-              fontWeight: 600,
-              fontSize: 15,
-              color: "var(--c-text)",
-              padding: "20px 32px",
-              minHeight: 64,
-              borderBottom: "1px solid var(--c-border-light)",
+            styles={{
+              header: {
+                fontWeight: 600,
+                fontSize: 15,
+                color: "var(--c-text)",
+                padding: "20px 32px",
+                minHeight: 64,
+                borderBottom: "1px solid var(--c-border-light)",
+              },
+              body: { padding: "16px 32px" },
             }}
-            bodyStyle={{ padding: "16px 32px" }}
           >
             {moduleList.length === 0 ? (
               <div style={{ padding: "40px 0", textAlign: "center" }}>
@@ -177,15 +186,17 @@ export default function DashboardPage() {
           <Card
             title="模型端点"
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            headStyle={{
-              fontWeight: 600,
-              fontSize: 15,
-              color: "var(--c-text)",
-              padding: "20px 32px",
-              minHeight: 64,
-              borderBottom: "1px solid var(--c-border-light)",
+            styles={{
+              header: {
+                fontWeight: 600,
+                fontSize: 15,
+                color: "var(--c-text)",
+                padding: "20px 32px",
+                minHeight: 64,
+                borderBottom: "1px solid var(--c-border-light)",
+              },
+              body: { padding: "24px 32px" },
             }}
-            bodyStyle={{ padding: "24px 32px" }}
           >
             {totalEndpoints === 0 ? (
               <div

@@ -199,8 +199,8 @@ export default function ToolExecutorModal({ toolName, toolDescription, open, onC
       title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>测试工具: {toolName}</span>}
       width={640}
       footer={null}
-      bodyStyle={{ maxHeight: "70vh", overflow: "auto", padding: "20px 24px" }}
-      destroyOnClose
+      styles={{ body: { maxHeight: "70vh", overflow: "auto", padding: "20px 24px" } }}
+      destroyOnHidden
     >
       <div style={{ color: "var(--c-text-2)", fontSize: 13, marginBottom: 20, lineHeight: 1.6 }}>{toolDescription}</div>
 

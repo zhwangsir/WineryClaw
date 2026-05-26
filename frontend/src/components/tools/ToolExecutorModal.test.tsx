@@ -101,13 +101,16 @@ describe("ToolExecutorModal", () => {
     const valInput = screen.getByPlaceholderText("值（支持 JSON）");
     fireEvent.change(keyInput, { target: { value: "custom" } });
     fireEvent.change(valInput, { target: { value: "123" } });
-    fireEvent.click(screen.getByRole("button", { name: /plus/i }) || screen.getAllByRole("button").find(b => b.querySelector("[data-icon='plus']"))!);
+    fireEvent.click(
+      screen.getByRole("button", { name: /plus/i }) ||
+        screen.getAllByRole("button").find((b) => b.querySelector("[data-icon='plus']"))!
+    );
     expect(screen.getByText("custom")).toBeInTheDocument();
   });
 
   it("removes a param", () => {
     render(<ToolExecutorModal toolName="shell" toolDescription="Run shell" open={true} onClose={vi.fn()} />);
-    const deleteBtns = screen.getAllByRole("button").filter(b => b.querySelector("[data-icon='delete']"));
+    const deleteBtns = screen.getAllByRole("button").filter((b) => b.querySelector("[data-icon='delete']"));
     if (deleteBtns.length > 0) {
       fireEvent.click(deleteBtns[0]);
       // After deletion, the param should be gone

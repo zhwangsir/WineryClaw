@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
-import { Button, Tag, Table, Drawer, Form, Input, Select, message, Statistic, Popconfirm, Space } from "antd";
-import { ThunderboltOutlined, ReloadOutlined, PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { Button, Tag, Table, Drawer, Form, Input, Select, message, Statistic, Popconfirm, Space, Tooltip } from "antd";
+import {
+  ThunderboltOutlined,
+  ReloadOutlined,
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  PlayCircleOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { skillsApi, type Skill, type SkillStats } from "../api/skills";
 import { EmptyState } from "../components/common/EmptyState";
@@ -62,8 +69,14 @@ export default function SkillsPage() {
       description: values.description,
       code: values.code,
       language: values.language,
-      triggerPatterns: values.triggerPatterns?.split(",").map((s: string) => s.trim()).filter(Boolean),
-      tags: values.tags?.split(",").map((s: string) => s.trim()).filter(Boolean),
+      triggerPatterns: values.triggerPatterns
+        ?.split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean),
+      tags: values.tags
+        ?.split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean),
     };
     try {
       if (editingSkill) {
@@ -103,7 +116,11 @@ export default function SkillsPage() {
     setInvokeLoading(true);
     try {
       let params = {};
-      try { params = JSON.parse(invokeParams); } catch { /* ignore */ }
+      try {
+        params = JSON.parse(invokeParams);
+      } catch {
+        /* ignore */
+      }
       const result = await skillsApi.invoke(invokeSkillId, params);
       setInvokeResult(JSON.stringify(result, null, 2));
     } catch (e: any) {
@@ -115,7 +132,7 @@ export default function SkillsPage() {
 
   const columns = [
     {
-      title: "Name",
+      title: "名称",
       dataIndex: "name",
       key: "name",
       render: (_: string, s: Skill) => (
@@ -126,49 +143,73 @@ export default function SkillsPage() {
       ),
     },
     {
-      title: "Language",
+      title: "语言",
       dataIndex: "language",
       key: "language",
-      width: 100,
-      render: (v: string) => <Tag>{v}</Tag>,
+      width: 140,
+      // v2.37: when `sandbox: true`, render a small lock badge next to
+      // the language tag so users can see at-a-glance which JS skills
+      // run under the vm-context sandbox (no require / process / eval).
+      render: (v: string, s: Skill) => (
+        <Space size={4}>
+          <Tag>{v}</Tag>
+          {s.sandbox === true && (
+            <Tooltip title="此 skill 运行在 vm-context 沙箱中:不能 require / process / eval / new Function">
+              <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                🔒 sandbox
+              </Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
     },
     {
-      title: "Usage",
+      title: "使用",
       key: "usage",
       width: 120,
       render: (_: unknown, s: Skill) => (
         <div style={{ fontSize: 12 }}>
-          <div>{s.usageCount} invocations</div>
-          <div style={{ color: "var(--c-text-3)" }}>{(s.successRate * 100).toFixed(0)}% success</div>
+          <div>{s.usageCount} 次调用</div>
+          <div style={{ color: "var(--c-text-3)" }}>{(s.successRate * 100).toFixed(0)}% 成功</div>
         </div>
       ),
     },
     {
-      title: "Triggers",
+      title: "触发词",
       key: "triggers",
-      render: (_: unknown, s: Skill) => (
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {s.triggerPatterns.map((t) => (
-            <Tag key={t}>{t}</Tag>
-          ))}
-        </div>
-      ),
+      render: (_: unknown, s: Skill) => {
+        // Q14.4 (2026-05-21) — `__never-match__` is an internal sentinel
+        // meaning "no auto-trigger, only explicit /skills run". Don't
+        // leak it into the UI as a literal Tag — render an em-dash if
+        // it's the only pattern, otherwise filter just the sentinel out.
+        const visible = s.triggerPatterns.filter((t) => t !== "__never-match__");
+        if (visible.length === 0) {
+          return <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>—</span>;
+        }
+        return (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {visible.map((t) => (
+              <Tag key={t}>{t}</Tag>
+            ))}
+          </div>
+        );
+      },
     },
     {
-      title: "Actions",
+      title: "操作",
       key: "actions",
       width: 160,
       render: (_: unknown, s: Skill) => (
         <Space>
           <Button size="small" icon={<PlayCircleOutlined />} onClick={() => openInvoke(s)}>
-            Run
+            运行
           </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(s)}>
-            Edit
+            编辑
           </Button>
-          <Popconfirm title="Delete this skill?" onConfirm={() => handleDelete(s.id)}>
+          <Popconfirm title="确认删除此技能？" onConfirm={() => handleDelete(s.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>
-              Del
+              删除
             </Button>
           </Popconfirm>
         </Space>
@@ -177,44 +218,43 @@ export default function SkillsPage() {
   ];
 
   return (
-    <PageShell
-      title="Skills"
-      subtitle={`${skills.length} skill(s) registered`}
-      icon={<ThunderboltOutlined />}
-    >
+    <PageShell title="技能" subtitle={`已注册 ${skills.length} 个技能`} icon={<ThunderboltOutlined />}>
       <div style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 24 }}>
           {stats && (
             <>
-              <Statistic title="Total Skills" value={stats.totalSkills} />
-              <Statistic title="Invocations" value={stats.totalInvocations} />
-              <Statistic title="Success Rate" value={(stats.averageSuccessRate * 100).toFixed(0)} suffix="%" />
+              <Statistic title="技能总数" value={stats.totalSkills} />
+              <Statistic title="调用次数" value={stats.totalInvocations} />
+              <Statistic title="成功率" value={(stats.averageSuccessRate * 100).toFixed(0)} suffix="%" />
             </>
           )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
-            Refresh
+            刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New Skill
+            新建技能
           </Button>
         </div>
       </div>
 
       {skills.length === 0 && !loading ? (
-        <EmptyState description="No skills registered" />
+        <EmptyState description="暂无注册技能" />
       ) : (
         <Table dataSource={skills} columns={columns} rowKey="id" loading={loading} pagination={false} />
       )}
 
       {/* Create / Edit Drawer */}
       <Drawer
-        title={editingSkill ? "Edit Skill" : "Create Skill"}
+        title={editingSkill ? "编辑技能" : "创建新技能"}
         open={drawerOpen}
-        onClose={() => { setDrawerOpen(false); setEditingSkill(null); }}
+        onClose={() => {
+          setDrawerOpen(false);
+          setEditingSkill(null);
+        }}
         width={520}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
@@ -224,11 +264,13 @@ export default function SkillsPage() {
             <Input placeholder="What does this skill do?" />
           </Form.Item>
           <Form.Item name="language" label="Language" rules={[{ required: true }]} initialValue="python">
-            <Select options={[
-              { label: "Python", value: "python" },
-              { label: "JavaScript", value: "javascript" },
-              { label: "TypeScript", value: "typescript" },
-            ]} />
+            <Select
+              options={[
+                { label: "Python", value: "python" },
+                { label: "JavaScript", value: "javascript" },
+                { label: "TypeScript", value: "typescript" },
+              ]}
+            />
           </Form.Item>
           <Form.Item name="code" label="Code" rules={[{ required: true }]}>
             <TextArea rows={8} placeholder="def run(params): ..." />
@@ -249,14 +291,14 @@ export default function SkillsPage() {
 
       {/* Invoke Drawer */}
       <Drawer
-        title="Invoke Skill"
+        title="调用技能"
         open={invokeModalOpen}
         onClose={() => setInvokeModalOpen(false)}
         width={480}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form layout="vertical">
-          <Form.Item label="Parameters (JSON)">
+          <Form.Item label="参数 (JSON)">
             <TextArea
               rows={4}
               value={invokeParams}
@@ -265,7 +307,7 @@ export default function SkillsPage() {
             />
           </Form.Item>
           <Button type="primary" onClick={handleInvoke} loading={invokeLoading}>
-            Run
+            立即执行
           </Button>
           {invokeResult && (
             <pre style={{ marginTop: 16, padding: 12, background: "var(--c-hover)", borderRadius: 8, fontSize: 12 }}>

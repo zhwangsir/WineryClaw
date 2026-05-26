@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
 import { Button, Card, Input, Empty, Table, Image } from "antd";
-import { GlobalOutlined, CameraOutlined, HighlightOutlined, FormOutlined, PlayCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  GlobalOutlined,
+  CameraOutlined,
+  HighlightOutlined,
+  FormOutlined,
+  PlayCircleOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useBrowserStore } from "../stores/browserStore";
 
@@ -42,9 +49,11 @@ export default function BrowserPage() {
           <Card
             title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>会话</span>}
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", marginBottom: 24 }}
-            bodyStyle={{ padding: 20 }}
+            styles={{ body: { padding: 20 } }}
             extra={
-              <Button size="small" icon={<PlusOutlined />} onClick={() => newPage()}>新页面</Button>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => newPage()}>
+                新页面
+              </Button>
             }
           >
             {sessions.length === 0 ? (
@@ -58,9 +67,27 @@ export default function BrowserPage() {
                 rowClassName={(r) => (r.id === activeSession ? "active-row" : "")}
                 onRow={(r) => ({ onClick: () => setActiveSession(r.id), style: { cursor: "pointer" } })}
                 columns={[
-                  { title: "ID", dataIndex: "id", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span> },
-                  { title: "标题", dataIndex: "title", render: (v: string) => <span style={{ fontSize: 13 }}>{v || "—"}</span> },
-                  { title: "URL", dataIndex: "url", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v ? v.slice(0, 40) + (v.length > 40 ? "..." : "") : "—"}</span> },
+                  {
+                    title: "ID",
+                    dataIndex: "id",
+                    render: (v: string) => (
+                      <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span>
+                    ),
+                  },
+                  {
+                    title: "标题",
+                    dataIndex: "title",
+                    render: (v: string) => <span style={{ fontSize: 13 }}>{v || "—"}</span>,
+                  },
+                  {
+                    title: "URL",
+                    dataIndex: "url",
+                    render: (v: string) => (
+                      <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>
+                        {v ? v.slice(0, 40) + (v.length > 40 ? "..." : "") : "—"}
+                      </span>
+                    ),
+                  },
                 ]}
               />
             )}
@@ -68,24 +95,64 @@ export default function BrowserPage() {
 
           {session && (
             <Card
-              title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>控制: {session.id.slice(0, 12)}...</span>}
+              title={
+                <span style={{ fontWeight: 600, color: "var(--c-text)" }}>控制: {session.id.slice(0, 12)}...</span>
+              }
               style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-              bodyStyle={{ padding: 20 }}
+              styles={{ body: { padding: 20 } }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <Input placeholder="URL" value={navUrl} onChange={(e) => setNavUrl(e.target.value)} style={{ flex: 1 }} />
-                  <Button icon={<GlobalOutlined />} onClick={() => { if (navUrl) navigate(session.id, navUrl); }}>导航</Button>
+                  <Input
+                    placeholder="URL"
+                    value={navUrl}
+                    onChange={(e) => setNavUrl(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    icon={<GlobalOutlined />}
+                    onClick={() => {
+                      if (navUrl) navigate(session.id, navUrl);
+                    }}
+                  >
+                    导航
+                  </Button>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <Input placeholder="CSS Selector" value={selector} onChange={(e) => setSelector(e.target.value)} style={{ flex: 1 }} />
-                  <Button icon={<HighlightOutlined />} onClick={() => { if (selector) click(session.id, selector); }}>点击</Button>
+                  <Input
+                    placeholder="CSS Selector"
+                    value={selector}
+                    onChange={(e) => setSelector(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    icon={<HighlightOutlined />}
+                    onClick={() => {
+                      if (selector) click(session.id, selector);
+                    }}
+                  >
+                    点击
+                  </Button>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <Input placeholder="输入文本" value={typeText} onChange={(e) => setTypeText(e.target.value)} style={{ flex: 1 }} />
-                  <Button icon={<FormOutlined />} onClick={() => { if (selector && typeText) type(session.id, selector, typeText); }}>输入</Button>
+                  <Input
+                    placeholder="输入文本"
+                    value={typeText}
+                    onChange={(e) => setTypeText(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    icon={<FormOutlined />}
+                    onClick={() => {
+                      if (selector && typeText) type(session.id, selector, typeText);
+                    }}
+                  >
+                    输入
+                  </Button>
                 </div>
-                <Button icon={<CameraOutlined />} onClick={handleScreenshot}>截图</Button>
+                <Button icon={<CameraOutlined />} onClick={handleScreenshot}>
+                  截图
+                </Button>
               </div>
             </Card>
           )}
@@ -96,7 +163,7 @@ export default function BrowserPage() {
           <Card
             title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>截图</span>}
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", height: "100%" }}
-            bodyStyle={{ padding: 20 }}
+            styles={{ body: { padding: 20 } }}
           >
             {screenshotUrl ? (
               <Image src={screenshotUrl} alt="screenshot" style={{ borderRadius: 8, width: "100%" }} />

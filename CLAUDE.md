@@ -1,0 +1,257 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+> **Scope reminder.** The umbrella `~/WeBrain/CLAUDE.md` says: only `webrain-integration/` is actively developed. When the user says "the project," they mean this directory. `hermes-agent-main/` and `openclaw-main/` are reference-only.
+>
+> **Don't duplicate.** `README.md` covers user-facing setup, ports, and the architecture diagram. `docs/PROJECT_STATE.md` is the canonical state-of-the-project doc — read it on a fresh session to sync the full history. This file documents non-obvious things that are easy to get wrong.
+
+> **Round labels** (used in commits + `docs/PROJECT_STATE.md`):
+> `B` = core feature · `C` = smoke-test surface · `D` = benchmark / data tuning · `E` = audit-fix · `F` = frontend / performance · `G` = OSS prep · `H` = DB tuning · `I` = UI refactor · `J` = sandbox runtime · `K` = user-mode UX · `L` = ops + hardening.
+
+> **Current test totals** (2026-05-22, post Round S S5–S19):
+> **450** sub-brain unit + 1216 frontend unit + **645** main-brain unit + 53 backend smoke + **89** Playwright e2e (21 page-smoke + 15 functional-real + 39 functional-deep + 14 hermetic) + 5 benchmarks. **All green.**
+>
+> Playwright workers=5, retries=1 (local). functional-deep covers 10 groups: Skills/KG/Memory/Wiki/Agents/Chat/Dashboard/MemoryUI/DataOps/ErrorBounds + 3 cross-feature pipelines.
+
+> **Sandbox runtime decision** — see `docs/adr/0001-sandbox-runtime.md`. We stay on the in-house `DockerSandbox` + workspace mode; do not refactor toward E2B / OpenHands without first re-reading that ADR's "Triggers for revisiting" list.
+
+---
+
+## Commands
+
+### Setup (one-time)
+
+```bash
+# main-brain Python venv (REQUIRED — sub-brain spawns this Python interpreter
+# by preference; see sub-brain/src/main-brain-spawn.ts)
+cd sub-brain/main-brain && python3 -m venv venv && \
+  ./venv/bin/pip install -r requirements.txt && cd ../..
+
+# Sub-brain + frontend
+cd sub-brain && pnpm install && cd ..
+cd frontend && pnpm install && cd ..
+
+# Quick check that everything's in place
+./scripts/verify-install.sh
+```
+
+### Run all three services in dev
+
+```bash
+# Terminal 1 — main-brain (FastAPI on UDS by default, or TCP if WEBRAIN_MAIN_BRAIN_PORT set)
+cd sub-brain/main-brain && source venv/bin/activate && python main_brain.py
+
+# Terminal 2 — sub-brain (Fastify on :3000)
+cd sub-brain && pnpm dev
+
+# Terminal 3 — frontend (Vite HMR on :8587)
+cd frontend && pnpm dev
+```
+
+Note: sub-brain `pnpm dev` will auto-spawn its own main-brain if one isn't already running. To prevent that during smoke tests or when you've started main-brain manually, set `WEBRAIN_NO_MAIN_BRAIN=1`.
+
+### Test commands
+
+| What | Where | Command |
+|---|---|---|
+| Main-brain unit | `sub-brain/main-brain/` | `pytest` (default — excludes smoke + benchmark) |
+| Main-brain smoke (~6 min, spawns services) | same | `pytest -m smoke tests/smoke/ -s --no-cov` |
+| Main-brain benchmarks | same | `pytest -m benchmark -s --no-cov` |
+| Main-brain single test by name | same | `pytest -k "test_chat_no_tools"` |
+| Main-brain single benchmark | same | `pytest -m benchmark -s tests/test_rerank_impact.py` |
+| Sub-brain unit (vitest) | `sub-brain/` | `pnpm exec vitest run` |
+| Sub-brain single file | same | `pnpm exec vitest run tests/proxy.test.ts` |
+| Sub-brain type-check | same | `pnpm exec tsc --noEmit` |
+| Frontend unit (vitest + jsdom) | `frontend/` | `pnpm exec vitest run` |
+| Frontend e2e (Playwright, all hermetic-mocked) | `frontend/` | `pnpm exec playwright test` |
+| Frontend e2e single file | same | `pnpm exec playwright test e2e/chat-flow.spec.ts` |
+| Frontend type-check | same | `pnpm exec tsc --noEmit` |
+| Frontend lint | same | `pnpm lint` (read) or `pnpm lint:fix` (autofix) |
+| Umbrella integration (needs `:3000` + `/brain/health` live) | `webrain-integration/` | `pnpm exec vitest run` |
+| Single integration by name | same | `pnpm exec vitest run -t "memory search"` |
+
+### Common verification flow
+
+```bash
+./scripts/verify-install.sh             # deps + venv + node_modules sanity
+./scripts/verify-install.sh --smoke     # adds e2e smoke (~50s, spawns services)
+```
+
+---
+
+## Architecture: non-obvious facts
+
+The README has the diagram. These are the things that are easy to get wrong and aren't in the diagram:
+
+### Execution split
+
+- **Sub-brain is the execution layer.** Tools, plugins, channels, browser, sandbox, MCP, CLI all run here. Main-brain only does reasoning / memory / wiki / KG / model routing.
+- **Frontend never reaches main-brain directly.** Sub-brain exposes `/brain/*` as a pass-through proxy. For health checks of main-brain, use `GET /brain/health`.
+- **Proxy is intentionally not allowlisted** (`sub-brain/src/server/proxy.ts`). But it now **strips `x-forwarded-*` / `x-real-ip`** before forwarding (Round E2 hardening) — see comments inline.
+- **Authorization headers ARE forwarded.** The Round C4 smoke caught that the proxy used to strip them; required for MCP write-tool bearer auth.
+
+### Transport selection (sub-brain → main-brain)
+
+In `sub-brain/src/main.ts`:
+- If `WEBRAIN_MAIN_BRAIN_PORT` is set → TCP to that port (`http://127.0.0.1:$PORT`).
+- Otherwise → UDS at `WEBRAIN_MAIN_BRAIN_UDS` (default `/tmp/webrain-main.sock`).
+- v2.19 fix: previously `USE_UDS` was inverted (setting `WEBRAIN_MAIN_BRAIN_UDS`
+  *disabled* UDS instead of overriding the path); confirmed broken in real-user
+  test 2026-05-22. Now `PORT` env alone toggles transport.
+- Stale UDS sockets cause boot failure — clean before restart if you switch.
+
+### Main-brain bind + data dir
+
+- `main_brain.py` reads `--port`/`--uds` argparse args + `WEBRAIN_DATA_DIR` env.
+- **The data dir is the project's `data/main-brain/` directory by default.** Smoke tests set `WEBRAIN_DATA_DIR=<tmp>` to avoid polluting it. If you see hundreds of orphan rows accumulating in dev, that's why.
+- The port-bind happens BEFORE heavy lifespan init (sentence-transformers, etc.) so port conflicts fail fast — don't move that probe.
+
+### LLM config reload
+
+`POST /config/reload` on main-brain re-fetches LLM config from sub-brain's `/config/model`, then **must propagate the new config to every engine that holds its own copy**: chat, reasoning, dreaming, active_memory, kg, planner, AND the SkillReflector's pre-built llm_call closure. See `main_brain.py` near line 730. This is a recurring bug class — every engine that closes over `llm_config` at boot needs explicit handling here.
+
+### Sub-brain auto-spawn of main-brain
+
+Sub-brain's `main.ts` will spawn its own main-brain child unless `WEBRAIN_NO_MAIN_BRAIN=1`. The spawned child uses the venv interpreter discovered by `pickPythonInterpreter` (`sub-brain/src/main-brain-spawn.ts`). If venv is missing, it falls back to system `python3` with a loud warning. **Don't silently fall back without warning** — the user will spend hours debugging ModuleNotFoundError.
+
+### Frontend stores
+
+- `frontend/src/stores/` is the live Zustand layer.
+- `frontend/src/store/` (singular) is empty legacy — don't add anything there.
+- Every HTTP call goes through `frontend/src/api/*.ts`. When adding/renaming a frontend route, verify the matching endpoint exists in `sub-brain/src/server/`.
+
+---
+
+## Environment variable cheat sheet
+
+| Var | Service | Default | Effect |
+|---|---|---|---|
+| `WEBRAIN_MAIN_BRAIN_UDS` | sub-brain | `/tmp/webrain-main.sock` | UDS path override (only effective when `WEBRAIN_MAIN_BRAIN_PORT` is *unset*). |
+| `WEBRAIN_MAIN_BRAIN_PORT` | sub-brain | `18790` | Forces TCP transport to main-brain. |
+| `WEBRAIN_SUB_BRAIN_URL` | main-brain | `http://127.0.0.1:3000` | Where main-brain fetches `/config/model` from. Smoke fixtures set this to the spawned sub-brain's port. |
+| `WEBRAIN_NO_MAIN_BRAIN` | sub-brain | unset | If `1`, sub-brain skips auto-spawning a main-brain child. Useful when running main-brain manually. |
+| `WEBRAIN_DATA_DIR` | main-brain | `<repo>/data/main-brain/` | Override data dir. Smoke uses a tmpdir so it doesn't pollute the dev DB. |
+| `WEBRAIN_MCP_TOKEN` | main-brain | auto-generated to `~/.webrain/mcp_token` | Bearer token for MCP write tools. Smoke fixtures pin it. |
+| `WEBRAIN_CONFLICT_LLM_TIMEOUT_S` | main-brain | `20` | Per-candidate timeout for the conflict-judge LLM call. Smoke sets `2` to avoid hangs against unreachable mock URLs. |
+| `WEBRAIN_LLM_HEALTH_DISABLED` | main-brain | unset | If `1`, skips the background LLM-endpoint health monitor. Smoke uses this. |
+| `WEBRAIN_RELEVANCE_WEIGHT` | main-brain | `0.7` | Blender weight (memory retrieval). Round D2 picked this with rerank=True. |
+| `WEBRAIN_IMPORTANCE_WEIGHT` | main-brain | `1 - RELEVANCE` | Auto-derived; set only if you want non-complementary weights. |
+| `WEBRAIN_ACTIVE_MEMORY_ENABLED` | main-brain | `1` | Set to `0` to disable fire-and-forget ActiveMemory pattern extraction from chat. |
+| `WEBRAIN_PLANNER_ENABLED` | main-brain | `1` | Set to `0` to skip the Planner phase even when a Planner is wired. |
+| `WEBRAIN_RAG_TOP_K` | main-brain | `3` | Top-K chunks injected into chat system prompt. |
+| `WEBRAIN_RAG_MIN_SCORE` | main-brain | `0.0` | Minimum cosine to include a RAG chunk. |
+| `WEBRAIN_PYTHON` | sub-brain spawn | (auto-pick from venv) | Override Python interpreter when sub-brain spawns main-brain. |
+| `WEBRAIN_EMBEDDED` | main-brain | unset | Set to `1` automatically by sub-brain when spawning main-brain as a child. |
+| `WEBRAIN_HYDE_ENABLED` | main-brain | `1` | Round S1: HyDE 记忆检索增强。每次记忆查询前额外一次 LLM 调用生成假设答案文档用于向量检索，显著提升知识密集型问答的 recall。设为 `0` 禁用（降低延迟但会损失检索精度）。 |
+| `WEBRAIN_HYDE_MAX_TOKENS` | main-brain | `120` | HyDE 假设答案文档的最大 token 数。 |
+| `WEBRAIN_REFLECTION_ENABLED` | main-brain | `0` | Round S2: 反思循环。答复生成后自动评分，分低则修订（额外 1-2 次 LLM 调用）。默认关闭以控制延迟。 |
+| `WEBRAIN_REFLECTION_THRESHOLD` | main-brain | `3` | 反思触发分数阈值（1-5）。低于该值时触发修订。 |
+| `WEBRAIN_WORKING_MEMORY_ENABLED` | main-brain | `1` | Round S3: 会话工作记忆。每轮对话后异步提取 3-5 条关键事实，注入下轮系统提示，防止长对话中重要信息丢失。 |
+| `WEBRAIN_WORKING_MEMORY_MAX` | main-brain | `10` | 每个会话最大工作记忆条数（超出后滚动淘汰旧条目）。 |
+| `WEBRAIN_TOOL_CACHE_TTL` | main-brain | `300` | Round S4: 只读工具结果缓存 TTL（秒）。同一会话内相同参数的 file_read / http_request GET 命中缓存时跳过子脑调用。 |
+| `WEBRAIN_CONTEXT_COMPRESS_ENABLED` | main-brain | `1` | Round S5: 上下文压缩。工具调用链超过阈值时自动压缩中间历史，防止上下文窗口溢出。设为 `0` 禁用。 |
+| `WEBRAIN_CONTEXT_COMPRESS_THRESHOLD` | main-brain | `12` | 触发上下文压缩的消息条数阈值。超过此数量时对中间消息进行 LLM 摘要压缩。 |
+| `WEBRAIN_CONTEXT_COMPRESS_KEEP` | main-brain | `4` | 压缩时保留的最近消息条数（不压缩的末尾窗口）。 |
+| `WEBRAIN_DEDUP_ENABLED` | main-brain | `1` | Round S7: 语义去重。L2→L3 提取新事实前先做向量相似度检查，与现有 L3 高度相似（超过阈值）则更新已有行而非新建重复条目。设为 `0` 禁用（禁后每次 Dreaming 都会创建潜在重复行）。 |
+| `WEBRAIN_DEDUP_THRESHOLD` | main-brain | `0.85` | L3 语义去重的余弦相似度阈值（0-1）。超过此值视为重复，触发合并而非新建。调低可减少误合并；调高可减少漏合并。 |
+| `WEBRAIN_USER_PROFILE_ENABLED` | main-brain | `1` | Round S8: 持久化用户上下文。将 L3/L4 中的 [preference]/[goal] 事实无条件注入每次对话的系统提示，使 AI 时刻感知用户风格偏好（不依赖查询相关性）。设为 `0` 禁用。 |
+| `WEBRAIN_USER_PROFILE_TOP_K` | main-brain | `5` | S8 用户画像最多注入多少条 [preference]/[goal] 事实。 |
+| `WEBRAIN_USER_PROFILE_TTL` | main-brain | `60` | S8 用户画像缓存有效期（秒）。到期后下次对话重新查 DB。 |
+| `WEBRAIN_KG_CONTEXT_ENABLED` | main-brain | `1` | Round S9: KG 上下文注入。每次对话时用消息关键词检索知识图谱，将命中实体及其一跳关系注入系统提示，使 AI 能利用跨会话积累的结构化实体知识。纯内存操作，延迟 <1ms。设为 `0` 禁用。 |
+| `WEBRAIN_KG_CONTEXT_TOP_K` | main-brain | `3` | S9 每次最多注入多少个 KG 实体。 |
+| `WEBRAIN_KG_CONTEXT_MAX_RELS` | main-brain | `3` | S9 每个实体最多展开多少条直接关联关系。 |
+| `WEBRAIN_CONV_ANCHOR_ENABLED` | main-brain | `1` | Round S10: 会话锚点。新会话第一条消息时，在向量空间检索近期相关 L2 对话摘要注入系统提示，帮助 AI 维持跨会话对话脉络（"上次我们在讨论..."）。后续消息不触发。设为 `0` 禁用。 |
+| `WEBRAIN_CONV_ANCHOR_TOP_K` | main-brain | `2` | S10 最多注入多少条近期相关对话摘要。 |
+| `WEBRAIN_CONV_ANCHOR_DAYS` | main-brain | `7` | S10 只检索最近多少天内的 L2 摘要（超出则过滤）。 |
+| `WEBRAIN_MEM_CONFIDENCE_ENABLED` | main-brain | `1` | Round S11: 记忆置信度标注。每次对话在 memory_text 末尾追加 `[记忆支撑: N 条相关 · 其中 K 条已验证事实 · 置信度: 高/中/低]` 元信号，帮助 AI 校准其回答的确信度。零成本（仅统计已查询结果）。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_CONFIDENCE_THRESHOLD` | main-brain | `0.7` | S11 判定"已验证事实"的 importance 阈值（≥ 此值视为 L3/L4 已固化事实）。默认 0.7 与 L3 默认 importance 对齐。 |
+| `WEBRAIN_MEM_TIERED_ENABLED` | main-brain | `1` | Round S12: 分层记忆展示。将 memory_text 中的记忆条目按 importance 阈值分为"已验证事实"（L3/L4）和"近期对话片段"（L1/L2）两个区块，帮助 AI 在事实层面区分高置信来源。与 S11 共用 WEBRAIN_MEM_CONFIDENCE_THRESHOLD 阈值。设为 `0` 退回扁平格式。 |
+| `WEBRAIN_L4_ANCHOR_ENABLED` | main-brain | `1` | Round S13: L4 身份锚点强制注入。每次对话前额外查询 importance 最高的 K 条 L4 记忆，去重后前置追加到 relevant 列表，确保用户核心身份事实（工作风格、长期偏好等）始终进入上下文，不依赖语义相似性。单次 SQLite 排序查询，延迟 <1ms。设为 `0` 禁用。 |
+| `WEBRAIN_L4_ANCHOR_TOP_K` | main-brain | `2` | S13 每次前置追加的最大 L4 记忆条数。 |
+| `WEBRAIN_TEMPORAL_CONTEXT_ENABLED` | main-brain | `1` | Round S14: 时态上下文注入。每次对话系统提示前置追加 `[当前时间: YYYY-MM-DD 周X HH:MM]`，使 AI 具备时态感知能力，能正确回答"今天几号"、"帮我规划这周"等时态查询。零成本（单次 datetime.now() 调用）。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_FRESHNESS_ENABLED` | main-brain | `1` | Round S15: 记忆时效信号。计算 relevant 记忆的平均年龄（基于 created_at），在 memory_text 末尾追加 `[记忆时效: 高/中/低（平均 N 天前）]`，与 S11 置信度互补（S11=固化程度，S15=时间新鲜度）。帮助 AI 对陈旧记忆保持适当谨慎。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_FRESHNESS_FRESH_DAYS` | main-brain | `7` | S15 判定"高时效"的天数阈值（创建时间 < N 天前）。 |
+| `WEBRAIN_MEM_FRESHNESS_STALE_DAYS` | main-brain | `30` | S15 判定"低时效"的天数阈值（创建时间 ≥ N 天前为低时效）。 |
+| `WEBRAIN_KNOWLEDGE_GAP_ENABLED` | main-brain | `1` | Round S16: 知识缺口检测。当 relevant 为空时注入 `[知识缺口: 当前无相关记忆…]`，当全部为低置信片段时注入 `[知识缺口: 当前记忆均为低置信片段…]`，引导 AI 主动向用户澄清而非猜测/幻觉。将已知弱点转化为主动行为信号。零成本（纯逻辑判断）。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_SIGNAL_GUIDE_ENABLED` | main-brain | `1` | Round S17: 记忆信号使用指南。在 memory_text 顶部注入紧凑单行标签说明 `[记忆标签说明: 已验证事实=…; 近期片段=…; 知识缺口=…; 时效低=…]`，教导 AI 正确解读 S11-S16 注入的元信号，使整个 S 系列形成闭环。约 20 token 开销，仅在有实际记忆内容时注入。设为 `0` 禁用。 |
+| `WEBRAIN_QUERY_INTENT_ENABLED` | main-brain | `1` | Round S18: 查询意图感知。纯关键词分类（零 LLM 调用），将用户消息分为 PERSONAL_RECALL / TEMPORAL_RECALL / TASK_ASSIST / GENERAL 四类，在 memory_text 末尾追加对应的行为提示（如 `[查询意图: 个人信息回溯 — …]`），帮助 AI 在不同查询场景下灵活调整记忆引用策略。与 S16 互补：S16 反映"有多少记忆"，S18 反映"如何使用记忆"。设为 `0` 禁用。 |
+| `WEBRAIN_MEM_SOURCE_DIVERSITY_ENABLED` | main-brain | `1` | Round S19: 记忆来源多样性信号。统计 relevant 中 L3/L4（已验证事实，importance ≥ mem_confidence_threshold）与 L1/L2（近期片段）的条数分布，在 memory_text 中追加单行来源标签（如 `[记忆来源: 混合来源(已验证 2条 · 近期片段 1条) — 优先引用已验证事实]`）。与 S11 置信度聚合互补：S11 给整体评级（高/中/低），S19 给条数拆解，帮助 AI 了解当前记忆集的可信度结构。零成本（纯列表统计）。设为 `0` 禁用。 |
+| `WEBRAIN_SQLCIPHER_KEY` | main-brain | unset | ROADMAP V2 Axis 3 — opt-in at-rest 加密。设置后 `MemoryManager._make_pooled_connection` 会尝试 `import pysqlcipher3.dbapi2`，用 SQLCipher 驱动打开 `memory.db` 并先发 `PRAGMA key = '<value>'`。**新建库**：直接以加密形式创建。**已存在的明文库**：当前 MVP 不做自动迁移，请手动 `sqlcipher` CLI `ATTACH ... AS encrypted KEY '<key>'; SELECT sqlcipher_export('encrypted'); DETACH ...;` 后替换。**失败开放**：若 `pysqlcipher3` 未安装则打 warning 并回退到明文 sqlite3（不破坏 dev/test 流程；记得装好 binding 再上 prod）。未设此变量时行为与加密前完全一致。 |
+
+---
+
+## Test layer cheat sheet
+
+There are four distinct test layers — pick the right one for what you're verifying:
+
+| Layer | Files | What it catches | Cost |
+|---|---|---|---|
+| **Unit** | `sub-brain/tests/*.test.ts`, `frontend/src/**/*.test.tsx`, `sub-brain/main-brain/tests/test_*.py` (no marker) | Logic, type, branch | <2 min total |
+| **Smoke** (e2e backend) | `sub-brain/main-brain/tests/smoke/test_e2e_*.py` | Wiring bugs, config-reload propagation, FastAPI param mapping, proxy header behavior | ~6 min, real subprocesses |
+| **Playwright** (e2e frontend) | `frontend/e2e/*.spec.ts` | UI mount/render, backend response handling, security (token-leak) — all hermetic via `page.route()` | <30 s |
+| **Benchmark** | `sub-brain/main-brain/tests/test_*benchmark*.py`, `test_blender_grid.py`, `test_rerank_impact.py`, `test_chat_latency_benchmark.py` | Recall/MRR regression, blender weight optimality, P50/P95 latency | 2-5 min each, opt-in only |
+
+**Why the smoke layer exists.** The autonomous session 2026-05-20 caught 5 production bugs through smoke (closure-captured stale config × 2, FastAPI `Any → query` mapping, proxy header strip, vector-level filter bypass) and another 7 via code-reviewer audit — none of which the 1988 unit tests touched. The smoke pattern is `spawn real services + mock LLM + assert HTTP-level contracts`. See `tests/smoke/conftest.py` for the fixture machinery.
+
+**Mock LLM** lives at `sub-brain/main-brain/tests/smoke/mock_llm_server.py`. It branches on prompt content:
+- "fact contradiction judge" → JSON `{contradicts, reason}` (configurable via `PUT /__debug/conflict-mode`)
+- "memory consolidation expert" → echoes source so FTS keeps matching
+- else → `MOCK-LLM-REPLY` sentinel
+
+---
+
+## Hot bug-pattern reminders
+
+These are the architectural traps the smoke + audit layers kept catching. When adding new code, check for them explicitly:
+
+1. **Closure capture of `llm_config` at lifespan boot.** Any async helper that uses `llm_config` must read from `_state["chat"].llm_config` dynamically (or be rebuilt by `/config/reload`). The `_conflict_llm_caller` and `SkillReflector` both had this bug.
+
+2. **FastAPI `request: Any`** — gets mapped to a query parameter, not the body. Use `request: Dict[str, Any]` OR `request: Any = Body(...)`. The `/mcp/jsonrpc` endpoint was completely broken for 6 weeks because of this.
+
+3. **`asyncio.create_task` without retaining the Task** — CPython's GC can collect it mid-flight. Always store in a set + `add_done_callback(set.discard)`. The `ChatEngine._fire_active_memory_async` pattern is the reference.
+
+4. **Sync ML inference on the event loop.** `reranker.predict(pairs)` and `embedder.encode(text)` are CPU-bound; wrap in `loop.run_in_executor(None, ...)`. Cold-loading them can cost 10-30s of total event-loop block.
+
+5. **SQLite single-writer lock** — concurrent `memory.store` calls serialize. The chat-latency benchmark shows 30 concurrent calls take ~2.1s each. If you need more throughput, consider WAL mode or batched writes (not yet done).
+
+6. **Lazy-loaded singletons need a `threading.Lock` for double-checked init.** Both `_get_embedder` and `_get_reranker` in `memory_manager.py` use this pattern — copy it for any new ML model load.
+
+7. **`/brain/*` proxy strips most non-`x-*` headers.** When adding a new auth scheme that needs custom headers, either use `Authorization`, an `x-*` name, or extend the explicit forward list in `sub-brain/src/server/proxy.ts`.
+
+---
+
+## Code style conventions
+
+- **ESM throughout.** Relative TypeScript imports in sub-brain must end in `.js` (per `tsconfig` resolution). Frontend uses the same.
+- **Docs and inline comments are predominantly zh-CN.** Match the local style unless asked otherwise.
+- **Python 3.9+ required.** main-brain runs on the venv interpreter.
+- **Node 22+** for sub-brain and frontend.
+- **No `console.log` left in production code** — sub-brain uses pino (`request.log`), main-brain uses `logger`. Browser code can use console during dev but not in committed code.
+- **Don't add `|| true` to CI commands.** Tests must actually fail loudly.
+
+---
+
+## Things to leave alone
+
+- `hermes-agent-main/`, `openclaw-main/` — reference-only, do not touch.
+- `frontend/src/store/` (singular) — legacy stub, gets removed eventually.
+- `data/main-brain/` — runtime data. Polluting it with dev/test artifacts is a real maintenance burden; use `WEBRAIN_DATA_DIR=<tmp>` for tests.
+- `sub-brain/data/` — created at runtime, gitignored.
+- `dist/`, `node_modules/`, `venv/`, `htmlcov/` — all build artifacts, gitignored.
+- The Main↔Sub wire protocol (`protocol/protocol.md`) is intentionally unauthenticated and CORS-open. Don't add auth/rate-limit there unless explicitly asked.
+
+---
+
+## Where to look for context
+
+- **`README.md`** — user-facing setup, ports, architecture diagram.
+- **`docs/PROJECT_STATE.md`** — the single source of truth for "what's the state of the project right now." Section anchors worth knowing:
+  - §1–13 — session-by-session development history
+  - §14 — Memory benchmark baselines (recall@5/10, MRR; blender grid results both with and without rerank)
+  - §15 — Chat latency baseline (sequential P50/P95/P99 + concurrent P95)
+- **`docs/USER_TRIAL_2026-05-20.md`** — the user trial that surfaced the bug classes the smoke layer now catches.
+- **`CONTRIBUTING.md`** — dev workflow, branch naming, commit-style conventions, test-layer expectations for PRs (bilingual zh-CN + English).
+- **`LICENSE`** — MIT.
+- **`~/WeBrain/CLAUDE.md`** — umbrella scope rules (the "only webrain-integration/" rule).
+- **`~/CLAUDE.md`** — global user preferences (response language, Karpathy rules, Superpowers pipeline).

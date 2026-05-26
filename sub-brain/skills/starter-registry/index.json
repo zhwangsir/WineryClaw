@@ -1,0 +1,71 @@
+{
+  "registry_name": "webrain-starters",
+  "version": "1.0.0",
+  "description": "Eight production-quality starter skills shipped with WeBrain so the Skillhub Marketplace is non-empty on first install. All are deterministic, dependency-free, and demonstrate the skill SDK shape without calling out to the network.",
+  "skills": [
+    {
+      "id": "starter-clean-url",
+      "name": "Clean URL",
+      "description": "Strip tracking parameters (utm_*, fbclid, gclid, mc_*, ref, etc.) from a URL and return the cleaned link.",
+      "version": "1.0.0",
+      "path": "clean-url/skill.json",
+      "tags": ["url", "privacy", "utility"]
+    },
+    {
+      "id": "starter-slugify",
+      "name": "Slugify",
+      "description": "Convert text into a URL-safe slug (lowercase, hyphens, ASCII). Handles CJK by stripping or transliterating to dash.",
+      "version": "1.0.0",
+      "path": "slugify/skill.json",
+      "tags": ["text", "url", "utility"]
+    },
+    {
+      "id": "starter-json-pretty",
+      "name": "JSON Pretty",
+      "description": "Parse a JSON string and re-emit it pretty-printed (2-space indent), with a clear error if the input is invalid.",
+      "version": "1.0.0",
+      "path": "json-pretty/skill.json",
+      "tags": ["json", "format", "utility"]
+    },
+    {
+      "id": "starter-word-count",
+      "name": "Word Count",
+      "description": "Report word / char / line counts for a chunk of text. Words are split on whitespace; CJK characters count individually.",
+      "version": "1.0.0",
+      "path": "word-count/skill.json",
+      "tags": ["text", "stats", "utility"]
+    },
+    {
+      "id": "starter-markdown-toc",
+      "name": "Markdown TOC",
+      "description": "Extract H1-H6 headings from a markdown document and render a nested table of contents with GitHub-style anchor links.",
+      "version": "1.0.0",
+      "path": "markdown-toc/skill.json",
+      "tags": ["markdown", "docs", "utility"]
+    },
+    {
+      "id": "starter-csv-headers",
+      "name": "CSV Headers",
+      "description": "Read a CSV file path and report its header row + row count. No pandas dependency — uses stdlib csv module.",
+      "version": "1.0.0",
+      "path": "csv-headers/skill.json",
+      "tags": ["csv", "data", "utility"]
+    },
+    {
+      "id": "starter-base64-decode",
+      "name": "Base64 Decode",
+      "description": "Decode a base64-encoded string (standard or URL-safe variant) and return the UTF-8 text, with a clear error on invalid input.",
+      "version": "1.0.0",
+      "path": "base64-decode/skill.json",
+      "tags": ["encoding", "utility"]
+    },
+    {
+      "id": "starter-uuid-gen",
+      "name": "UUID Generator",
+      "description": "Generate N random UUID v4 strings (default 1). Useful when scaffolding tests, fixtures, or session IDs.",
+      "version": "1.0.0",
+      "path": "uuid-gen/skill.json",
+      "tags": ["uuid", "utility"]
+    }
+  ]
+}

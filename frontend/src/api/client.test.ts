@@ -10,8 +10,17 @@ vi.mock("axios", () => ({
     create: vi.fn(() => {
       mockAxiosInstance = {
         interceptors: {
-          request: { use: vi.fn((fn: any) => { requestInterceptor = fn; }) },
-          response: { use: vi.fn((s: any, e: any) => { responseSuccessInterceptor = s; responseErrorInterceptor = e; }) },
+          request: {
+            use: vi.fn((fn: any) => {
+              requestInterceptor = fn;
+            }),
+          },
+          response: {
+            use: vi.fn((s: any, e: any) => {
+              responseSuccessInterceptor = s;
+              responseErrorInterceptor = e;
+            }),
+          },
         },
         get: vi.fn(),
         post: vi.fn(),
@@ -64,11 +73,14 @@ describe("ApiClient", () => {
 
   it("clears pending request on response success", () => {
     new ApiClient();
-    const res = responseSuccessInterceptor({ config: { headers: {}, method: "post", url: "/api", data: {} }, data: 42 });
+    const res = responseSuccessInterceptor({
+      config: { headers: {}, method: "post", url: "/api", data: {} },
+      data: 42,
+    });
     expect(res.data).toBe(42);
   });
 
-  it("throws ApiError on 401 and clears token", async () => {
+  it("throws ApiError on 401 and clears token; redirects only if token existed (v2.19)", async () => {
     const originalHref = window.location.href;
     Object.defineProperty(window, "location", { value: { href: "/chat" }, writable: true });
     localStorage.setItem("webrain-api-key", "tok");
@@ -82,7 +94,28 @@ describe("ApiClient", () => {
 
     await expect(responseErrorInterceptor(err)).rejects.toBeInstanceOf(ApiError);
     expect(localStorage.getItem("webrain-api-key")).toBeNull();
+    // Had a token → redirect happens
     expect(window.location.href).toBe("/");
+
+    Object.defineProperty(window, "location", { value: { href: originalHref }, writable: true });
+  });
+
+  it("v2.19: 401 without a stored token does NOT redirect", async () => {
+    const originalHref = window.location.href;
+    Object.defineProperty(window, "location", { value: { href: "/dashboard" }, writable: true });
+    localStorage.removeItem("webrain-api-key");
+    new ApiClient();
+
+    const err = {
+      config: { headers: { "x-retry-count": 0 } },
+      response: { status: 401, data: { error: "Unauthorized" } },
+      message: "Request failed",
+    };
+
+    await expect(responseErrorInterceptor(err)).rejects.toBeInstanceOf(ApiError);
+    // No token to clear → no forced navigation. Caller may still handle the
+    // 401 (e.g. silently in fetchProactiveInsights).
+    expect(window.location.href).toBe("/dashboard");
 
     Object.defineProperty(window, "location", { value: { href: originalHref }, writable: true });
   });

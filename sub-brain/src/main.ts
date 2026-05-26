@@ -4,6 +4,43 @@
  * Streaming + Multi-model + Heartbeat
  */
 
+// ─── Startup banner (user-trial #6) ─────────────────────────────────────────
+// Before this banner existed, `pnpm dev` showed only the literal `$ tsx watch
+// src/main.ts` line then 30+ seconds of silence while module-init top-level
+// awaits ran. Users couldn't tell if the system was starting or hung. A
+// single banner line printed immediately after this module's first executable
+// statement makes "starting" unambiguous. Printed with console.log not
+// fastify.log because Fastify itself isn't instantiated yet.
+const __startupStartedAt = Date.now();
+console.log(
+  `[webrain sub-brain] starting (node ${process.version}, pid ${process.pid}) — ` +
+    "initializing modules…",
+);
+
+// ─── Fatal error capture (user-trial #7) ────────────────────────────────────
+// tsx watch swallows top-level rejections silently — the dual-notFoundHandler
+// bug spent 30 seconds appearing "hung" before manual `npx tsx` surfaced it.
+// These handlers ensure ANY top-level crash gets a loud stderr write before
+// process exit, even if tsx's own logger fails. We set up before any other
+// import side-effect runs because the imports themselves can throw.
+process.on("uncaughtException", (err) => {
+  console.error("\n[webrain sub-brain] FATAL uncaughtException at startup:");
+  console.error(err);
+  console.error(
+    "\nIf you saw nothing else from sub-brain before this line, the error " +
+      "happened during module init (top-level await / import side-effect). " +
+      "tsx watch sometimes swallows these — direct `npx tsx src/main.ts` " +
+      "reproduces them cleanly.",
+  );
+  // Re-throw so node still exits with non-zero
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("\n[webrain sub-brain] FATAL unhandledRejection at startup:");
+  console.error(reason);
+  process.exit(1);
+});
+
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import cors from "@fastify/cors";
@@ -13,8 +50,10 @@ import { fileURLToPath } from "url";
 import { dirname, join, resolve as pathResolve, sep as pathSep } from "path";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
+import { pickPythonInterpreter } from "./main-brain-spawn.js";
 import { ToolExecutor } from "./tools/tool-executor.js";
 import { ChannelManager } from "./channels/channel-manager.js";
+import { ChannelAutoReply } from "./channels/channel-auto-reply.js";
 import { PluginLoader } from "./plugins/plugin-loader.js";
 import { EcosystemHub } from "./ecosystem/ecosystem-hub.js";
 import { DokobotClient } from "./dokobot/dokobot-client.js";
@@ -33,7 +72,13 @@ import { WeBrainCLI } from "./cli/webrain-cli.js";
 const PORT = parseInt(process.env.WEBRAIN_SUB_BRAIN_PORT || "3000", 10);
 const MAIN_BRAIN_PORT = parseInt(process.env.WEBRAIN_MAIN_BRAIN_PORT || "18790", 10);
 const MAIN_BRAIN_UDS = process.env.WEBRAIN_MAIN_BRAIN_UDS || "/tmp/webrain-main.sock";
-const USE_UDS = !process.env.WEBRAIN_MAIN_BRAIN_UDS && !process.env.WEBRAIN_MAIN_BRAIN_PORT;
+// Transport selection (v2.19 fix — previously inverted):
+//   WEBRAIN_MAIN_BRAIN_PORT  set → force TCP (test/docker/multi-host deploys)
+//   WEBRAIN_MAIN_BRAIN_UDS   set → force UDS at the given path
+//   neither set              → UDS at the default `/tmp/webrain-main.sock`
+// Pre-fix bug: setting WEBRAIN_MAIN_BRAIN_UDS *disabled* UDS (truthy → !UDS = false),
+// so the proxy went to TCP :18790 and ECONNREFUSED'd. Confirmed in real-user test.
+const USE_UDS = !process.env.WEBRAIN_MAIN_BRAIN_PORT;
 const MAIN_BRAIN_URL = USE_UDS ? "http://localhost" : `http://127.0.0.1:${MAIN_BRAIN_PORT}`;
 const EMBEDDED = process.env.WEBRAIN_EMBEDDED === "1";
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -43,7 +88,13 @@ function mainBrainAxiosConfig(): any {
 }
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase() as "fatal" | "error" | "warn" | "info" | "debug" | "trace";
-const app = Fastify({ logger: { level: LOG_LEVEL } });
+// v2.38: bodyLimit must exceed REQUIRED_FASTIFY_BODY_LIMIT from uploads-routes,
+// otherwise the RAG drag-drop dropzone (advertised up to 50 MB after decode)
+// is unreachable — Fastify's default 1 MB caps would silently reject any
+// file >~750 KB binary as 413 Payload Too Large. Bug found 2026-05-22.
+// We import the constant statically to keep the contract in sync.
+import { REQUIRED_FASTIFY_BODY_LIMIT } from "./server/uploads-routes.js";
+const app = Fastify({ logger: { level: LOG_LEVEL }, bodyLimit: REQUIRED_FASTIFY_BODY_LIMIT });
 await app.register(cors, { origin: true, credentials: true });
 await app.register(websocket);
 
@@ -56,6 +107,7 @@ import { registerA2ARoutes } from "./server/a2a-routes.js";
 import { registerCLIRoutes } from "./server/cli-routes.js";
 import { registerDokobotRoutes } from "./server/dokobot-routes.js";
 import { registerMCPRoutes } from "./server/mcp-routes.js";
+import { registerHooksRoutes } from "./server/hooks-routes.js";
 import { registerIdentityRoutes } from "./server/identity-routes.js";
 import { registerEcosystemRoutes } from "./server/ecosystem-routes.js";
 import { registerProposalsRoutes } from "./server/proposals-routes.js";
@@ -82,6 +134,36 @@ app.addHook("onRequest", async (request, reply) => {
   reply.header("x-trace-id", traceId);
 });
 
+// Round O2 — auth lives in server/auth.ts (`registerAuth(app)` called
+// earlier). The inline N2 hook was removed: it duplicated the existing
+// system, used a different env var (WEBRAIN_API_TOKEN vs the canonical
+// WEBRAIN_API_KEY), and had path-normalization bypass bugs. auth.ts now
+// honors both env names and includes the path-canonicalization defense.
+
+// ===== /api prefix compat (frontend uses /api/channels, sub-brain serves /channels) =====
+//
+// ORDERING NOTE (Round P review): this hook MUST run AFTER registerAuth
+// (called above). Auth canonicalizes via `request.url` (unrewritten) and
+// strips `/api/` itself in its own canonicalPath helper, so the two are
+// consistent today. If you ever move registerAuth below this rewriter,
+// auth will see the already-rewritten path and its internal /api strip
+// becomes a no-op — the auth/routing path views will diverge and
+// /api/sandbox could become reachable without credentials when
+// auth is enabled. Keep registerAuth above; if you can't, also
+// remove the `/api/` strip from auth.ts canonicalPath.
+// Frontend api/*.ts wrappers consistently call `/api/<resource>` to avoid
+// SPA route collisions on `/channels` and `/config`. But sub-brain serves
+// those at `/channels` and `/config` directly (only skillhub uses the `/api`
+// prefix natively). Without this rewrite, every non-skillhub `/api/*`
+// request hits Fastify's 404, and the frontend's axios layer crashes
+// trying to read JSON from an HTML 404 page.
+app.addHook("onRequest", async (request) => {
+  const url = request.raw.url || "";
+  if (url.startsWith("/api/") && !url.startsWith("/api/skillhub")) {
+    request.raw.url = url.replace(/^\/api/, "");
+  }
+});
+
 app.addHook("onResponse", async (request, reply) => {
   const traceId = (request as any).traceId || "-";
   app.log.info({ traceId, method: request.method, url: request.url, statusCode: reply.statusCode, responseTime: reply.elapsedTime }, "request completed");
@@ -105,11 +187,19 @@ app.setErrorHandler((error, request, reply) => {
 });
 
 // ===== Not Found Handler =====
-app.setNotFoundHandler((request, reply) => {
-  const traceId = (request as any).traceId || "-";
-  app.log.warn({ traceId, url: request.url, method: request.method }, "route not found");
-  reply.status(404).send({ ok: false, error: "Not found", traceId });
-});
+// Only register this fallback if registerStatic didn't already set its own
+// (it does, with SPA-style index.html serving, when frontend dist is present).
+// Without this guard, Fastify throws "Not found handler already set for
+// Fastify instance with prefix: '/'" at startup — a hard crash that left the
+// sub-brain process alive but not listening on any port. Discovered during
+// real-user trial 2026-05-20; see PROJECT_STATE §user-trial.
+if (!frontendDist) {
+  app.setNotFoundHandler((request, reply) => {
+    const traceId = (request as any).traceId || "-";
+    app.log.warn({ traceId, url: request.url, method: request.method }, "route not found");
+    reply.status(404).send({ ok: false, error: "Not found", traceId });
+  });
+}
 
 const wsHub = new WebSocketHub();
 
@@ -136,9 +226,65 @@ const state = {
   cli: new WeBrainCLI({ subBrainUrl: `http://127.0.0.1:${PORT}`, mainBrainUrl: MAIN_BRAIN_URL }),
 };
 
+// Bootstrap starter skill registry (vision-gap #1, 2026-05-21):
+// Ship a non-empty Skillhub Marketplace out of the box. The repo carries
+// 8 production-quality starter skills under
+// `<sub-brain>/skills/starter-registry/`. Seed only if the user hasn't
+// added a registry with this name themselves — idempotent. Removal via
+// the Skillhub UI is honoured (we don't re-seed on every boot).
+{
+  const STARTER_NAME = "webrain-starters";
+  const existing = state.skillHubClient.listRegistries();
+  if (!existing.some((r) => r.name === STARTER_NAME)) {
+    // Resolve the registry directory relative to this file's location so
+    // it works in both `pnpm dev` (src/) and a built `dist/` layout. The
+    // tsc layout mirrors src/, so going up two levels lands us at
+    // sub-brain/, and the registry lives at sub-brain/skills/...
+    const candidatePaths = [
+      pathResolve(__dirname, "../skills/starter-registry"),
+      pathResolve(__dirname, "../../skills/starter-registry"),
+    ];
+    const starterPath = candidatePaths.find((p) => existsSync(join(p, "index.json")));
+    if (starterPath) {
+      const add = state.skillHubClient.addRegistry({
+        name: STARTER_NAME,
+        url: "file://" + starterPath,
+        enabled: true,
+        priority: 100,
+      });
+      if (add.ok) {
+        app.log.info(`[skillhub] seeded starter registry at ${starterPath}`);
+      } else {
+        app.log.warn(`[skillhub] starter registry seed skipped: ${add.error}`);
+      }
+    } else {
+      app.log.warn("[skillhub] starter registry index.json not found in any candidate path");
+    }
+  }
+}
+
 await state.toolExecutor.initialize();
 await state.channelManager.initialize();
 state.channelManager.setBroadcastHandler((msg: unknown) => wsHub.broadcast(msg));
+
+// M5: wire channel auto-reply — inbound messages on auto_reply-enabled
+// channels are forwarded to main-brain /chat and the reply is sent
+// back through the same channel.
+const channelAutoReply = new ChannelAutoReply({
+  channelManager: state.channelManager,
+  chatFn: async ({ message, session_id, agent_id }) => {
+    const axios = (await import("axios")).default;
+    const resp = await axios.post(
+      `${MAIN_BRAIN_URL}/chat`,
+      { message, session_id, agent_id, tools_enabled: false },
+      USE_UDS
+        ? { socketPath: MAIN_BRAIN_UDS, timeout: 120000 }
+        : { timeout: 120000 },
+    );
+    return { reply: resp.data?.reply ?? "" };
+  },
+});
+state.channelManager.setInboundHandler(channelAutoReply.handleInbound);
 await Promise.all([
   state.pluginLoader.initialize(),
   state.ecosystemHub.initialize(),
@@ -146,6 +292,13 @@ await Promise.all([
 ]);
 
 const dockerAvailable = state.dockerSandbox.isAvailable();
+// User-trial #9: friendly one-liner instead of the raw ChildProcess error
+// dump that used to spam stderr when docker wasn't installed.
+if (dockerAvailable) {
+  app.log.info("[docker] Sandbox available — execute_shell can run in containers");
+} else {
+  app.log.info("[docker] Sandbox disabled (docker not on PATH) — fallback to host shell");
+}
 
 // ===== Start Main Brain (Python) as child process =====
 let mainBrainProc: ChildProcess | null = null;
@@ -163,7 +316,22 @@ function startMainBrain(): Promise<void> {
       return;
     }
 
-    const pythonCmd = process.env.WEBRAIN_PYTHON || "python3";
+    const mainBrainDir = pathResolve(mainBrainScript, "..");
+    const pick = pickPythonInterpreter(mainBrainDir, process.env);
+    const pythonCmd = pick.path;
+    if (pick.diagnostic === "venv") {
+      app.log.info(`[main-brain] Using venv interpreter: ${pythonCmd}`);
+    } else if (pick.diagnostic === "env") {
+      app.log.info(`[main-brain] Using interpreter from WEBRAIN_PYTHON env: ${pythonCmd}`);
+    } else {
+      app.log.warn(
+        "[main-brain] No venv found at sub-brain/main-brain/venv/bin/python3. " +
+        "Falling back to system `python3`. If main-brain crashes with " +
+        "ModuleNotFoundError, follow README to create the venv: " +
+        "`cd sub-brain/main-brain && python3 -m venv venv && " +
+        "./venv/bin/pip install -r requirements.txt`"
+      );
+    }
     // Clean up stale UDS socket
     try { if (USE_UDS) require("fs").unlinkSync(MAIN_BRAIN_UDS); } catch (err) { console.error("[main] Error:", err); console.error("[cleanup] Error:", err); }
     const args = USE_UDS
@@ -263,6 +431,9 @@ registerSkillsRoutes(app, { skillManager: state.skillManager });
 // MCP routes — see server/mcp-routes.ts.
 registerMCPRoutes(app, { mcpClient: state.mcpClient });
 
+// v2.12 — Cross-process plugin-hook bridge for main-brain LLM/session events.
+registerHooksRoutes(app, { hookRegistry });
+
 // CLI routes — see server/cli-routes.ts.
 registerCLIRoutes(app, { cli: state.cli });
 
@@ -335,3 +506,11 @@ app.log.info(`Sub Brain running on http://0.0.0.0:${PORT}`);
 if (frontendDist) {
   app.log.info(`UI available at http://localhost:${PORT}`);
 }
+// Final ready-banner — pairs with the "starting…" line printed at the very
+// top of this module. Lets users immediately tell when boot is complete and
+// how long it took. console.log not app.log so it shows even if the Fastify
+// logger is configured to a higher level for some reason.
+const __startupMs = Date.now() - __startupStartedAt;
+console.log(
+  `[webrain sub-brain] ready on :${PORT} (${(__startupMs / 1000).toFixed(1)}s startup)`,
+);

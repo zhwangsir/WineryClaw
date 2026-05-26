@@ -14,6 +14,9 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
+import { runJsSkill } from "./runtime/run-js-skill.js";
+import { runJsVmSkill } from "./runtime/run-js-vm-skill.js";
+import { runPythonSkill } from "./runtime/run-python-skill.js";
 
 // --------------------------------------------------------------------------------
 // Types
@@ -64,6 +67,20 @@ export interface Skill {
   // --- OpenClaw-style source provenance ---
   source?: SkillSource;
   hubRegistry?: string;         // e.g. "agentskills.io"
+
+  /**
+   * v2.37 (M6.1 收尾): JavaScript skills only — when true, the skill is
+   * executed via the vm-context sandbox (`runJsVmSkill`) instead of the
+   * standard worker_threads runtime. Inside the sandbox `require`,
+   * `process`, `eval`, and `new Function` are all unreachable, so the
+   * skill cannot read host files / make outbound HTTP / shell out.
+   *
+   * Default false to preserve M6a behavior for the 30+ existing built-in
+   * skills that legitimately need `child_process` / `fs`. Set to true on
+   * AI-generated or community-submitted skills — anything you wouldn't
+   * trust with full Node access.
+   */
+  sandbox?: boolean;
 }
 
 export interface SkillInvocation {
@@ -150,11 +167,56 @@ export class SkillManager {
   }
 
   /**
+   * Public re-entry to the hub-installed loader. Call this after the
+   * Skillhub install/uninstall handlers touch ~/.webrain/skills/installed
+   * so the in-memory `skills` map matches what's on disk. Without this
+   * the install API succeeded but `invokeSkill(id)` would fail with
+   * "Skill not found" until the next sub-brain restart.
+   * Removes in-memory hub skills whose files no longer exist on disk
+   * so uninstall is also reflected.
+   */
+  reloadInstalledHubSkills(): void {
+    // Drop any previously-loaded HUB skills whose disk file is gone.
+    // Original implementation used a fragile `createdBy` heuristic that
+    // didn't match the real sentinels ("agent-default", "webrain-built-in",
+    // "agent-auto") and silently evicted user-authored skills on every
+    // install/uninstall (code-review finding 2026-05-21).
+    // The right discriminator is `source === "hub"` — SkillHubClient sets
+    // it at install time (skill-hub-client.ts: `skill.source = "hub"`).
+    const live = new Set<string>();
+    if (existsSync(INSTALLED_DIR)) {
+      for (const id of readdirSync(INSTALLED_DIR)) {
+        if (existsSync(join(INSTALLED_DIR, id, "skill.json"))) live.add(id);
+      }
+    }
+    for (const [id, sk] of this.skills) {
+      if (sk.source === "hub" && !live.has(id)) {
+        this.skills.delete(id);
+      }
+    }
+    this._loadInstalledHubSkills();
+  }
+
+  /**
    * Load skills installed via SkillHubClient. Mirrors _loadImprovedForks
    * but reads from ~/.webrain/skills/installed/<id>/skill.json.
    */
   private _loadInstalledHubSkills(): void {
-    if (!existsSync(INSTALLED_DIR)) return;
+    if (!existsSync(INSTALLED_DIR)) {
+      // Seed built-in skills on first launch so the marketplace isn't empty.
+      this._seedInstalledSkills();
+      return;
+    }
+    // If the directory exists but is empty, also seed.
+    try {
+      const entries = readdirSync(INSTALLED_DIR);
+      if (entries.length === 0) {
+        this._seedInstalledSkills();
+        return;
+      }
+    } catch {
+      return;
+    }
     try {
       let count = 0;
       for (const id of readdirSync(INSTALLED_DIR)) {
@@ -173,6 +235,42 @@ export class SkillManager {
       if (count > 0) console.log(`[skills] Loaded ${count} hub-installed skills`);
     } catch (err) {
       console.warn("[skills] Hub-installed load failed:", err);
+    }
+  }
+
+  /**
+   * Seed 2 demo skills from builtins into installed/ on first launch.
+   * This ensures the Skillhub marketplace isn't empty for new users.
+   */
+  private _seedInstalledSkills(): void {
+    try {
+      const __dirname = dirname(fileURLToPath(import.meta.url));
+      const builtinsDir = join(__dirname, "builtins");
+      if (!existsSync(builtinsDir)) return;
+      const seedIds = ["skill-json", "skill-csv"];
+      let seeded = 0;
+      for (const file of readdirSync(builtinsDir).filter((f) => f.endsWith(".json"))) {
+        const raw = JSON.parse(readFileSync(join(builtinsDir, file), "utf-8"));
+        if (!seedIds.includes(raw.id)) continue;
+        const skill: Skill = {
+          ...raw,
+          usageCount: raw.usageCount ?? 0,
+          successRate: raw.successRate ?? 1.0,
+          createdBy: raw.createdBy ?? "webrain-built-in",
+          createdAt: raw.createdAt ?? new Date().toISOString(),
+          updatedAt: raw.updatedAt ?? new Date().toISOString(),
+          source: "hub",
+          version: raw.version ?? 1,
+        };
+        const targetDir = join(INSTALLED_DIR, skill.id);
+        mkdirSync(targetDir, { recursive: true });
+        writeFileSync(join(targetDir, "skill.json"), JSON.stringify(skill, null, 2), "utf-8");
+        this.skills.set(skill.id, skill);
+        seeded++;
+      }
+      if (seeded > 0) console.log(`[skills] Seeded ${seeded} demo skills into marketplace`);
+    } catch (err) {
+      console.warn("[skills] Seed failed:", err);
     }
   }
 
@@ -311,28 +409,37 @@ export class SkillManager {
     let result: unknown;
     let error: string | undefined;
 
-    try {
-      if (skill.language === "python") {
-        const { execSync } = await import("child_process");
-        const paramJson = JSON.stringify(params).replace(/"/g, '\\"');
-        const wrapped = `import json\nparams = json.loads("${paramJson}")\n${skill.code}`;
-        result = execSync(`python3 -c "${wrapped.replace(/"/g, '\\"')}"`, {
-          encoding: "utf-8",
-          timeout: 30000,
-        });
+    // M6a: isolated runtimes — see ./runtime/run-{js,python}-skill.ts.
+    // Params arrive via structured clone (JS) or stdin JSON (Python),
+    // never shell-interpolated. Timeouts terminate cleanly. The runners
+    // never throw; ok=false carries the error message back.
+    if (skill.language === "python") {
+      const r = await runPythonSkill({ code: skill.code, params });
+      if (r.ok) {
+        result = r.result;
         success = true;
-      } else if (skill.language === "javascript" || skill.language === "typescript") {
-        const paramJson = JSON.stringify(params);
-        const wrapped = `const params = ${paramJson};\n${skill.code}`;
-        const { execSync } = await import("child_process");
-        result = execSync(`node -e "${wrapped.replace(/"/g, '\\"')}"`, {
-          encoding: "utf-8",
-          timeout: 30000,
-        });
-        success = true;
+      } else {
+        error = r.error;
+        result = error;
       }
-    } catch (err: any) {
-      error = String(err.message || err);
+    } else if (skill.language === "javascript" || skill.language === "typescript") {
+      // v2.37: dispatch to vm-context sandbox if the skill is marked
+      // untrusted/AI-generated. See `Skill.sandbox` field documentation
+      // for the threat model. The vm runtime is significantly more
+      // restrictive — no require/process/eval — so legacy built-ins
+      // that need child_process/fs continue using the worker runtime.
+      const r = skill.sandbox
+        ? await runJsVmSkill({ code: skill.code, params })
+        : await runJsSkill({ code: skill.code, params });
+      if (r.ok) {
+        result = r.result;
+        success = true;
+      } else {
+        error = r.error;
+        result = error;
+      }
+    } else {
+      error = `unsupported skill language: ${skill.language}`;
       result = error;
     }
 

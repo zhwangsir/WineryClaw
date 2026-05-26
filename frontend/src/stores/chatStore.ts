@@ -83,6 +83,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role: "assistant",
         content: res.reply,
         toolCalls: res.toolCalls,
+        ragSources: res.ragSources,
+        plan: res.plan,
         timestamp: new Date().toISOString(),
       };
       set((s) => ({ messages: [...s.messages, assistantMsg], loading: false }));
@@ -94,10 +96,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   sendStream: async (text, agentId = "agent-default") => {
     const { currentSessionId, toolEnabled } = get();
+    // [Q-debug] mark each call so duplicate fires are visible.
+    const dbgId = Math.random().toString(36).slice(2, 8);
+    // eslint-disable-next-line no-console
+    console.warn("[chatStore.sendStream]", dbgId, "called text=", text.slice(0, 40), "had-active=", !!activeSseClient);
     set({ streaming: true, hasNewMessage: false });
 
     // Abort any previous stream
     if (activeSseClient) {
+      // eslint-disable-next-line no-console
+      console.warn("[chatStore.sendStream]", dbgId, "aborting previous SSE client");
       activeSseClient.abort();
     }
 
@@ -139,6 +147,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const last = msgs[msgs.length - 1];
             if (last?.role === "assistant") {
               msgs[msgs.length - 1] = { ...last, reasoning: (last.reasoning || "") + chunk.data };
+            }
+            return { messages: msgs };
+          });
+        } else if (chunk.type === "rag_sources") {
+          // Stream-side equivalent of res.ragSources for non-stream path —
+          // backend yields this BEFORE first content chunk so the badge renders
+          // immediately even while tokens are still streaming.
+          set((s) => {
+            const msgs = [...s.messages];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === "assistant") {
+              msgs[msgs.length - 1] = { ...last, ragSources: chunk.data };
+            }
+            return { messages: msgs };
+          });
+        } else if (chunk.type === "plan") {
+          // Backend emits the M2 plan before the first content chunk so the
+          // task-list UI renders while tokens stream. See chat_engine.chat_stream.
+          set((s) => {
+            const msgs = [...s.messages];
+            const last = msgs[msgs.length - 1];
+            if (last?.role === "assistant") {
+              msgs[msgs.length - 1] = { ...last, plan: chunk.data };
             }
             return { messages: msgs };
           });

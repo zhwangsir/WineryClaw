@@ -42,7 +42,13 @@ describe("identityStore", () => {
   });
 
   it("createUser adds user and refreshes", async () => {
-    vi.mocked(identityApi.createUser).mockResolvedValue({ id: "u2", name: "Bob", role: "user", workspaces: ["default"], createdAt: "2024-01-01" });
+    vi.mocked(identityApi.createUser).mockResolvedValue({
+      id: "u2",
+      name: "Bob",
+      role: "user",
+      workspaces: ["default"],
+      createdAt: "2024-01-01",
+    });
     const fetchSpy = vi.spyOn(useIdentityStore.getState(), "fetchUsers").mockResolvedValue();
     await useIdentityStore.getState().createUser({ name: "Bob", role: "user" });
     expect(fetchSpy).toHaveBeenCalled();

@@ -134,11 +134,20 @@ describe("registerBrainProxy", () => {
       data: fakeStream,
     });
 
-    await app.inject({
+    // Round Q5: the handler now calls reply.hijack(), which means
+    // `app.inject` never resolves (Fastify yields control of the
+    // response). Fire the inject without awaiting and poll until the
+    // axios mock has been called.
+    void app.inject({
       method: "GET",
       url: "/brain/chat/stream",
       headers: { accept: "text/event-stream" },
     });
+    // Poll up to ~500ms for the async handler to reach the axios call.
+    for (let i = 0; i < 50; i++) {
+      if (axiosMock.mock.calls.length > 0 && fakeStream.pipe.mock.calls.length > 0) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
 
     const config = axiosMock.mock.calls[0][0];
     expect(config.responseType).toBe("stream");

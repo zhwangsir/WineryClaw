@@ -118,7 +118,12 @@ describe("toolStore", () => {
   });
 
   it("toggleTool enables tool with optimistic update", async () => {
-    useToolStore.setState({ tools: [{ name: "t1", enabled: false }, { name: "t2", enabled: false }] });
+    useToolStore.setState({
+      tools: [
+        { name: "t1", enabled: false },
+        { name: "t2", enabled: false },
+      ],
+    });
     vi.mocked(toolsApi.enable).mockResolvedValue(undefined);
     await useToolStore.getState().toggleTool("t1", true);
     expect(useToolStore.getState().tools[0].enabled).toBe(true);

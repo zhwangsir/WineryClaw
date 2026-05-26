@@ -133,6 +133,11 @@ export default function ModelConfigPanel() {
             rowKey="name"
             dataSource={endpoints}
             pagination={false}
+            // v2.42 — explicit scroll.x guarantees the right-most columns
+            // (优先级 / 超时 / 操作) never get clipped on a narrow Card.
+            // Previously the table header overflowed and the action icons
+            // were cut off below ~880px effective width.
+            scroll={{ x: 760 }}
             columns={[
               { title: "名称", dataIndex: "name", width: 120 },
               { title: "Base URL", dataIndex: "baseUrl", ellipsis: true },
@@ -238,7 +243,7 @@ export default function ModelConfigPanel() {
         onCancel={() => setEpModalOpen(false)}
         onOk={handleSaveEp}
         okText="保存"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={epForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item label="名称" name="name" rules={[{ required: true }]}>

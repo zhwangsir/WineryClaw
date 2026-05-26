@@ -48,5 +48,22 @@ export function Loading({ tip = "加载中...", fullScreen }: LoadingProps) {
     );
   }
 
-  return <div style={{ padding: "80px 0" }}>{content}</div>;
+  // v2.42 — inline placeholder used inside a page region (e.g. dashboard
+  // `if (!health) return <Loading />`). Previously rendered with `padding:
+  // 80px 0` which made the spinner sit just below the page title, leaving
+  // the rest of the page glaringly empty. Using `min-height: 40vh` lets
+  // the spinner visually centre within the page region instead.
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: "40vh",
+        padding: "32px 0",
+      }}
+    >
+      {content}
+    </div>
+  );
 }

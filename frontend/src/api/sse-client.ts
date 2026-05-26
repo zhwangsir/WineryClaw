@@ -105,6 +105,9 @@ export class SSEClient {
       clearTimeout(this.heartbeatTimer);
 
       if (err.name === "AbortError") {
+        // [Q-debug] surface where the abort came from — Q1.5 investigation.
+        // eslint-disable-next-line no-console
+        console.warn("[SSE] aborted", { url, reason: this.abortController?.signal?.reason });
         onError?.(new Error("Connection aborted"));
         return;
       }

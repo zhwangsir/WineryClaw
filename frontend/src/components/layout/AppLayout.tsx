@@ -10,8 +10,10 @@ interface AppLayoutProps {
   children: React.ReactNode;
 }
 
+const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
+
 export function AppLayout({ children }: AppLayoutProps) {
-  const { fetchHealth } = useSystemStore();
+  const { fetchHealth, startInsightPolling, stopInsightPolling } = useSystemStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -19,6 +21,12 @@ export function AppLayout({ children }: AppLayoutProps) {
     const i = setInterval(fetchHealth, 30000);
     return () => clearInterval(i);
   }, [fetchHealth]);
+
+  // S6: 启动主动洞察轮询（挂载时启动，卸载时停止）
+  useEffect(() => {
+    startInsightPolling();
+    return () => stopInsightPolling();
+  }, [startInsightPolling, stopInsightPolling]);
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
@@ -60,6 +68,26 @@ export function AppLayout({ children }: AppLayoutProps) {
 
       <Layout className="layout-content" style={{ marginLeft: 240 }}>
         <HeaderBar onMenuClick={() => setSidebarOpen(true)} />
+        {isTauri && (
+          <div
+            style={{
+              position: "fixed",
+              top: 8,
+              right: 8,
+              zIndex: 1000,
+              padding: "2px 8px",
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 4,
+              background: "var(--c-accent)",
+              color: "#fff",
+              opacity: 0.9,
+              pointerEvents: "none",
+            }}
+          >
+            Desktop
+          </div>
+        )}
         <Content
           className="page-content"
           style={{

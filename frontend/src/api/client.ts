@@ -68,10 +68,17 @@ export class ApiClient {
         const rawMessage = err.response?.data?.error || err.message || "Request failed";
         const category = classifyError(status, err.message || "");
 
-        // Auth: clear token and redirect
+        // Auth: clear token. Only redirect if the user actually HAD a token
+        // — otherwise the 401 came from an endpoint that nominally requires
+        // server-side auth (MCP token, etc.) which the user never plumbed
+        // through. Hard-redirecting would bounce them off any admin page
+        // that polls such endpoints. v2.19 bug: /brain/proactive/insights
+        // polls every 30s; bare visit to /dashboard → 401 → redirect to / →
+        // admin mode entirely unusable.
         if (status === 401) {
+          const hadToken = !!localStorage.getItem("webrain-api-key");
           localStorage.removeItem("webrain-api-key");
-          window.location.href = "/";
+          if (hadToken) window.location.href = "/";
           throw new ApiError(status, rawMessage, category);
         }
 
@@ -105,6 +112,12 @@ export class ApiClient {
 
   put<T>(url: string, data?: unknown, config?: AxiosRequestConfig) {
     return this.instance.put<T>(url, data, config).then((r) => r.data);
+  }
+
+  /** v2.39: PATCH for partial updates. Added so the SkillHub registry
+   * toggle UI can flip `enabled` on/off without a remove+re-add dance. */
+  patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig) {
+    return this.instance.patch<T>(url, data, config).then((r) => r.data);
   }
 
   delete<T>(url: string, config?: AxiosRequestConfig) {

@@ -35,15 +35,34 @@ type TabKey = "marketplace" | "installed" | "improvements" | "drafts";
 export default function SkillhubPage() {
   const {
     // marketplace
-    skills, loading, fetchSkills, search, install, refresh,
+    skills,
+    loading,
+    fetchSkills,
+    search,
+    install,
+    refresh,
     // installed
-    installed, installedLoading, fetchInstalled, uninstall,
+    installed,
+    installedLoading,
+    fetchInstalled,
+    uninstall,
     // registries
-    registries, registriesLoading, fetchRegistries, addRegistry, removeRegistry,
+    registries,
+    registriesLoading,
+    fetchRegistries,
+    addRegistry,
+    removeRegistry,
+    updateRegistry, // v2.39 — enabled toggle
     // candidates
-    candidates, candidatesLoading, fetchCandidates, improve,
+    candidates,
+    candidatesLoading,
+    fetchCandidates,
+    improve,
     // drafts
-    drafts, draftsLoading, fetchDrafts, promoteDraft,
+    drafts,
+    draftsLoading,
+    fetchDrafts,
+    promoteDraft,
   } = useSkillhubStore();
 
   const [activeTab, setActiveTab] = useState<TabKey>("marketplace");
@@ -77,11 +96,7 @@ export default function SkillhubPage() {
   };
 
   return (
-    <PageShell
-      title="Skillhub"
-      subtitle="技能市场 · 安装 · 自我改进 · 草稿审核"
-      icon={<AppstoreAddOutlined />}
-    >
+    <PageShell title="技能市场" subtitle="Skillhub · 安装 · 自我改进 · 草稿审核" icon={<AppstoreAddOutlined />}>
       <Tabs
         activeKey={activeTab}
         onChange={(k) => setActiveTab(k as TabKey)}
@@ -90,7 +105,7 @@ export default function SkillhubPage() {
             key: "marketplace",
             label: (
               <span>
-                <AppstoreAddOutlined /> Marketplace
+                <AppstoreAddOutlined /> 市场
               </span>
             ),
             children: (
@@ -106,6 +121,7 @@ export default function SkillhubPage() {
                 registriesLoading={registriesLoading}
                 onAddRegistryClick={() => setRegistryModalOpen(true)}
                 onRemoveRegistry={removeRegistry}
+                onToggleRegistry={(name, enabled) => updateRegistry(name, { enabled })}
               />
             ),
           },
@@ -113,8 +129,7 @@ export default function SkillhubPage() {
             key: "installed",
             label: (
               <span>
-                <CheckOutlined /> Installed{" "}
-                <Tag style={{ marginLeft: 4 }}>{installed.length}</Tag>
+                <CheckOutlined /> 已安装 <Tag style={{ marginLeft: 4 }}>{installed.length}</Tag>
               </span>
             ),
             children: (
@@ -130,7 +145,7 @@ export default function SkillhubPage() {
             key: "improvements",
             label: (
               <span>
-                <ThunderboltOutlined /> Improvements{" "}
+                <ThunderboltOutlined /> 改进{" "}
                 <Tag style={{ marginLeft: 4 }} color={candidates.length > 0 ? "orange" : undefined}>
                   {candidates.length}
                 </Tag>
@@ -156,7 +171,7 @@ export default function SkillhubPage() {
             key: "drafts",
             label: (
               <span>
-                <FileTextOutlined /> Drafts{" "}
+                <FileTextOutlined /> 草稿{" "}
                 <Tag style={{ marginLeft: 4 }} color={drafts.length > 0 ? "blue" : undefined}>
                   {drafts.length}
                 </Tag>
@@ -193,7 +208,7 @@ export default function SkillhubPage() {
           const ok = await improve(
             improveModalState.candidate.skill.id,
             improveModalState.code,
-            improveModalState.reason,
+            improveModalState.reason
           );
           if (ok) setImproveModalState({ open: false, code: "", reason: "" });
         }}
@@ -220,11 +235,23 @@ interface MarketplaceTabProps {
   registriesLoading: boolean;
   onAddRegistryClick: () => void;
   onRemoveRegistry: (name: string) => void;
+  /** v2.39 — flip enabled flag on existing registry. */
+  onToggleRegistry: (name: string, enabled: boolean) => void;
 }
 
 function MarketplaceTab({
-  skills, loading, q, onQChange, onSearch, onInstall, onRefreshAll,
-  registries, registriesLoading, onAddRegistryClick, onRemoveRegistry,
+  skills,
+  loading,
+  q,
+  onQChange,
+  onSearch,
+  onInstall,
+  onRefreshAll,
+  registries,
+  registriesLoading,
+  onAddRegistryClick,
+  onRemoveRegistry,
+  onToggleRegistry,
 }: MarketplaceTabProps) {
   return (
     <>
@@ -249,12 +276,41 @@ function MarketplaceTab({
         loading={registriesLoading}
         onAddClick={onAddRegistryClick}
         onRemove={onRemoveRegistry}
+        onToggle={onToggleRegistry}
       />
 
+      {/* v2.41 — suppress the redundant lower empty state when the
+          RegistryPanel above already says "尚未配置任何 registry". Stacking
+          two empty illustrations on top of each other looked broken — the
+          user only needs ONE next-step message. When registries DO exist
+          but returned zero skills, show a more actionable hint pointing at
+          the 刷新 button rather than the generic Empty illustration. */}
       {skills.length === 0 && !loading ? (
-        <Empty description="无技能 — 添加一个 registry 后刷新试试" />
+        registries.length === 0 ? null : (
+          <Card
+            style={{
+              borderRadius: 12,
+              marginTop: 16,
+              textAlign: "center",
+              padding: "40px 24px",
+              background: "var(--c-card)",
+              border: "1px dashed var(--c-border-light)",
+            }}
+            styles={{ body: { padding: 0 } }}
+          >
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                <span style={{ color: "var(--c-text-2)" }}>
+                  这些 registry 还没有可安装的技能 — 试试点击右上角的{" "}
+                  <ReloadOutlined style={{ verticalAlign: "middle" }} /> 刷新拉取最新索引
+                </span>
+              }
+            />
+          </Card>
+        )
       ) : (
-        <Card style={{ borderRadius: 12, marginTop: 16 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, marginTop: 16 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={skills}
             rowKey="slug"
@@ -272,9 +328,7 @@ function MarketplaceTab({
               {
                 title: "描述",
                 dataIndex: "description",
-                render: (v: string) => (
-                  <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span>
-                ),
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span>,
               },
               {
                 title: "版本",
@@ -284,9 +338,7 @@ function MarketplaceTab({
               {
                 title: "来源",
                 dataIndex: "author",
-                render: (v: string) => (
-                  <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v || "—"}</span>
-                ),
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v || "—"}</span>,
               },
               {
                 title: "操作",
@@ -298,6 +350,7 @@ function MarketplaceTab({
                     icon={<DownloadOutlined />}
                     disabled={record.installed}
                     onClick={() => onInstall(record.slug)}
+                    data-testid={record.installed ? `skill-installed-${record.slug}` : `skill-install-${record.slug}`}
                   >
                     {record.installed ? "已安装" : "安装"}
                   </Button>
@@ -312,13 +365,25 @@ function MarketplaceTab({
 }
 
 function RegistryPanel({
-  registries, loading, onAddClick, onRemove,
+  registries,
+  loading,
+  onAddClick,
+  onRemove,
+  onToggle,
 }: {
   registries: SkillRegistry[];
   loading: boolean;
   onAddClick: () => void;
   onRemove: (name: string) => void;
+  /** v2.39 — flip enabled flag on existing registry. */
+  onToggle: (name: string, enabled: boolean) => void;
 }) {
+  // v2.39: surface the number of currently-disabled entries so users can
+  // see at-a-glance that the v2.35 seed defaults to disabled (zero
+  // outbound until they explicitly opt in). Without this, the gray Tags
+  // looked like a bug.
+  const disabledCount = registries.filter((r) => !r.enabled).length;
+
   return (
     <Card
       size="small"
@@ -327,6 +392,13 @@ function RegistryPanel({
         <Space>
           <span>Registries</span>
           <Tag>{registries.length}</Tag>
+          {disabledCount > 0 && (
+            <Tooltip title="v2.35 默认 seed 入口默认关闭 — 翻开 Switch 后才会向远端 fetch index.json (隐私优先)。">
+              <Tag color="default" style={{ fontSize: 11 }}>
+                {disabledCount} 个未启用
+              </Tag>
+            </Tooltip>
+          )}
         </Space>
       }
       extra={
@@ -339,24 +411,53 @@ function RegistryPanel({
       {registries.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置任何 registry" />
       ) : (
-        <Space wrap>
+        <Space direction="vertical" style={{ width: "100%" }} size={4}>
           {registries.map((r) => (
-            <Popconfirm
+            <div
               key={r.name}
-              title={`移除 registry "${r.name}"?`}
-              onConfirm={() => onRemove(r.name)}
-              okText="移除"
-              cancelText="取消"
+              data-testid={`registry-row-${r.name}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "4px 8px",
+                borderRadius: 6,
+                background: r.enabled ? undefined : "var(--c-hover)",
+              }}
             >
-              <Tag
-                closable
-                color={r.enabled ? "blue" : undefined}
-                onClose={(e) => e.preventDefault()}
-                style={{ cursor: "pointer", padding: "4px 8px", fontSize: 12 }}
-              >
-                {r.name} <span style={{ opacity: 0.6, marginLeft: 4 }}>{r.url}</span>
+              {/* v2.39 — switch is the primary toggle. Replaces the
+                  previous design where users could only delete + re-add
+                  (broken for v2.35 seed entries since they default to
+                  disabled and addRegistry refuses duplicates). */}
+              <Tooltip title={r.enabled ? "已启用:刷新时会从此 URL 拉取 index.json" : "未启用:不会发起任何网络请求"}>
+                <Switch size="small" checked={r.enabled} onChange={(next) => onToggle(r.name, next)} />
+              </Tooltip>
+              <Tag color={r.enabled ? "blue" : undefined} style={{ margin: 0, padding: "2px 8px", fontSize: 12 }}>
+                {r.name}
               </Tag>
-            </Popconfirm>
+              <span
+                style={{
+                  flex: 1,
+                  opacity: 0.6,
+                  fontSize: 11,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {r.url}
+              </span>
+              <Popconfirm
+                title={`移除 registry "${r.name}"?`}
+                onConfirm={() => onRemove(r.name)}
+                okText="移除"
+                cancelText="取消"
+              >
+                <Button type="text" size="small" danger aria-label={`移除 ${r.name}`} style={{ padding: "0 6px" }}>
+                  ×
+                </Button>
+              </Popconfirm>
+            </div>
           ))}
         </Space>
       )}
@@ -369,7 +470,10 @@ function RegistryPanel({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function InstalledTab({
-  installed, loading, onUninstall, onReload,
+  installed,
+  loading,
+  onUninstall,
+  onReload,
 }: {
   installed: Skill[];
   loading: boolean;
@@ -379,13 +483,15 @@ function InstalledTab({
   return (
     <>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={onReload}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={onReload}>
+          刷新
+        </Button>
       </Space>
 
       {installed.length === 0 && !loading ? (
         <Empty description="没有从 hub 安装的技能" />
       ) : (
-        <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={installed}
             rowKey="id"
@@ -447,7 +553,10 @@ function InstalledTab({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ImprovementsTab({
-  candidates, loading, onReload, onImproveClick,
+  candidates,
+  loading,
+  onReload,
+  onImproveClick,
 }: {
   candidates: ImprovementCandidate[];
   loading: boolean;
@@ -457,7 +566,9 @@ function ImprovementsTab({
   return (
     <>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={onReload}>刷新候选</Button>
+        <Button icon={<ReloadOutlined />} onClick={onReload}>
+          刷新候选
+        </Button>
         <span style={{ color: "var(--c-text-3)", fontSize: 12 }}>
           这些技能已达到自学习阈值,可手动触发改进或等待后台调度
         </span>
@@ -466,14 +577,18 @@ function ImprovementsTab({
       {candidates.length === 0 && !loading ? (
         <Empty description="目前没有改进候选 — 累积调用后失败率达 15%、用量 ≥10 次会自动入列" />
       ) : (
-        <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={candidates}
             rowKey={(c) => c.skill.id}
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "技能", dataIndex: ["skill", "name"], render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
+              {
+                title: "技能",
+                dataIndex: ["skill", "name"],
+                render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span>,
+              },
               {
                 title: "失败次数",
                 dataIndex: ["primaryFailureMode", "count"],
@@ -495,12 +610,7 @@ function ImprovementsTab({
                 title: "操作",
                 key: "action",
                 render: (_: unknown, c: ImprovementCandidate) => (
-                  <Button
-                    size="small"
-                    type="primary"
-                    icon={<ThunderboltOutlined />}
-                    onClick={() => onImproveClick(c)}
-                  >
+                  <Button size="small" type="primary" icon={<ThunderboltOutlined />} onClick={() => onImproveClick(c)}>
                     手动改进
                   </Button>
                 ),
@@ -518,7 +628,11 @@ function ImprovementsTab({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DraftsTab({
-  drafts, loading, onReload, onPreview, onPromote,
+  drafts,
+  loading,
+  onReload,
+  onPreview,
+  onPromote,
 }: {
   drafts: Skill[];
   loading: boolean;
@@ -529,7 +643,9 @@ function DraftsTab({
   return (
     <>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={onReload}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={onReload}>
+          刷新
+        </Button>
         <span style={{ color: "var(--c-text-3)", fontSize: 12 }}>
           这些是 agent 在执行新任务时自动打包的草稿,审核后晋升即可运行
         </span>
@@ -538,29 +654,37 @@ function DraftsTab({
       {drafts.length === 0 && !loading ? (
         <Empty description="没有待审核草稿" />
       ) : (
-        <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12 }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={drafts}
             rowKey="id"
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "草稿名", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-              { title: "描述", dataIndex: "description", render: (v: string) => <span style={{ fontSize: 12 }}>{v || "—"}</span> },
+              {
+                title: "草稿名",
+                dataIndex: "name",
+                render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span>,
+              },
+              {
+                title: "描述",
+                dataIndex: "description",
+                render: (v: string) => <span style={{ fontSize: 12 }}>{v || "—"}</span>,
+              },
               { title: "语言", dataIndex: "language", render: (v: string) => <Tag>{v}</Tag> },
               {
                 title: "创建时间",
                 dataIndex: "createdAt",
-                render: (v: string) => (
-                  <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span>
-                ),
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span>,
               },
               {
                 title: "操作",
                 key: "action",
                 render: (_: unknown, d: Skill) => (
                   <Space>
-                    <Button size="small" onClick={() => onPreview(d)}>查看</Button>
+                    <Button size="small" onClick={() => onPreview(d)}>
+                      查看
+                    </Button>
                     <Popconfirm
                       title={`将草稿 "${d.name}" 晋升为正式技能?`}
                       onConfirm={() => onPromote(d.id)}
@@ -587,7 +711,9 @@ function DraftsTab({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function AddRegistryModal({
-  open, onClose, onSubmit,
+  open,
+  onClose,
+  onSubmit,
 }: {
   open: boolean;
   onClose: () => void;
@@ -615,11 +741,7 @@ function AddRegistryModal({
       cancelText="取消"
     >
       <Form form={form} layout="vertical" initialValues={{ enabled: true, priority: 50 }}>
-        <Form.Item
-          label="名称"
-          name="name"
-          rules={[{ required: true, message: "必填" }]}
-        >
+        <Form.Item label="名称" name="name" rules={[{ required: true, message: "必填" }]}>
           <Input placeholder="my-registry" />
         </Form.Item>
         <Form.Item
@@ -642,7 +764,10 @@ function AddRegistryModal({
 }
 
 function ImproveModal({
-  state, onClose, onChange, onSubmit,
+  state,
+  onClose,
+  onChange,
+  onSubmit,
 }: {
   state: { open: boolean; candidate?: ImprovementCandidate; code: string; reason: string };
   onClose: () => void;
@@ -669,23 +794,14 @@ function ImproveModal({
           />
         </Form.Item>
         <Form.Item label="改进原因" extra="将记入 ~/.webrain/skills/improved/<id>/v<N>/reason.txt">
-          <Input.TextArea
-            value={state.reason}
-            onChange={(e) => onChange({ reason: e.target.value })}
-            rows={3}
-          />
+          <Input.TextArea value={state.reason} onChange={(e) => onChange({ reason: e.target.value })} rows={3} />
         </Form.Item>
       </Form>
     </Modal>
   );
 }
 
-function DraftPreviewModal({
-  draft, onClose,
-}: {
-  draft: Skill | null;
-  onClose: () => void;
-}) {
+function DraftPreviewModal({ draft, onClose }: { draft: Skill | null; onClose: () => void }) {
   return (
     <Modal
       title={draft ? `草稿预览:${draft.name}` : ""}
@@ -698,18 +814,20 @@ function DraftPreviewModal({
         <>
           <p style={{ color: "var(--c-text-3)", fontSize: 12 }}>{draft.description || "(无描述)"}</p>
           <Space direction="vertical" size={4} style={{ marginBottom: 12 }}>
-            <span style={{ fontSize: 12 }}>ID: <code>{draft.id}</code></span>
-            <span style={{ fontSize: 12 }}>语言: <Tag>{draft.language}</Tag></span>
             <span style={{ fontSize: 12 }}>
-              触发模式: {draft.triggerPatterns.map((p, i) => <Tag key={i}>{p}</Tag>)}
+              ID: <code>{draft.id}</code>
+            </span>
+            <span style={{ fontSize: 12 }}>
+              语言: <Tag>{draft.language}</Tag>
+            </span>
+            <span style={{ fontSize: 12 }}>
+              触发模式:{" "}
+              {draft.triggerPatterns.map((p, i) => (
+                <Tag key={i}>{p}</Tag>
+              ))}
             </span>
           </Space>
-          <Input.TextArea
-            value={draft.code}
-            rows={16}
-            readOnly
-            style={{ fontFamily: "monospace", fontSize: 12 }}
-          />
+          <Input.TextArea value={draft.code} rows={16} readOnly style={{ fontFamily: "monospace", fontSize: 12 }} />
         </>
       )}
     </Modal>

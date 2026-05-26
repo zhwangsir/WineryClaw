@@ -11,19 +11,28 @@ const fetchStats = vi.fn();
 const fetchAudit = vi.fn();
 const execute = vi.fn();
 const executePython = vi.fn();
+// Round J1 — workspace surface mocks
+const fetchWorkspaces = vi.fn();
+const createWorkspace = vi.fn();
+const execInWorkspace = vi.fn();
+const removeWorkspace = vi.fn();
 
 function createMockStore(overrides: Partial<Parameters<typeof useSandboxStore>[0]> = {}) {
   return {
     available: true,
     stats: { cpu: 12, memory: 256 },
-    logs: [
-      { agentId: "agent-1", action: "exec", timestamp: "2024-01-01T00:00:00Z" },
-    ],
+    logs: [{ agentId: "agent-1", action: "exec", timestamp: "2024-01-01T00:00:00Z" }],
+    workspaces: [],
+    defaultImage: "webrain-workspace:latest",
     fetchStatus,
     fetchStats,
     fetchAudit,
+    fetchWorkspaces,
     execute,
     executePython,
+    createWorkspace,
+    execInWorkspace,
+    removeWorkspace,
     ...overrides,
   };
 }
@@ -75,8 +84,8 @@ describe("SandboxPage", () => {
   });
 
   it("shows unavailable status when available is false", () => {
-    vi.mocked(useSandboxStore).mockImplementation(() =>
-      createMockStore({ available: false, stats: {}, logs: [] }) as any
+    vi.mocked(useSandboxStore).mockImplementation(
+      () => createMockStore({ available: false, stats: {}, logs: [] }) as any
     );
     render(
       <BrowserRouter>
@@ -92,8 +101,11 @@ describe("SandboxPage", () => {
         <SandboxPage />
       </BrowserRouter>
     );
-    expect(screen.getByText("cpu")).toBeInTheDocument();
-    expect(screen.getByText("memory")).toBeInTheDocument();
+    // Q7.3: stats keys are title-cased ("cpu" → "Cpu", "memory" → "Memory")
+    // unless they match a known mapping (totalPolicies → 策略总数, etc.).
+    // The test fixture uses generic keys so title-case fallback applies.
+    expect(screen.getByText("Cpu")).toBeInTheDocument();
+    expect(screen.getByText("Memory")).toBeInTheDocument();
   });
 
   it("renders audit logs table when logs exist", () => {
@@ -107,9 +119,7 @@ describe("SandboxPage", () => {
   });
 
   it("shows empty when no audit logs", () => {
-    vi.mocked(useSandboxStore).mockImplementation(() =>
-      createMockStore({ logs: [] }) as any
-    );
+    vi.mocked(useSandboxStore).mockImplementation(() => createMockStore({ logs: [] }) as any);
     render(
       <BrowserRouter>
         <SandboxPage />

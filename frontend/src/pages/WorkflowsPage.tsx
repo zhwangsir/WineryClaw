@@ -1,6 +1,14 @@
 import { useState, useEffect } from "react";
 import { Button, Card, Drawer, Form, Input, Tag, Empty, message, Popconfirm, Table } from "antd";
-import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, BranchesOutlined, CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import {
+  PlusOutlined,
+  DeleteOutlined,
+  PlayCircleOutlined,
+  BranchesOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ClockCircleOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useWorkflowStore } from "../stores/workflowStore";
 import type { WorkflowDef } from "../api/types";
@@ -50,7 +58,7 @@ export default function WorkflowsPage() {
 
   const handleRun = async (values: { inputs: string }) => {
     if (!selectedWorkflow) return;
-    let inputs: Record<string, unknown> = {};
+    let inputs: Record<string, unknown>;
     try {
       inputs = values.inputs ? JSON.parse(values.inputs) : {};
     } catch {
@@ -80,17 +88,33 @@ export default function WorkflowsPage() {
             <Card
               key={w.id}
               style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-              bodyStyle={{ padding: 24 }}
-              title={
-                <span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{w.name}</span>
-              }
-              headStyle={{ padding: "16px 20px", borderBottom: "1px solid var(--c-border)" }}
+              styles={{
+                body: { padding: 24 },
+                header: { padding: "16px 20px", borderBottom: "1px solid var(--c-border)" },
+              }}
+              title={<span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{w.name}</span>}
               actions={[
-                <Button type="text" size="small" icon={<PlayCircleOutlined />} style={{ color: "var(--c-accent)" }} onClick={() => openRun(w)}>
+                <Button
+                  key="run"
+                  type="text"
+                  size="small"
+                  icon={<PlayCircleOutlined />}
+                  style={{ color: "var(--c-accent)" }}
+                  onClick={() => openRun(w)}
+                >
                   运行
                 </Button>,
-                <Popconfirm title="确认删除" description={`删除工作流 "${w.name}"？`} onConfirm={() => deleteWorkflow(w.id)} okText="删除" cancelText="取消">
-                  <Button type="text" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                <Popconfirm
+                  key="delete"
+                  title="确认删除"
+                  description={`删除工作流 "${w.name}"？`}
+                  onConfirm={() => deleteWorkflow(w.id)}
+                  okText="删除"
+                  cancelText="取消"
+                >
+                  <Button type="text" size="small" danger icon={<DeleteOutlined />}>
+                    删除
+                  </Button>
                 </Popconfirm>,
               ]}
             >
@@ -121,14 +145,18 @@ export default function WorkflowsPage() {
             <Input.TextArea rows={2} placeholder="工作流描述..." />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>创建</Button>
+            <Button type="primary" htmlType="submit" block>
+              创建
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>
 
       {/* Run Drawer */}
       <Drawer
-        title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>运行: {selectedWorkflow?.name}</span>}
+        title={
+          <span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>运行: {selectedWorkflow?.name}</span>
+        }
         open={runDrawerOpen}
         onClose={() => setRunDrawerOpen(false)}
         width={560}
@@ -138,7 +166,9 @@ export default function WorkflowsPage() {
             <Input.TextArea rows={4} placeholder='{"key": "value"}' />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} block>运行</Button>
+            <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} block>
+              运行
+            </Button>
           </Form.Item>
         </Form>
 
@@ -151,13 +181,38 @@ export default function WorkflowsPage() {
               size="small"
               pagination={false}
               columns={[
-                { title: "Run ID", dataIndex: "runId", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span> },
-                { title: "状态", dataIndex: "status", render: (v: string) => (
-                  <Tag style={{ color: statusColors[v] || "var(--c-text-3)", border: "none", background: "var(--c-hover)", fontSize: 12 }}>
-                    {statusIcons[v]} {v}
-                  </Tag>
-                )},
-                { title: "开始时间", dataIndex: "startedAt", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span> },
+                {
+                  title: "Run ID",
+                  dataIndex: "runId",
+                  render: (v: string) => (
+                    <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span>
+                  ),
+                },
+                {
+                  title: "状态",
+                  dataIndex: "status",
+                  render: (v: string) => (
+                    <Tag
+                      style={{
+                        color: statusColors[v] || "var(--c-text-3)",
+                        border: "none",
+                        background: "var(--c-hover)",
+                        fontSize: 12,
+                      }}
+                    >
+                      {statusIcons[v]} {v}
+                    </Tag>
+                  ),
+                },
+                {
+                  title: "开始时间",
+                  dataIndex: "startedAt",
+                  render: (v: string) => (
+                    <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>
+                      {new Date(v).toLocaleString("zh-CN")}
+                    </span>
+                  ),
+                },
               ]}
             />
           </div>

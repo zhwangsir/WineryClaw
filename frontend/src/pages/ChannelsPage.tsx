@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Card, List, Button, Empty, Drawer, Tooltip, Form, Input, Select, message, Modal } from "antd";
+import { Card, List, Button, Empty, Drawer, Tooltip, Form, Input, Select, message, Modal, Switch, Tag } from "antd";
 import {
   GlobalOutlined,
   LinkOutlined,
@@ -8,10 +8,12 @@ import {
   ReloadOutlined,
   PlusOutlined,
   ExclamationCircleOutlined,
+  SafetyOutlined,
 } from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useChannelStore } from "../stores/channelStore";
 import { StatusBadge } from "../components/common/StatusBadge";
+import ChannelPolicyDrawer from "../components/channels/ChannelPolicyDrawer";
 
 function formatChannelTime(ts: string | undefined): string {
   if (!ts) return "—";
@@ -58,6 +60,7 @@ export default function ChannelsPage() {
     fetchMessages,
     messages,
     deleteChannel,
+    setAutoReply,
   } = useChannelStore();
 
   const [msgDrawerOpen, setMsgDrawerOpen] = useState(false);
@@ -65,6 +68,9 @@ export default function ChannelsPage() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectForm] = Form.useForm();
   const [connectLoading, setConnectLoading] = useState(false);
+  // v2.33: per-channel policy editor
+  const [policyDrawerOpen, setPolicyDrawerOpen] = useState(false);
+  const [policyChannelId, setPolicyChannelId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchChannels();
@@ -136,17 +142,20 @@ export default function ChannelsPage() {
             <List.Item>
               <Card
                 style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-                bodyStyle={{ padding: 32 }}
+                styles={{
+                  body: { padding: 32 },
+                  header: { padding: "20px 24px", borderBottom: "1px solid var(--c-border)" },
+                }}
                 title={
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <StatusBadge status={ch.connected ? "connected" : "disconnected"} />
                     <span style={{ fontWeight: 600, fontSize: 15, color: "var(--c-text)" }}>{ch.name}</span>
                   </div>
                 }
-                headStyle={{ padding: "20px 24px", borderBottom: "1px solid var(--c-border)" }}
                 actions={[
                   ch.connected ? (
                     <Button
+                      key="toggle"
                       type="text"
                       size="small"
                       icon={<DisconnectOutlined />}
@@ -157,6 +166,7 @@ export default function ChannelsPage() {
                     </Button>
                   ) : (
                     <Button
+                      key="toggle"
                       type="text"
                       size="small"
                       icon={<LinkOutlined />}
@@ -167,6 +177,7 @@ export default function ChannelsPage() {
                     </Button>
                   ),
                   <Button
+                    key="messages"
                     type="text"
                     size="small"
                     icon={<MessageOutlined />}
@@ -176,6 +187,7 @@ export default function ChannelsPage() {
                     消息
                   </Button>,
                   <Button
+                    key="delete"
                     type="text"
                     size="small"
                     danger
@@ -210,11 +222,61 @@ export default function ChannelsPage() {
                   </span>
                 </div>
                 <div style={{ fontSize: 12, color: "var(--c-text-3)", fontWeight: 300 }}>ID: {ch.id}</div>
+
+                {/* M5 — auto-reply toggle: when on, inbound messages are
+                    routed to chat_engine and the response is sent back */}
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 12,
+                    borderTop: "1px solid var(--c-border)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <Tooltip title="开启后,入站消息会经过 LLM 自动回复给原 sender(需要 channel 已连接 + 在接收)">
+                    <span style={{ fontSize: 13, color: "var(--c-text-2)" }}>
+                      自动回复
+                      {ch.auto_reply && (
+                        <Tag color="success" style={{ marginLeft: 8 }}>
+                          ON
+                        </Tag>
+                      )}
+                    </span>
+                  </Tooltip>
+                  <Switch size="small" checked={!!ch.auto_reply} onChange={(checked) => setAutoReply(ch.id, checked)} />
+                </div>
+
+                {/* v2.33 — open policy editor drawer (per-channel agent /
+                    sender/keyword filters / time windows / rate limit /
+                    reply delay; see ChannelPolicyDrawer for full surface). */}
+                <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+                  <Tooltip title="编辑接收策略 (agent / 过滤 / 时段 / 限速)">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<SafetyOutlined />}
+                      onClick={() => {
+                        setPolicyChannelId(ch.id);
+                        setPolicyDrawerOpen(true);
+                      }}
+                    >
+                      策略
+                    </Button>
+                  </Tooltip>
+                </div>
               </Card>
             </List.Item>
           )}
         />
       )}
+
+      <ChannelPolicyDrawer
+        channelId={policyChannelId}
+        open={policyDrawerOpen}
+        onClose={() => setPolicyDrawerOpen(false)}
+      />
 
       <Drawer
         title={<span style={{ fontWeight: 600, fontSize: 16, color: "var(--c-text)" }}>通道消息: {msgChannelId}</span>}

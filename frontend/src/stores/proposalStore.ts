@@ -8,7 +8,13 @@ interface ProposalState {
   loading: boolean;
 
   fetchProposals: (status?: string) => Promise<void>;
-  createProposal: (data: { proposerId: string; topic: string; description: string; quorum?: number; timeoutSec?: number }) => Promise<void>;
+  createProposal: (data: {
+    proposerId: string;
+    topic: string;
+    description: string;
+    quorum?: number;
+    timeoutSec?: number;
+  }) => Promise<void>;
   vote: (id: string, agentId: string, vote: boolean, reason?: string) => Promise<void>;
   close: (id: string) => Promise<void>;
 }

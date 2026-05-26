@@ -1,3 +1,4 @@
 #!/bin/sh
-cd frontend
+# lint-staged is a root-level devDependency; root-level invocation reads the
+# root package.json's "lint-staged" config which already `cd frontend` per glob.
 pnpm exec lint-staged

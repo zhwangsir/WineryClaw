@@ -1,11 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import {
-  createAsyncState,
-  setLoading,
-  setSuccess,
-  setError,
-  isStale,
-} from "./asyncState";
+import { createAsyncState, setLoading, setSuccess, setError, isStale } from "./asyncState";
 
 describe("asyncState", () => {
   it("createAsyncState returns initial state", () => {

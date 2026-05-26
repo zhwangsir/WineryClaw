@@ -1,0 +1,12 @@
+# Rust build outputs
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Node
+node_modules/
+
+# Tauri-generated icons (kept manually-curated for branding)
+# src-tauri/icons/*
+
+# Build outputs
+src-tauri/gen/

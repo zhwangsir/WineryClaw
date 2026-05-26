@@ -29,14 +29,14 @@ export interface ModelConfig {
 const DEFAULT_ENDPOINTS: ModelEndpoint[] = [
   {
     name: "lm-studio",
-    baseUrl: "http://192.168.71.100:1234/v1",
+    baseUrl: "http://localhost:1234/v1",
     modelId: "minimax/minimax-m2.7",
     priority: 10,
     timeout: 120,
   },
   {
     name: "exo-cluster",
-    baseUrl: "http://192.168.71.53:52415",
+    baseUrl: "http://localhost:52415",
     modelId: "default",
     priority: 5,
     timeout: 120,
@@ -77,7 +77,7 @@ const DEFAULT_ENDPOINTS: ModelEndpoint[] = [
 ];
 
 const DEFAULT_CONFIG: ModelConfig = {
-  baseUrl: "http://192.168.71.100:1234/v1",
+  baseUrl: "http://localhost:1234/v1",
   modelId: "minimax/minimax-m2.7",
   temperature: 0.7,
   maxTokens: 4096,

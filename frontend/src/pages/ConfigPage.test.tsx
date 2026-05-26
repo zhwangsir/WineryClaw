@@ -18,7 +18,7 @@ const defaultMock = {
   config: null,
   data: null,
   workspaces: [
-    { id: "ws-1", name: "Test Workspace", description: "A test workspace", createdAt: "2024-01-01T00:00:00Z" },
+    { workspaceId: "ws-1", name: "Test Workspace", description: "A test workspace", createdAt: "2024-01-01T00:00:00Z" },
   ],
   fetchWorkspaces,
   createWorkspace,
@@ -104,7 +104,7 @@ describe("ConfigPage", () => {
     vi.mocked(useConfigStore).mockReturnValue({
       ...defaultMock,
       workspaces: [...defaultMock.workspaces],
-      agents: [{ id: "a1", name: "Agent1", workspaceId: "ws-1" }],
+      agents: [{ agentId: "a1", name: "Agent1", workspaceId: "ws-1" }],
     });
     renderPage();
     fireEvent.click(screen.getByText("查看代理"));
@@ -127,7 +127,7 @@ describe("ConfigPage", () => {
   it("renders workspace with empty description", () => {
     vi.mocked(useConfigStore).mockReturnValue({
       ...defaultMock,
-      workspaces: [{ id: "ws-2", name: "NoDesc", description: "", createdAt: "2024-01-01T00:00:00Z" }],
+      workspaces: [{ workspaceId: "ws-2", name: "NoDesc", description: "", createdAt: "2024-01-01T00:00:00Z" }],
       agents: [],
     });
     renderPage();

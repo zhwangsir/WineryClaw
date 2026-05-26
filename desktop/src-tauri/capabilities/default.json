@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0/capability",
+  "identifier": "default",
+  "description": "Capability for main + popup windows. WeBrain loads the Vite frontend served by sub-brain at http://127.0.0.1:3000 — no extra filesystem/network permissions beyond Tauri's default IPC.",
+  "windows": ["main", "popup"],
+  "permissions": [
+    "core:default"
+  ]
+}

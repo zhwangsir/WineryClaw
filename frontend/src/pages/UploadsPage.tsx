@@ -14,14 +14,10 @@ export default function UploadsPage() {
   };
 
   return (
-    <PageShell
-      title="上传"
-      subtitle="文件上传与管理"
-      icon={<FileOutlined />}
-    >
+    <PageShell title="上传" subtitle="文件上传与管理" icon={<FileOutlined />}>
       <Card
         style={{ borderRadius: 12, border: "1px solid var(--c-border)", maxWidth: 600 }}
-        bodyStyle={{ padding: 32 }}
+        styles={{ body: { padding: 32 } }}
       >
         <Upload
           fileList={fileList}

@@ -13,7 +13,15 @@ const fetchStats = vi.fn().mockResolvedValue(undefined);
 
 const defaultMock = {
   jobs: [
-    { id: "j1", name: "Backup", cron_expr: "0 0 * * *", task_type: "shell", enabled: true, run_count: 5, last_run: "2024-01-01T00:00:00Z" },
+    {
+      id: "j1",
+      name: "Backup",
+      cron_expr: "0 0 * * *",
+      task_type: "shell",
+      enabled: true,
+      run_count: 5,
+      last_run: "2024-01-01T00:00:00Z",
+    },
     { id: "j2", name: "Cleanup", cron_expr: "0 2 * * *", task_type: "python", enabled: false, run_count: 2 },
   ],
   runs: [
@@ -39,9 +47,7 @@ vi.mock("antd", async () => {
   const actual = await vi.importActual<typeof import("antd")>("antd");
   return {
     ...actual,
-    Popconfirm: ({ children, onConfirm }: any) => (
-      <span onClick={onConfirm}>{children}</span>
-    ),
+    Popconfirm: ({ children, onConfirm }: any) => <span onClick={onConfirm}>{children}</span>,
   };
 });
 

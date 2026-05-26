@@ -1,0 +1,15 @@
+{
+  "id": "starter-base64-decode",
+  "name": "Base64 Decode",
+  "description": "Decode a base64 string (standard or URL-safe variant) and return its UTF-8 text. Returns { decoded, looks_binary } so the caller can choose to skip display when the output is non-text.",
+  "triggerPatterns": ["base64 decode ", "decode base64 "],
+  "code": "let input = String(params.input || params.text || params.b64 || '').trim();\nif (!input) return { error: 'pass params.input (base64 string)' };\ntry {\n  // Normalise URL-safe variant before decoding.\n  const normalised = input.replace(/-/g, '+').replace(/_/g, '/');\n  const pad = normalised.length % 4 === 0 ? normalised : normalised + '='.repeat(4 - (normalised.length % 4));\n  const buf = Buffer.from(pad, 'base64');\n  const decoded = buf.toString('utf-8');\n  // Detect mostly-binary: > 5% control chars suggests this isn't text.\n  const ctrl = [...decoded].filter((c) => c.charCodeAt(0) < 0x20 && c !== '\\n' && c !== '\\r' && c !== '\\t').length;\n  const looks_binary = decoded.length > 0 && ctrl / decoded.length > 0.05;\n  return { decoded, bytes: buf.length, looks_binary };\n} catch (e) {\n  return { error: 'invalid base64: ' + e.message };\n}",
+  "language": "javascript",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["encoding", "utility"]
+}

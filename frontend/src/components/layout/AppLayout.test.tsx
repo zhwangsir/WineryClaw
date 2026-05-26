@@ -5,6 +5,8 @@ import { AppLayout } from "./AppLayout";
 vi.mock("../../stores/systemStore", () => ({
   useSystemStore: () => ({
     fetchHealth: vi.fn(),
+    startInsightPolling: vi.fn(),
+    stopInsightPolling: vi.fn(),
   }),
 }));
 

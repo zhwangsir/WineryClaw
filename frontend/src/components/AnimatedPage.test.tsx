@@ -2,11 +2,8 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import AnimatedPage, { StaggerContainer, StaggerItem, HoverCard, FadeIn } from "./AnimatedPage";
 
-vi.mock("framer-motion", () => ({
-  motion: {
-    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-  },
-}));
+// framer-motion is globally mocked in test-setup.ts (strips motion-only props
+// so they never reach DOM elements and cause React warnings)
 
 describe("AnimatedPage", () => {
   it("renders children", () => {

@@ -1,6 +1,17 @@
 /**
  * Docker Sandbox — 隔离执行环境
  * Docker sandbox for secure code execution
+ *
+ * Two modes:
+ *   1) One-shot (execute / executePython / executeNode): ephemeral
+ *      `docker run --rm` container, fresh filesystem each call. Original
+ *      behavior, unchanged.
+ *
+ *   2) Workspace (execInWorkspace / ensureWorkspace / removeWorkspace):
+ *      a long-lived container per workspaceId backed by a persistent bind
+ *      mount at ~/.webrain/workspaces/<id>/. State (installed packages,
+ *      files, shell history) survives between calls. Optional network.
+ *      Round J1 (2026-05-21) — enables stateful agent workflows.
  */
 
 import { execSync } from "child_process";
@@ -26,22 +37,117 @@ const DEFAULT_CONFIG: SandboxConfig = {
   volumes: [],
 };
 
+/**
+ * Per-workspace config snapshot. Captured at first ensureWorkspace() call
+ * and reused if we have to recreate the container (e.g. after Docker
+ * restart). Network + image cannot be changed without removeWorkspace
+ * first — runtime mutation would require docker stop + run, which is
+ * out of scope for J1.
+ */
+export interface WorkspaceConfig {
+  workspaceId: string;
+  image: string;
+  memory: string;
+  cpus: number;
+  network: boolean;
+  /**
+   * Round L3 — Optional outbound network allowlist. When set AND
+   * `network: true`, the container can only reach the listed hostnames.
+   * Implemented via /etc/hosts injection at container creation: every
+   * non-allowed DNS lookup falls back to 0.0.0.0 (loopback unreachable).
+   * Not a hard firewall — a determined script can still hit raw IPs —
+   * but blocks the common case of casual DNS exfil + accidental upload
+   * of user files to unknown hosts.
+   *
+   * Empty / unset = no restriction (full open network when network=true).
+   */
+  networkAllowlist?: string[];
+  /** ISO timestamp of last activity (exec) — used for idle GC */
+  lastActiveAt: string;
+  /** absolute path of the host bind mount */
+  hostPath: string;
+}
+
+const WORKSPACE_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * Image preference for workspaces (Round J2). Probed lazily on first use.
+ *  - First choice: webrain-workspace:latest (ubuntu + git/python/node/ffmpeg/curl...)
+ *  - Fallback:    SandboxConfig.image (default node:20-alpine for back-compat)
+ *
+ * If a caller explicitly passes an image in ensureWorkspace(), it wins.
+ */
+const PREFERRED_WORKSPACE_IMAGE = "webrain-workspace:latest";
+
+function workspaceContainerName(workspaceId: string): string {
+  return `webrain-ws-${workspaceId}`;
+}
+
 export class DockerSandbox {
   private config: SandboxConfig;
   private containers = new Set<string>();
+
+  /** Per-workspace metadata. Keyed by workspaceId, NOT container name. */
+  private workspaces = new Map<string, WorkspaceConfig>();
+
+  /** Cached result of "is webrain-workspace:latest pulled locally?" — probed once per process. */
+  private _preferredImageAvailable: boolean | null = null;
 
   constructor(config?: Partial<SandboxConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
-  isAvailable(): boolean {
+  /**
+   * Resolve the workspace image to use when the caller didn't specify one.
+   * Prefers webrain-workspace:latest if locally available, otherwise the
+   * configured default (node:20-alpine).
+   */
+  resolveDefaultWorkspaceImage(): string {
+    if (this._preferredImageAvailable === null) {
+      this._preferredImageAvailable = this._imageExistsLocally(PREFERRED_WORKSPACE_IMAGE);
+    }
+    return this._preferredImageAvailable ? PREFERRED_WORKSPACE_IMAGE : this.config.image;
+  }
+
+  private _imageExistsLocally(image: string): boolean {
+    if (!this.isAvailable()) return false;
     try {
-      execSync("docker version", { stdio: "pipe", timeout: 5000 });
-      return true;
-    } catch (err) { console.error("[docker-sandbox] Error:", err);
+      const out = execSync(`docker image inspect ${image} --format ok`, {
+        stdio: ["pipe", "pipe", "pipe"],
+        encoding: "utf-8",
+        timeout: 5000,
+      });
+      return out.trim() === "ok";
+    } catch {
       return false;
     }
   }
+
+  isAvailable(): boolean {
+    // Cache the probe result — the previous implementation re-ran
+    // `docker version` and re-logged the failure for every call site
+    // (startup + every execute()). User-trial #9 saw the failure
+    // emit a raw ChildProcess error object (`output: [null, <Buffer >, …]`)
+    // on stderr at startup, which looked alarming for a benign "docker
+    // not installed" state.
+    if (DockerSandbox._cachedAvailability !== null) {
+      return DockerSandbox._cachedAvailability;
+    }
+    try {
+      execSync("docker version", { stdio: "pipe", timeout: 5000 });
+      DockerSandbox._cachedAvailability = true;
+    } catch {
+      // Intentionally silent. The caller logs a friendly one-liner.
+      // We do NOT dump the err object — it contains the entire stderr
+      // Buffer + spawn args + status code which look terrifying for
+      // an expected "docker not on PATH" state.
+      DockerSandbox._cachedAvailability = false;
+    }
+    return DockerSandbox._cachedAvailability;
+  }
+
+  // Per-process cache — initial null means "not yet probed".
+  private static _cachedAvailability: boolean | null = null;
 
   async execute(command: string, inputFiles?: Record<string, string>): Promise<{ ok: boolean; output: string; exitCode: number; error?: string }> {
     if (!this.isAvailable()) {
@@ -114,5 +220,232 @@ export class DockerSandbox {
       } catch (err) { console.error("[docker-sandbox] Error:", err); console.error("[docker] Error:", err); }
     }
     this.containers.clear();
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Workspace mode (Round J1)
+  // ───────────────────────────────────────────────────────────────────
+
+  /**
+   * Create or reuse a long-lived workspace container.
+   * Idempotent — calling twice with the same id is safe.
+   * Returns the workspace config (or null if Docker unavailable).
+   */
+  async ensureWorkspace(
+    workspaceId: string,
+    opts?: {
+      image?: string;
+      memory?: string;
+      cpus?: number;
+      network?: boolean;
+      /** Round L3 — outbound allowlist. Only honored when network=true. */
+      networkAllowlist?: string[];
+    },
+  ): Promise<{ ok: boolean; workspace?: WorkspaceConfig; error?: string }> {
+    if (!WORKSPACE_ID_RE.test(workspaceId)) {
+      return {
+        ok: false,
+        error: `Invalid workspaceId: must match ${WORKSPACE_ID_RE.source}`,
+      };
+    }
+    if (!this.isAvailable()) {
+      return { ok: false, error: "Docker not available" };
+    }
+
+    const container = workspaceContainerName(workspaceId);
+    const hostPath = join(homedir(), ".webrain", "workspaces", workspaceId);
+    mkdirSync(hostPath, { recursive: true });
+
+    // If we already track it AND the container is still running, reuse.
+    const existing = this.workspaces.get(workspaceId);
+    if (existing && this._isContainerRunning(container)) {
+      existing.lastActiveAt = new Date().toISOString();
+      return { ok: true, workspace: existing };
+    }
+
+    // If a stopped container lingers, remove it so we can re-create cleanly.
+    try {
+      execSync(`docker rm -f ${container}`, { stdio: "pipe", timeout: 10000 });
+    } catch {
+      // not present — fine
+    }
+
+    // Validate + normalize the allowlist (Round L3). Only meaningful
+    // when network is enabled; otherwise --network none already blocks
+    // everything.
+    const cleanAllowlist = (opts?.networkAllowlist ?? [])
+      .map((h) => h.trim().toLowerCase())
+      .filter((h) => /^[a-z0-9.-]{1,253}$/.test(h));
+
+    const cfg: WorkspaceConfig = {
+      workspaceId,
+      // Round J2: prefer webrain-workspace:latest (ubuntu) if locally
+      // pulled, fall back to config.image (node:20-alpine).
+      image: opts?.image ?? this.resolveDefaultWorkspaceImage(),
+      memory: opts?.memory ?? this.config.memory,
+      cpus: opts?.cpus ?? this.config.cpus,
+      // Network defaults to false (--network none). Caller opts in.
+      network: opts?.network ?? false,
+      networkAllowlist: cleanAllowlist.length > 0 ? cleanAllowlist : undefined,
+      lastActiveAt: new Date().toISOString(),
+      hostPath,
+    };
+
+    const networkFlag = cfg.network ? "" : "--network none";
+
+    // Round L3 — outbound allowlist via --add-host. Each allowed name
+    // gets resolved against Docker's host-gateway DNS; everything else
+    // is forced to 0.0.0.0 via a wildcard NOTE: docker can't do wildcard,
+    // so we instead block-list common exfil destinations by mapping them
+    // to 0.0.0.0. This is a "lift the casual exfil floor", not a strict
+    // firewall — see WorkspaceConfig.networkAllowlist docs.
+    const addHostArgs: string[] = [];
+    if (cfg.network && cfg.networkAllowlist) {
+      // Allow the listed hosts to resolve normally.
+      for (const host of cfg.networkAllowlist) {
+        addHostArgs.push("--add-host", `${host}:host-gateway`);
+      }
+      // Pin a small set of well-known exfil hosts to 0.0.0.0 so the
+      // agent's casual `curl https://pastebin.com` fails fast even
+      // though Docker's DNS would normally let it through.
+      for (const blocked of [
+        "pastebin.com",
+        "paste.ee",
+        "transfer.sh",
+        "0x0.st",
+        "termbin.com",
+        "ix.io",
+        "dpaste.org",
+      ]) {
+        if (!cfg.networkAllowlist.includes(blocked)) {
+          addHostArgs.push("--add-host", `${blocked}:0.0.0.0`);
+        }
+      }
+    }
+
+    const dockerCmd = [
+      "docker", "run", "-d",
+      "--name", container,
+      `--memory=${cfg.memory}`,
+      `--cpus=${cfg.cpus}`,
+      networkFlag,
+      ...addHostArgs,
+      "-v", `${hostPath}:/workspace`,
+      "-w", "/workspace",
+      cfg.image,
+      // Keep-alive: BusyBox `sh` + `sleep infinity` works on both alpine
+      // and debian/ubuntu images. We do NOT use `tail -f /dev/null` because
+      // some minimal images (distroless) lack tail.
+      "sh", "-c", "sleep infinity",
+    ].filter(Boolean);
+
+    try {
+      execSync(dockerCmd.join(" "), { stdio: "pipe", timeout: 30000 });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: `Failed to start workspace container: ${msg}` };
+    }
+
+    this.workspaces.set(workspaceId, cfg);
+    this.containers.add(container);
+    return { ok: true, workspace: cfg };
+  }
+
+  /**
+   * Run a command inside a workspace container. If the workspace doesn't
+   * exist yet, it is created with default settings.
+   */
+  async execInWorkspace(
+    workspaceId: string,
+    command: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<{ ok: boolean; output: string; exitCode: number; error?: string }> {
+    if (!WORKSPACE_ID_RE.test(workspaceId)) {
+      return { ok: false, output: "", exitCode: -1, error: "Invalid workspaceId" };
+    }
+    if (!this.isAvailable()) {
+      return { ok: false, output: "", exitCode: -1, error: "Docker not available" };
+    }
+
+    // Auto-provision with defaults if missing.
+    if (!this.workspaces.has(workspaceId)) {
+      const r = await this.ensureWorkspace(workspaceId);
+      if (!r.ok) return { ok: false, output: "", exitCode: -1, error: r.error };
+    } else if (!this._isContainerRunning(workspaceContainerName(workspaceId))) {
+      // Container died (e.g. host reboot). Recreate with the same config.
+      const cfg = this.workspaces.get(workspaceId)!;
+      const r = await this.ensureWorkspace(workspaceId, {
+        image: cfg.image,
+        memory: cfg.memory,
+        cpus: cfg.cpus,
+        network: cfg.network,
+        networkAllowlist: cfg.networkAllowlist,
+      });
+      if (!r.ok) return { ok: false, output: "", exitCode: -1, error: r.error };
+    }
+
+    const container = workspaceContainerName(workspaceId);
+    const cfg = this.workspaces.get(workspaceId)!;
+    cfg.lastActiveAt = new Date().toISOString();
+
+    // Pass the command via stdin to avoid shell-injection issues in the
+    // host shell composition. `docker exec -i ... sh` reads script from
+    // stdin, so the host shell never has to interpolate `command`.
+    try {
+      const output = execSync(`docker exec -i ${container} sh`, {
+        encoding: "utf-8",
+        input: command,
+        timeout: opts?.timeoutMs ?? this.config.timeout,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      return { ok: true, output, exitCode: 0 };
+    } catch (err: unknown) {
+      const e = err as { stdout?: string; stderr?: string; status?: number; message?: string };
+      return {
+        ok: false,
+        output: (e.stdout ?? "") + (e.stderr ?? ""),
+        exitCode: e.status ?? 1,
+        error: e.message,
+      };
+    }
+  }
+
+  /**
+   * Stop and remove a workspace container. The host bind mount
+   * (`~/.webrain/workspaces/<id>/`) is NOT deleted — caller can wipe it
+   * separately if they want a clean slate.
+   */
+  async removeWorkspace(workspaceId: string): Promise<{ ok: boolean; error?: string }> {
+    if (!WORKSPACE_ID_RE.test(workspaceId)) {
+      return { ok: false, error: "Invalid workspaceId" };
+    }
+    const container = workspaceContainerName(workspaceId);
+    try {
+      execSync(`docker rm -f ${container}`, { stdio: "pipe", timeout: 10000 });
+    } catch {
+      // already gone — treat as success
+    }
+    this.workspaces.delete(workspaceId);
+    this.containers.delete(container);
+    return { ok: true };
+  }
+
+  /** List all known workspaces (active or stopped). */
+  listWorkspaces(): WorkspaceConfig[] {
+    return [...this.workspaces.values()];
+  }
+
+  /** Internal — best-effort check if a named container is currently running. */
+  private _isContainerRunning(containerName: string): boolean {
+    try {
+      const out = execSync(`docker ps -q -f name=^${containerName}$`, {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 5000,
+      });
+      return out.trim().length > 0;
+    } catch {
+      return false;
+    }
   }
 }

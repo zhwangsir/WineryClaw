@@ -1,0 +1,361 @@
+/*
+ * UserHomePage — Notion-style user mode.
+ *
+ * Design tokens are scoped to this view so the admin sidebar UI keeps
+ * its existing dense look. Light mode is the primary target; dark mode
+ * inherits via the [data-theme="dark"] hook.
+ */
+
+.user-home {
+  --uh-bg: #ffffff;
+  --uh-surface: #f7f7f5;
+  --uh-border: rgba(55, 53, 47, 0.09);
+  --uh-text: #37352f;
+  --uh-text-muted: rgba(55, 53, 47, 0.65);
+  --uh-text-subtle: rgba(55, 53, 47, 0.45);
+  --uh-accent: #2383e2;
+  --uh-radius: 8px;
+  --uh-shadow: 0 1px 0 rgba(15, 15, 15, 0.04);
+
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  background: var(--uh-bg);
+  color: var(--uh-text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+:root[data-theme="dark"] .user-home {
+  --uh-bg: #191919;
+  --uh-surface: #202020;
+  --uh-border: rgba(255, 255, 255, 0.094);
+  --uh-text: #e6e6e3;
+  --uh-text-muted: rgba(255, 255, 255, 0.7);
+  --uh-text-subtle: rgba(255, 255, 255, 0.45);
+  --uh-accent: #5b8def;
+  --uh-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+}
+
+/* ── topbar ─────────────────────────────────────────────── */
+.user-home__topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--uh-border);
+  flex-shrink: 0;
+}
+
+.user-home__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.user-home__logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  /* No gradient wrapper — the multi-color mascot in /logo.svg is the logo. */
+}
+
+.user-home__logo img {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.user-home__title {
+  font-size: 15px;
+  color: var(--uh-text);
+}
+
+/* ── body: chat + sidebar ─────────────────────────────────── */
+.user-home__body {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 1024px) {
+  .user-home__body {
+    grid-template-columns: 1fr;
+  }
+  .user-home__sidebar {
+    display: none;
+  }
+}
+
+/* ── chat column ─────────────────────────────────────────── */
+.user-home__chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 32px 64px 16px;
+  /* Notion-style: keep prose-ish reading column even on ultrawide.
+     The column is centered inside the grid cell. */
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .user-home__chat {
+    padding: 24px 16px 12px;
+  }
+}
+
+.user-home__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--uh-border) transparent;
+}
+
+.user-home__messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.user-home__messages::-webkit-scrollbar-thumb {
+  background: var(--uh-border);
+  border-radius: 6px;
+}
+
+.user-home__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  height: 100%;
+  max-width: 600px;
+  padding: 24px 0;
+}
+
+.user-home__empty h1 {
+  font-size: 32px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  letter-spacing: -0.5px;
+  color: var(--uh-text);
+}
+
+.user-home__empty p {
+  color: var(--uh-text-muted);
+  font-size: 15px;
+  margin: 0 0 28px;
+  line-height: 1.6;
+}
+
+/* ── suggestion cards (empty state) ───────────────────────── */
+.user-home__suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .user-home__suggestions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.user-home__suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--uh-surface);
+  border: 1px solid var(--uh-border);
+  border-radius: var(--uh-radius);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.user-home__suggestion:hover {
+  border-color: var(--uh-accent);
+  background: var(--uh-bg);
+  transform: translateY(-1px);
+}
+
+.user-home__suggestion:focus-visible {
+  outline: 2px solid var(--uh-accent);
+  outline-offset: 2px;
+}
+
+.user-home__suggestion-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(35, 131, 226, 0.1);
+  color: var(--uh-accent);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.user-home__suggestion-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.user-home__suggestion-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--uh-text);
+  line-height: 1.4;
+}
+
+.user-home__suggestion-preview {
+  font-size: 12px;
+  color: var(--uh-text-muted);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.user-home__input {
+  margin-top: 16px;
+  flex-shrink: 0;
+}
+
+/* ── knowledge-base sidebar ──────────────────────────────── */
+.user-home__sidebar {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--uh-border);
+  background: var(--uh-surface);
+  padding: 24px 20px;
+  overflow-y: auto;
+}
+
+.user-home__sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.user-home__sidebar-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--uh-text-muted);
+}
+
+.user-home__dragger {
+  margin-bottom: 16px;
+}
+
+/* Override AntD's default dragger to fit Notion style */
+.user-home__dragger.ant-upload-wrapper .ant-upload-drag {
+  background: var(--uh-bg) !important;
+  border: 1px dashed var(--uh-border) !important;
+  border-radius: var(--uh-radius) !important;
+  transition: all 0.15s ease;
+}
+
+.user-home__dragger.ant-upload-wrapper .ant-upload-drag:hover {
+  border-color: var(--uh-accent) !important;
+}
+
+.user-home__dragger .ant-upload-drag-icon .anticon {
+  color: var(--uh-text-subtle) !important;
+  font-size: 32px !important;
+}
+
+.user-home__dragger .ant-upload-text {
+  color: var(--uh-text) !important;
+  font-size: 13px !important;
+  margin-top: 8px !important;
+}
+
+.user-home__dragger .ant-upload-hint {
+  color: var(--uh-text-subtle) !important;
+  font-size: 12px !important;
+}
+
+/* ── indexed doc list ────────────────────────────────────── */
+.user-home__doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.user-home__doc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  transition: background 0.12s ease;
+}
+
+.user-home__doc:hover {
+  background: var(--uh-bg);
+}
+
+.user-home__doc--indexing {
+  opacity: 0.85;
+}
+
+.user-home__doc--error {
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.user-home__doc-icon {
+  color: var(--uh-text-subtle);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.user-home__doc-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-home__doc-name {
+  font-size: 13px;
+  color: var(--uh-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-home__doc-detail {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--uh-text-subtle);
+}
+
+.user-home__doc-detail .ant-tag {
+  font-size: 11px !important;
+  margin: 0 !important;
+  padding: 0 6px !important;
+  line-height: 18px !important;
+}

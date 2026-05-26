@@ -226,7 +226,7 @@ class TestSkillImprovementCycle:
     @pytest.mark.asyncio
     async def test_no_candidates_returns_zero(self, monkeypatch):
         fake = _FakeAsyncClient(
-            get_responses={"http://localhost:3000/api/skillhub/candidates": {"candidates": []}},
+            get_responses={"http://localhost:3456/api/skillhub/candidates": {"candidates": []}},
         )
         install_fake_client(monkeypatch, fake)
 
@@ -243,12 +243,12 @@ class TestSkillImprovementCycle:
         improved_code = "console.log('fixed')"
         fake = _FakeAsyncClient(
             get_responses={
-                "http://localhost:3000/api/skillhub/candidates": _candidates_response(
+                "http://localhost:3456/api/skillhub/candidates": _candidates_response(
                     [_skill("skill-a")]
                 ),
             },
             post_responses={
-                "http://localhost:3000/api/skillhub/improve": {"ok": True, "fork": {"id": "skill-a-improved-v2"}},
+                "http://localhost:3456/api/skillhub/improve": {"ok": True, "fork": {"id": "skill-a-improved-v2"}},
             },
         )
         install_fake_client(monkeypatch, fake)
@@ -274,7 +274,7 @@ class TestSkillImprovementCycle:
     async def test_candidate_reflection_returns_none_is_skipped(self, monkeypatch):
         fake = _FakeAsyncClient(
             get_responses={
-                "http://localhost:3000/api/skillhub/candidates": _candidates_response(
+                "http://localhost:3456/api/skillhub/candidates": _candidates_response(
                     [_skill("skill-a")]
                 ),
             },
@@ -306,12 +306,12 @@ class TestSkillImprovementCycle:
 
         fake = _FakeAsyncClient(
             get_responses={
-                "http://localhost:3000/api/skillhub/candidates": _candidates_response(
+                "http://localhost:3456/api/skillhub/candidates": _candidates_response(
                     [_skill("skill-a"), _skill("skill-b")]
                 ),
             },
             post_responses={
-                "http://localhost:3000/api/skillhub/improve": {"ok": True},
+                "http://localhost:3456/api/skillhub/improve": {"ok": True},
             },
         )
         install_fake_client(monkeypatch, fake)
@@ -329,12 +329,12 @@ class TestSkillImprovementCycle:
     async def test_improve_endpoint_returning_ok_false_is_recorded_as_error(self, monkeypatch):
         fake = _FakeAsyncClient(
             get_responses={
-                "http://localhost:3000/api/skillhub/candidates": _candidates_response(
+                "http://localhost:3456/api/skillhub/candidates": _candidates_response(
                     [_skill("skill-a")]
                 ),
             },
             post_responses={
-                "http://localhost:3000/api/skillhub/improve": {"ok": False, "error": "not found"},
+                "http://localhost:3456/api/skillhub/improve": {"ok": False, "error": "not found"},
             },
         )
         install_fake_client(monkeypatch, fake)

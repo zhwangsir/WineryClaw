@@ -54,7 +54,7 @@ export default function PluginsPage() {
 
   const columns = [
     {
-      title: "Name",
+      title: "名称",
       dataIndex: "name",
       key: "name",
       render: (_: string, p: Plugin) => (
@@ -65,25 +65,19 @@ export default function PluginsPage() {
       ),
     },
     {
-      title: "Version",
+      title: "版本",
       dataIndex: "version",
       key: "version",
       width: 100,
     },
     {
-      title: "Status",
+      title: "状态",
       key: "status",
       width: 120,
-      render: (_: unknown, p: Plugin) => (
-        <Switch
-          
-          checked={p.enabled}
-          onChange={(v) => toggle(p, v)}
-        />
-      ),
+      render: (_: unknown, p: Plugin) => <Switch checked={p.enabled} onChange={(v) => toggle(p, v)} />,
     },
     {
-      title: "Permissions",
+      title: "权限",
       key: "permissions",
       render: (_: unknown, p: Plugin) => (
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -94,13 +88,13 @@ export default function PluginsPage() {
       ),
     },
     {
-      title: "Actions",
+      title: "操作",
       key: "actions",
       width: 120,
       render: (_: unknown, p: Plugin) => (
         <div style={{ display: "flex", gap: 8 }}>
-          <Button danger onClick={() => handleUnload(p)}>
-            Unload
+          <Button danger data-testid={`unload-${p.id}`} onClick={() => handleUnload(p)}>
+            卸载
           </Button>
           <Button
             type="text"
@@ -129,27 +123,16 @@ export default function PluginsPage() {
   ];
 
   return (
-    <PageShell
-      title="Plugins"
-      subtitle={`${plugins.length} plugin(s) loaded`}
-      icon={<AppstoreOutlined />}
-    >
+    <PageShell title="插件" subtitle={`已加载 ${plugins.length} 个插件`} icon={<AppstoreOutlined />}>
       <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
         <Button icon={<ReloadOutlined />} onClick={fetchPlugins} loading={loading}>
-          Refresh
+          刷新
         </Button>
       </div>
       {plugins.length === 0 && !loading ? (
-        <EmptyState description="No plugins loaded" />
+        <EmptyState description="暂无已加载的插件" />
       ) : (
-        <Table
-          dataSource={plugins}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          
-        />
+        <Table dataSource={plugins} columns={columns} rowKey="id" loading={loading} pagination={false} />
       )}
     </PageShell>
   );

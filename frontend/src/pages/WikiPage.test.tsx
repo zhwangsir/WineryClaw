@@ -16,8 +16,22 @@ const fetchStats = vi.fn();
 function createMockStore(overrides: any = {}) {
   return {
     notes: [
-      { id: "n1", title: "Note One", content: "Content one", tags: ["tag1"], createdAt: "2024-01-01T00:00:00Z", updatedAt: "2024-01-01T00:00:00Z" },
-      { id: "n2", title: "Note Two", content: "Content two", tags: [], createdAt: "2024-01-02T00:00:00Z", updatedAt: "2024-01-02T00:00:00Z" },
+      {
+        id: "n1",
+        title: "Note One",
+        content: "Content one",
+        tags: ["tag1"],
+        createdAt: "2024-01-01T00:00:00Z",
+        updatedAt: "2024-01-01T00:00:00Z",
+      },
+      {
+        id: "n2",
+        title: "Note Two",
+        content: "Content two",
+        tags: [],
+        createdAt: "2024-01-02T00:00:00Z",
+        updatedAt: "2024-01-02T00:00:00Z",
+      },
     ],
     searchResults: [],
     stats: { note_count: 2, tag_count: 1, link_count: 0, total_words: 20 },
@@ -48,7 +62,9 @@ vi.mock("antd", async () => {
   return {
     ...actual,
     Popconfirm: ({ children, onConfirm }: any) => (
-      <div data-testid="popconfirm" onClick={onConfirm}>{children}</div>
+      <div data-testid="popconfirm" onClick={onConfirm}>
+        {children}
+      </div>
     ),
     Card: ({ children, title, actions, headStyle, bodyStyle, ...rest }: any) => (
       <div data-testid="card" {...rest}>
@@ -57,7 +73,7 @@ vi.mock("antd", async () => {
         <div style={bodyStyle}>{children}</div>
       </div>
     ),
-    Modal: ({ children, open, title, onOk, onCancel, okText }: any) => (
+    Modal: ({ children, open, title, onOk, onCancel, okText }: any) =>
       open ? (
         <div data-testid="modal">
           <div data-testid="modal-title">{title}</div>
@@ -67,8 +83,7 @@ vi.mock("antd", async () => {
             <button onClick={onOk}>{okText || "确定"}</button>
           </div>
         </div>
-      ) : null
-    ),
+      ) : null,
   };
 });
 
@@ -110,9 +125,7 @@ describe("WikiPage", () => {
   });
 
   it("falls back to notes.length when stats is null", () => {
-    vi.mocked(useWikiStore).mockImplementation(() =>
-      createMockStore({ stats: null }) as any
-    );
+    vi.mocked(useWikiStore).mockImplementation(() => createMockStore({ stats: null }) as any);
     render(
       <BrowserRouter>
         <WikiPage />
@@ -133,9 +146,7 @@ describe("WikiPage", () => {
   });
 
   it("shows empty state when no notes", () => {
-    vi.mocked(useWikiStore).mockImplementation(() =>
-      createMockStore({ notes: [] }) as any
-    );
+    vi.mocked(useWikiStore).mockImplementation(() => createMockStore({ notes: [] }) as any);
     render(
       <BrowserRouter>
         <WikiPage />
@@ -145,9 +156,7 @@ describe("WikiPage", () => {
   });
 
   it("shows skeleton when loading and no notes", () => {
-    vi.mocked(useWikiStore).mockImplementation(() =>
-      createMockStore({ notes: [], loading: true }) as any
-    );
+    vi.mocked(useWikiStore).mockImplementation(() => createMockStore({ notes: [], loading: true }) as any);
     const { container } = render(
       <BrowserRouter>
         <WikiPage />
@@ -181,13 +190,21 @@ describe("WikiPage", () => {
   });
 
   it("shows search results when query is set", () => {
-    vi.mocked(useWikiStore).mockImplementation(() =>
-      createMockStore({
-        query: "test",
-        searchResults: [
-          { id: "s1", title: "Search Result", content: "found", tags: [], createdAt: "2024-01-01T00:00:00Z", updatedAt: "2024-01-01T00:00:00Z" },
-        ],
-      }) as any
+    vi.mocked(useWikiStore).mockImplementation(
+      () =>
+        createMockStore({
+          query: "test",
+          searchResults: [
+            {
+              id: "s1",
+              title: "Search Result",
+              content: "found",
+              tags: [],
+              createdAt: "2024-01-01T00:00:00Z",
+              updatedAt: "2024-01-01T00:00:00Z",
+            },
+          ],
+        }) as any
     );
     render(
       <BrowserRouter>
@@ -198,8 +215,8 @@ describe("WikiPage", () => {
   });
 
   it("shows empty search message when no results", () => {
-    vi.mocked(useWikiStore).mockImplementation(() =>
-      createMockStore({ query: "test", searchResults: [], notes: [] }) as any
+    vi.mocked(useWikiStore).mockImplementation(
+      () => createMockStore({ query: "test", searchResults: [], notes: [] }) as any
     );
     render(
       <BrowserRouter>
@@ -225,16 +242,15 @@ describe("WikiPage", () => {
         <WikiPage />
       </BrowserRouter>
     );
-    const editButtons = screen.getAllByTestId("popconfirm").filter((el) =>
-      el.querySelector("[data-icon='edit']")
-    );
+    const editButtons = screen.getAllByTestId("popconfirm").filter((el) => el.querySelector("[data-icon='edit']"));
     // Note actions are in card-actions; edit button is first action
     const cards = screen.getAllByTestId("card-title");
     // Click the card title to open edit? No, in actual UI it's the EditOutlined button in actions.
     // Let's use the first edit button found in card-actions.
     const actions = screen.getAllByTestId("card-actions");
     if (actions[0]) {
-      const editBtn = actions[0].querySelector("[data-icon='edit']")?.closest("button") || actions[0].querySelector("button");
+      const editBtn =
+        actions[0].querySelector("[data-icon='edit']")?.closest("button") || actions[0].querySelector("button");
       if (editBtn) fireEvent.click(editBtn);
     }
     // The modal title should show "编辑笔记"
@@ -331,10 +347,11 @@ describe("WikiPage", () => {
   });
 
   it("renders note with empty content and no tags", () => {
-    vi.mocked(useWikiStore).mockImplementation(() =>
-      createMockStore({
-        notes: [{ id: "n3", title: "Empty Note", content: undefined as any, tags: undefined as any }],
-      }) as any
+    vi.mocked(useWikiStore).mockImplementation(
+      () =>
+        createMockStore({
+          notes: [{ id: "n3", title: "Empty Note", content: undefined as any, tags: undefined as any }],
+        }) as any
     );
     render(
       <BrowserRouter>
@@ -345,10 +362,11 @@ describe("WikiPage", () => {
   });
 
   it("opens edit with undefined content", async () => {
-    vi.mocked(useWikiStore).mockImplementation(() =>
-      createMockStore({
-        notes: [{ id: "n3", title: "NoContent", content: undefined as any, tags: [] }],
-      }) as any
+    vi.mocked(useWikiStore).mockImplementation(
+      () =>
+        createMockStore({
+          notes: [{ id: "n3", title: "NoContent", content: undefined as any, tags: [] }],
+        }) as any
     );
     render(
       <BrowserRouter>

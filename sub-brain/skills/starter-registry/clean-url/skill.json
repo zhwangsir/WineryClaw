@@ -1,0 +1,15 @@
+{
+  "id": "starter-clean-url",
+  "name": "Clean URL",
+  "description": "Strip well-known tracking parameters (utm_*, fbclid, gclid, mc_*, ig_*, msclkid, etc.) from a URL. Conservative blocklist — bare `ref` and `source` are NOT stripped because they're commonly used by legitimate APIs (e.g. GitHub raw URLs). Compound forms like `ref_src` / `ref_url` ARE stripped. Returns { input, cleaned, removed }.",
+  "triggerPatterns": ["clean url ", "remove tracking ", "strip utm "],
+  "code": "const url = String(params.url || params.input || '').trim();\nif (!url) return { error: 'pass params.url' };\nconst TRACKERS = /^(utm_|mc_|hsa_|_hs|matomo_|piwik_|vero_|mkt_)/i;\n// Conservative blocklist. Bare `ref` and `source` were dropped after a\n// 2026-05-21 code-review caught they collide with legitimate API params\n// (e.g. ?ref=main on raw.githubusercontent.com).\nconst NAMED = new Set(['fbclid','gclid','gclsrc','dclid','msclkid','yclid','wickedid','igshid','si','ref_src','ref_url','spm','share_source','share_medium','share_campaign','_ga','__hsfp','__hssc','__hstc']);\ntry {\n  const u = new URL(url);\n  const removed = [];\n  for (const key of [...u.searchParams.keys()]) {\n    if (NAMED.has(key.toLowerCase()) || TRACKERS.test(key)) {\n      removed.push(key);\n      u.searchParams.delete(key);\n    }\n  }\n  return { input: url, cleaned: u.toString(), removed, removed_count: removed.length };\n} catch (e) {\n  return { error: 'invalid URL: ' + e.message, input: url };\n}",
+  "language": "javascript",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["url", "privacy", "utility"]
+}

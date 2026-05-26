@@ -170,9 +170,9 @@ describe("configStore", () => {
   });
 
   it("fetchWorkspaces succeeds", async () => {
-    vi.mocked(configApi.workspaces).mockResolvedValue([{ id: "w1" }]);
+    vi.mocked(configApi.workspaces).mockResolvedValue([{ workspaceId: "w1" }]);
     await useConfigStore.getState().fetchWorkspaces();
-    expect(useConfigStore.getState().workspaces).toEqual([{ id: "w1" }]);
+    expect(useConfigStore.getState().workspaces).toEqual([{ workspaceId: "w1" }]);
   });
 
   it("fetchWorkspaces handles errors", async () => {
@@ -189,10 +189,10 @@ describe("configStore", () => {
 
   it("createWorkspace succeeds and refetches", async () => {
     vi.mocked(configApi.createWorkspace).mockResolvedValue(undefined);
-    vi.mocked(configApi.workspaces).mockResolvedValue([{ id: "w1" }]);
+    vi.mocked(configApi.workspaces).mockResolvedValue([{ workspaceId: "w1" }]);
     await useConfigStore.getState().createWorkspace({ name: "W1" });
     expect(message.success).toHaveBeenCalledWith("工作空间创建成功");
-    expect(useConfigStore.getState().workspaces).toEqual([{ id: "w1" }]);
+    expect(useConfigStore.getState().workspaces).toEqual([{ workspaceId: "w1" }]);
   });
 
   it("createWorkspace handles errors", async () => {
@@ -226,7 +226,7 @@ describe("configStore", () => {
   });
 
   it("deleteWorkspace removes item optimistically", async () => {
-    useConfigStore.setState({ workspaces: [{ id: "w1" }, { id: "w2" }] });
+    useConfigStore.setState({ workspaces: [{ workspaceId: "w1" }, { workspaceId: "w2" }] });
     vi.mocked(configApi.deleteWorkspace).mockResolvedValue(undefined);
     await useConfigStore.getState().deleteWorkspace("w1");
     expect(useConfigStore.getState().workspaces).toHaveLength(1);
@@ -234,7 +234,7 @@ describe("configStore", () => {
   });
 
   it("deleteWorkspace rolls back on error", async () => {
-    useConfigStore.setState({ workspaces: [{ id: "w1" }] });
+    useConfigStore.setState({ workspaces: [{ workspaceId: "w1" }] });
     vi.mocked(configApi.deleteWorkspace).mockRejectedValue(new Error("fail"));
     await useConfigStore.getState().deleteWorkspace("w1");
     expect(useConfigStore.getState().workspaces).toHaveLength(1);

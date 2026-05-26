@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
-const MAIN_URL = "http://127.0.0.1:3000/brain";
-const SUB_URL = "http://127.0.0.1:3000";
+const MAIN_URL = "http://127.0.0.1:3456/brain";
+const SUB_URL = "http://127.0.0.1:3456";
 
 async function getJson(url: string, timeout = 30000) {
   const controller = new AbortController();

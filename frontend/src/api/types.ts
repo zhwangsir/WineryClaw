@@ -27,6 +27,28 @@ export interface ModelConfig {
   endpoints: ModelEndpoint[];
 }
 
+export interface RagSource {
+  doc_path: string;
+  chunk_idx: number;
+  score: number;
+}
+
+export interface PlanTask {
+  id: string;
+  description: string;
+  requires_tool?: boolean;
+  tool_hint?: string;
+  expected_output?: string;
+}
+
+export interface ChatPlan {
+  plan_id: string;
+  user_input: string;
+  tasks: PlanTask[];
+  confidence: number;
+  reasoning: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -34,8 +56,14 @@ export interface ChatMessage {
   reasoning?: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
+  ragSources?: RagSource[];
+  plan?: ChatPlan;
   isStreaming?: boolean;
   timestamp: string;
+  skillDraftCreated?: {
+    skillId: string;
+    name: string;
+  };
 }
 
 export interface ToolCall {
@@ -85,6 +113,33 @@ export interface Memory {
   sessionId?: string;
   createdAt: string;
   vectorScore?: number;
+  // M-Memory-1 fields surfaced by /memory/recent and /memory/query
+  importance?: number; // 0.0 - 1.0, decays per half-life
+  last_accessed_at?: string; // ISO; resets on retrieve
+  access_count?: number;
+  effective_importance?: number; // server-computed decayed value (for query rows)
+  provenance_source?: string; // "chat" | "consolidation_l1_l2" | etc
+  provenance_refs?: string; // JSON-encoded list of source memory IDs
+  superseded_by?: string | null; // when L1 was rolled into an L2
+  conflict_group?: string | null; // when in a contradiction set
+  is_current?: number; // 0 | 1
+  final_score?: number; // server-computed blended rank score
+}
+
+// M-Memory-1: returned by /memory/conflicts and /memory/{id}
+export interface ConflictGroup {
+  conflict_group: string;
+  memories: Memory[];
+  current_id: string | null;
+}
+
+export interface MemoryLineage {
+  ok: boolean;
+  memory: Memory;
+  sources: Memory[];
+  supersedes: Memory[];
+  superseded_by: Memory | null;
+  error?: string;
 }
 
 export interface ChannelInfo {
@@ -92,6 +147,13 @@ export interface ChannelInfo {
   name: string;
   type: string;
   connected: boolean;
+  /** M5: when true, inbound messages are auto-routed through chat
+   * and a reply is sent back through the same channel. */
+  auto_reply?: boolean;
+  /** M5.1: which agent handles auto-reply on this channel. */
+  agent_id?: string;
+  /** M5.1: artificial delay before sending auto-reply (ms). */
+  reply_delay_ms?: number;
   config?: Record<string, unknown>;
 }
 
@@ -110,6 +172,7 @@ export interface WikiNote {
   content: string;
   tags: string[];
   links: string[];
+  backlinks: string[];
   createdAt: string;
   updatedAt: string;
 }

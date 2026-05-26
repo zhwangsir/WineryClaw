@@ -1,96 +1,109 @@
 /**
- * WeBrain Global Styles — Monochrome Editorial
- * Black & white base. Red (#dc2626) for errors/destructive.
- * Green (#16a34a) for success/online/active. No purple.
+ * WeBrain Global Styles — Notion-style (Round I3, 2026-05-21)
+ *
+ * Token NAMES are unchanged for backwards compat with every downstream
+ * component — only the VALUES shifted. Net effect:
+ *   - black accent → Notion blue (#2383e2 light / #5b8def dark)
+ *   - pure-black text → Notion warm-dark (#37352f)
+ *   - dense borders (#e5e5e5) → low-contrast hairlines (rgba 55,53,47,0.09)
+ *   - cooler grays → warmer surface (#f7f7f5)
+ *
+ * Result: admin chrome (sidebar / header / cards) auto-restyles without
+ * touching any component code. UserHomePage (round I1) was already
+ * Notion-styled with its own scoped tokens; admin now matches.
  */
 
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap");
 
 /* ═══════════════════════════════════════
-   LIGHT THEME
+   LIGHT THEME — Notion light palette
    ═══════════════════════════════════════ */
 :root {
-  /* Surfaces */
+  /* Surfaces — warmer than pure white. Notion uses #f7f7f5 for sidebars
+     and inset surfaces; #ffffff stays for primary content area. */
   --c-page: #ffffff;
-  --c-card: #fafafa;
+  --c-card: #f7f7f5;
   --c-elevated: #ffffff;
-  --c-hover: #f5f5f5;
+  --c-hover: #ebebea;
 
-  /* Text */
-  --c-text: #000000;
-  --c-text-2: #666666;
-  --c-text-3: #999999;
+  /* Text — Notion's signature warm dark, never pure black. The
+     "off-black" reads as ink rather than CRT-glare. */
+  --c-text: #37352f;
+  --c-text-2: rgba(55, 53, 47, 0.65);
+  --c-text-3: rgba(55, 53, 47, 0.45);
   --c-text-inv: #ffffff;
 
-  /* Borders */
-  --c-border: #e5e5e5;
-  --c-border-light: #f5f5f5;
+  /* Borders — very low contrast hairlines. Notion uses
+     rgba(55, 53, 47, 0.09) almost everywhere. */
+  --c-border: rgba(55, 53, 47, 0.16);
+  --c-border-light: rgba(55, 53, 47, 0.09);
 
-  /* Primary accent — black in light mode */
-  --c-accent: #000000;
-  --c-accent-hover: #333333;
-  --c-accent-active: #111111;
-  --c-accent-soft: rgba(0, 0, 0, 0.06);
+  /* Primary accent — Notion blue. Used for links, focused inputs,
+     primary buttons, and the user-home logo gradient. */
+  --c-accent: #2383e2;
+  --c-accent-hover: #1a6bbd;
+  --c-accent-active: #155a9c;
+  --c-accent-soft: rgba(35, 131, 226, 0.1);
 
-  /* Status */
+  /* Status — unchanged. These are semantic, not aesthetic. */
   --c-success: #16a34a;
   --c-success-bg: #f0fdf4;
   --c-error: #dc2626;
   --c-error-bg: #fef2f2;
   --c-warning: #ca8a04;
 
-  /* Shadows */
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
+  /* Shadows — softer + lighter for layered cards */
+  --shadow: 0 1px 0 rgba(15, 15, 15, 0.04);
+  --shadow-hover: 0 4px 12px rgba(15, 15, 15, 0.08);
 
-  /* Misc */
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 10px;
-  --r-xl: 12px;
+  /* Radii — slightly softer than monochrome version */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
   --t-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
   --t-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* Scrollbar */
-  --scrollbar: #d4d4d4;
-  --scrollbar-hover: #a3a3a3;
+  /* Scrollbar — lower contrast to match the hairline border style */
+  --scrollbar: rgba(55, 53, 47, 0.18);
+  --scrollbar-hover: rgba(55, 53, 47, 0.36);
 }
 
 /* ═══════════════════════════════════════
-   DARK THEME
+   DARK THEME — Notion dark palette
    ═══════════════════════════════════════ */
 [data-theme="dark"] {
-  --c-page: #0a0a0a;
-  --c-card: #141414;
-  --c-elevated: #1a1a1a;
-  --c-hover: #1f1f1f;
+  --c-page: #191919;
+  --c-card: #202020;
+  --c-elevated: #2f2f2f;
+  --c-hover: #2a2a2a;
 
-  --c-text: #f5f5f5;
-  --c-text-2: #a1a1aa;
-  --c-text-3: #71717a;
-  --c-text-inv: #0a0a0a;
+  --c-text: #e6e6e3;
+  --c-text-2: rgba(255, 255, 255, 0.7);
+  --c-text-3: rgba(255, 255, 255, 0.45);
+  --c-text-inv: #191919;
 
-  --c-border: #27272a;
-  --c-border-light: #3f3f46;
+  --c-border: rgba(255, 255, 255, 0.13);
+  --c-border-light: rgba(255, 255, 255, 0.094);
 
-  /* Primary accent — white in dark mode */
-  --c-accent: #f5f5f5;
-  --c-accent-hover: #ffffff;
-  --c-accent-active: #e5e5e5;
-  --c-accent-soft: rgba(255, 255, 255, 0.08);
+  /* Primary accent — lighter blue for dark mode contrast */
+  --c-accent: #5b8def;
+  --c-accent-hover: #79a1f5;
+  --c-accent-active: #3d6bd5;
+  --c-accent-soft: rgba(91, 141, 239, 0.16);
 
-  /* Status */
+  /* Status — slightly brighter in dark mode for AA contrast */
   --c-success: #22c55e;
   --c-success-bg: #14532d;
   --c-error: #ef4444;
   --c-error-bg: #450a0a;
   --c-warning: #eab308;
 
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
   --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.35);
 
-  --scrollbar: #3f3f46;
-  --scrollbar-hover: #52525b;
+  --scrollbar: rgba(255, 255, 255, 0.14);
+  --scrollbar-hover: rgba(255, 255, 255, 0.3);
 }
 
 /* ─── Reset ─── */
@@ -109,18 +122,17 @@ html {
 body {
   margin: 0;
   padding: 0;
+  /* Notion's font stack: system first (renders fast, native feel),
+     PingFang for Chinese, Inter as cross-platform fallback. */
   font-family:
-    "Inter",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter",
+    "Helvetica Neue", Arial, sans-serif;
   background: var(--c-page);
   color: var(--c-text);
-  line-height: 1.6;
+  line-height: 1.5;
   font-size: 14px;
   font-weight: 400;
+  letter-spacing: -0.01em;
   overflow-x: hidden;
   transition:
     background 400ms cubic-bezier(0.4, 0, 0.2, 1),
@@ -531,4 +543,56 @@ textarea:focus-visible,
 ::selection {
   background: var(--c-accent-soft);
   color: var(--c-text);
+}
+
+/* ── Chat streaming cursor (Round K2) ─────────────────────────────
+ * Step animation so the cursor toggles 50% opacity → 100% in clean
+ * jumps (not a smooth fade). Feels less "ghosty" than chatPulse for
+ * the inline tail-of-message cursor.
+ */
+@keyframes chatCursorBlink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ── Q12.1 — AntD Card actions footer in dark mode ─────────────────
+ * AntD `ul.ant-card-actions` defaults to colorBgContainer light even
+ * when the surrounding card uses dark surfaces, producing a bright
+ * white horizontal bar at the bottom of every Card-with-actions in
+ * dark mode (most visible on the Wiki page note cards).
+ * Force it to match our card surface so it reads as part of the panel.
+ */
+[data-theme="dark"] .ant-card-actions {
+  background: var(--c-card) !important;
+  border-top: 1px solid var(--c-border-light);
+}
+[data-theme="dark"] .ant-card-actions > li {
+  color: var(--c-text-2);
+}
+[data-theme="dark"] .ant-card-actions > li > span:hover {
+  color: var(--c-accent);
+}
+
+/* ── Q14.1 — AntD Badge text inside a Tab in dark mode ─────────────
+ * MemoryPage 冲突 tab is `<Badge count><span>冲突</span></Badge>` and the
+ * inner span inherits AntD's hard-baked light colorText (#37352f), making
+ * it nearly invisible on the dark page bg. Reproduced via Chrome MCP:
+ * getComputedStyle returned color=rgb(55,53,47) even with our reactive
+ * ConfigProvider in dark mode — Badge's child color is set by AntD CSS-in-JS
+ * tokens that don't pick up our ConfigProvider override for this nesting.
+ * Force the badge child text to follow our dark tokens; match active/hover
+ * to the accent so it lines up with the tab indicator color.
+ */
+[data-theme="dark"] .ant-tabs-tab .ant-badge > span:not([class]) {
+  color: var(--c-text-2);
+}
+[data-theme="dark"] .ant-tabs-tab:hover .ant-badge > span:not([class]),
+[data-theme="dark"] .ant-tabs-tab.ant-tabs-tab-active .ant-badge > span:not([class]) {
+  color: var(--c-accent);
 }

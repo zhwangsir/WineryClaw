@@ -9,5 +9,9 @@ export interface UploadFile {
 
 export const uploadsApi = {
   upload: (filename: string, data: string, type?: string) =>
-    api.post<{ ok: boolean; url?: string; name?: string; size?: number; error?: string }>("/api/upload", { filename, data, type }),
+    api.post<{ ok: boolean; url?: string; name?: string; size?: number; error?: string }>("/api/upload", {
+      filename,
+      data,
+      type,
+    }),
 };

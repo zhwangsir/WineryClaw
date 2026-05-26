@@ -1,11 +1,18 @@
 import { useState, useEffect } from "react";
 import { Button, Card, Drawer, Form, Input, Table, Tag, Empty, Modal } from "antd";
-import { SettingOutlined, PlusOutlined, ApartmentOutlined, DeleteOutlined, ExclamationCircleOutlined } from "@ant-design/icons";
+import {
+  SettingOutlined,
+  PlusOutlined,
+  ApartmentOutlined,
+  DeleteOutlined,
+  ExclamationCircleOutlined,
+} from "@ant-design/icons";
 import { PageShell } from "../components/common/PageShell";
 import { useConfigStore } from "../stores/configStore";
 
 export default function ConfigPage() {
-  const { workspaces, agents, loading, fetchWorkspaces, createWorkspace, fetchWorkspaceAgents, deleteWorkspace } = useConfigStore();
+  const { workspaces, agents, loading, fetchWorkspaces, createWorkspace, fetchWorkspaceAgents, deleteWorkspace } =
+    useConfigStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedWorkspace, setSelectedWorkspace] = useState("");
   const [form] = Form.useForm();
@@ -41,26 +48,57 @@ export default function ConfigPage() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <Card
-            title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}><ApartmentOutlined style={{ marginRight: 8 }} />工作空间</span>}
+            title={
+              <span style={{ fontWeight: 600, color: "var(--c-text)" }}>
+                <ApartmentOutlined style={{ marginRight: 8 }} />
+                工作空间
+              </span>
+            }
             style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-            bodyStyle={{ padding: 24 }}
+            styles={{ body: { padding: 24 } }}
           >
             <Table
               dataSource={workspaces}
-              rowKey="id"
+              rowKey="workspaceId"
               loading={loading}
               pagination={false}
               columns={[
-                { title: "ID", dataIndex: "id", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span> },
-                { title: "名称", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-                { title: "描述", dataIndex: "description", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span> },
-                { title: "创建时间", dataIndex: "createdAt", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span> },
+                // Q14.8 — guard `v` against undefined; the backend MAY omit
+                // optional fields. Same defensive pattern below for createdAt.
+                {
+                  title: "ID",
+                  dataIndex: "workspaceId",
+                  render: (v?: string) => (
+                    <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v ? `${v.slice(0, 12)}...` : "—"}</span>
+                  ),
+                },
+                {
+                  title: "名称",
+                  dataIndex: "name",
+                  render: (v?: string) => <span style={{ fontWeight: 500 }}>{v || "—"}</span>,
+                },
+                {
+                  title: "描述",
+                  dataIndex: "description",
+                  render: (v?: string) => <span style={{ fontSize: 12, color: "var(--c-text-2)" }}>{v || "—"}</span>,
+                },
+                {
+                  title: "创建时间",
+                  dataIndex: "createdAt",
+                  render: (v?: string) => (
+                    <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>
+                      {v ? new Date(v).toLocaleString("zh-CN") : "—"}
+                    </span>
+                  ),
+                },
                 {
                   title: "操作",
                   key: "action",
-                  render: (_: unknown, record: { id: string; name: string }) => (
+                  render: (_: unknown, record: { workspaceId: string; name: string }) => (
                     <div style={{ display: "flex", gap: 8 }}>
-                      <Button size="small" onClick={() => openAgents(record.id)}>查看代理</Button>
+                      <Button size="small" onClick={() => openAgents(record.workspaceId)}>
+                        查看代理
+                      </Button>
                       <Button
                         type="text"
                         size="small"
@@ -74,7 +112,7 @@ export default function ConfigPage() {
                             okText: "删除",
                             okType: "danger",
                             cancelText: "取消",
-                            onOk: () => deleteWorkspace(record.id),
+                            onOk: () => deleteWorkspace(record.workspaceId),
                           });
                         }}
                       >
@@ -91,17 +129,31 @@ export default function ConfigPage() {
             <Card
               title={<span style={{ fontWeight: 600, color: "var(--c-text)" }}>代理配置</span>}
               style={{ borderRadius: 12, border: "1px solid var(--c-border)" }}
-              bodyStyle={{ padding: 24 }}
+              styles={{ body: { padding: 24 } }}
             >
               <Table
                 dataSource={agents}
-                rowKey="id"
+                rowKey="agentId"
                 size="small"
                 pagination={false}
                 columns={[
-                  { title: "ID", dataIndex: "id", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 12)}...</span> },
-                  { title: "名称", dataIndex: "name", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-                  { title: "工作空间", dataIndex: "workspaceId", render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag> },
+                  {
+                    title: "ID",
+                    dataIndex: "agentId",
+                    render: (v?: string) => (
+                      <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v ? `${v.slice(0, 12)}...` : "—"}</span>
+                    ),
+                  },
+                  {
+                    title: "名称",
+                    dataIndex: "name",
+                    render: (v?: string) => <span style={{ fontWeight: 500 }}>{v || "—"}</span>,
+                  },
+                  {
+                    title: "工作空间",
+                    dataIndex: "workspaceId",
+                    render: (v?: string) => <Tag style={{ fontSize: 11 }}>{v || "—"}</Tag>,
+                  },
                 ]}
               />
             </Card>
@@ -123,7 +175,9 @@ export default function ConfigPage() {
             <Input.TextArea rows={2} placeholder="描述..." />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>创建</Button>
+            <Button type="primary" htmlType="submit" block>
+              创建
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>

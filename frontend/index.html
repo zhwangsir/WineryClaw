@@ -9,10 +9,14 @@
   <title>WeBrain - AI Agent Platform</title>
   <script>
     (function() {
-      var t = localStorage.getItem("webrain-theme");
-      if (t === "light" || t === "dark") {
-        document.documentElement.setAttribute("data-theme", t);
-      }
+      try {
+        // StorageAdapter.set wraps values in JSON.stringify, so parse before comparing.
+        var raw = localStorage.getItem("webrain-theme");
+        var t = raw ? JSON.parse(raw) : null;
+        if (t === "light" || t === "dark") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      } catch (e) { /* ignore parse errors, fall back to default dark */ }
     })();
   </script>
 </head>

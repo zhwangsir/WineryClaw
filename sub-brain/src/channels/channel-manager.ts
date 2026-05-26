@@ -8,6 +8,8 @@ import WebSocket from "ws";
 import { IMessageProtocol, startIMessagePolling } from "./imessage-protocol.js";
 import { EmailProtocol, startEmailPolling } from "./email-protocol.js";
 import { WebPushProtocol } from "./webpush-protocol.js";
+import type { ChannelPolicy } from "./channel-policy.js";
+import { validatePolicy } from "./channel-policy.js";
 
 export interface ChannelConfig {
   botToken?: string;
@@ -22,12 +24,26 @@ export interface Channel {
   type: string;
   name: string;
   connected: boolean;
+  /** M5: when true, inbound messages on this channel are auto-routed
+   * to chat_engine and the reply is sent back to the sender. */
+  autoReply: boolean;
+  /** M5.1 (v2.30): optional policy controlling which inbound messages
+   * trigger auto-reply. Empty / undefined = "no constraint" (legacy). */
+  policy?: ChannelPolicy;
   config: ChannelConfig;
   protocol: ChannelProtocol;
 }
 
 export interface ChannelProtocol {
-  sendMessage: (recipient: string, content: string, config: ChannelConfig) => Promise<any>;
+  // Round E2: tightened to Promise<unknown> from Promise<any>. Each
+  // protocol returns a different provider-shaped payload (Telegram
+  // message id, Discord message object, the memory protocol's echo
+  // dict). Callers should narrow before reading specific fields.
+  sendMessage: (
+    recipient: string,
+    content: string,
+    config: ChannelConfig,
+  ) => Promise<unknown>;
   connect: (config: ChannelConfig) => Promise<{ ok: boolean; error?: string }>;
   disconnect: () => Promise<void>;
   health: () => Promise<boolean>;
@@ -37,7 +53,22 @@ export interface InboundMessage {
   sender: string;
   content: string;
   timestamp: string;
+  /** M5: channel-specific identifier needed to reply back. For Telegram
+   * this is the chat_id; for Discord, the channel_id; for Slack, the
+   * conversation id. Falls back to `sender` for protocols where the
+   * sender handle is also the reply target (iMessage, Email). */
+  reply_to?: string;
 }
+
+/** Callback fired by the manager when a message is stored with
+ * direction="inbound". Used by ChannelAutoReply (M5) to route the
+ * message into chat_engine and send the response back through the
+ * same channel. Sync or async — return value is ignored. */
+export type InboundMessageHandler = (
+  channelId: string,
+  channelType: string,
+  message: InboundMessage,
+) => void | Promise<void>;
 
 // Telegram Bot API protocol
 const TelegramProtocol: ChannelProtocol = {
@@ -258,23 +289,119 @@ const PROTOCOL_REGISTRY: Record<string, ChannelProtocol> = {
   imessage: IMessageProtocol,
   email: EmailProtocol,
   webpush: WebPushProtocol,
+  // "memory" — no external transport. Outbound messages stay in the
+  // local SQLite messages table (where every protocol stores them
+  // anyway via storeMessage), so tests / admins can read them via
+  // GET /channels/:id/messages. Useful for:
+  //   - smoke tests (Round C5) that need to exercise auto-reply
+  //     without an actual Telegram/Slack/Discord account
+  //   - dev / demo environments that want to show the inbound→chat→
+  //     outbound pipeline without credentials
+  //   - replay debugging — admin can simulate inbound via
+  //     POST /channels/:id/inject-inbound to retry a flow that failed
+  //     during real-protocol polling
+  memory: {
+    async sendMessage(recipient, content) {
+      // Recipient + content are captured by storeMessage(...,"outbound")
+      // in send() — nothing else to do. Returning the args lets callers
+      // assert what they sent.
+      return { ok: true, recipient, content };
+    },
+    async connect() {
+      // Always succeeds — no credentials to validate.
+      return { ok: true };
+    },
+    async disconnect() {},
+    async health() {
+      return true;
+    },
+  },
 };
 
 export class ChannelManager {
   private channels = new Map<string, Channel>();
   private db = subBrainDB.getDb();
   private broadcast: ((msg: any) => void) | null = null;
+  private inboundHandler: InboundMessageHandler | null = null;
   private receivers = new Map<string, { stop: () => void }>();
 
   setBroadcastHandler(handler: (msg: any) => void): void {
     this.broadcast = handler;
   }
 
+  /** M5: register a handler invoked for every inbound message. */
+  setInboundHandler(handler: InboundMessageHandler | null): void {
+    this.inboundHandler = handler;
+  }
+
+  /** Inject an inbound message as if it had arrived via the channel's
+   * native transport. Used by:
+   *   - Smoke tests (Round C5) to exercise the inbound→auto-reply→
+   *     outbound pipeline without needing a real Telegram/Slack server
+   *   - Admin replay tooling — re-deliver a message that was missed
+   *     because the polling worker was down at the time
+   *
+   * Goes through the same storeMessage path real protocol receivers
+   * use, so the inbound handler (auto-reply) fires identically. Returns
+   * { ok: false } if the channel doesn't exist. */
+  simulateInbound(channelId: string, message: InboundMessage): { ok: boolean; error?: string } {
+    // Round E2 harden: validate inputs at the public-method boundary.
+    // The HTTP route already validates, but this method is exported
+    // from the manager — admin tooling / scripts call it directly. A
+    // malformed message would otherwise land in the messages table
+    // with junk fields and break downstream queries that assume
+    // non-null content / valid timestamp.
+    if (typeof message?.content !== "string" || message.content.length === 0) {
+      return { ok: false, error: "InboundMessage.content must be a non-empty string" };
+    }
+    if (typeof message.sender !== "string" || message.sender.length === 0) {
+      return { ok: false, error: "InboundMessage.sender must be a non-empty string" };
+    }
+    if (typeof message.timestamp !== "string" || message.timestamp.length === 0) {
+      return { ok: false, error: "InboundMessage.timestamp must be a non-empty ISO string" };
+    }
+    const channel = this.channels.get(channelId);
+    if (!channel) {
+      return { ok: false, error: `Channel not found: ${channelId}` };
+    }
+    this.storeMessage(channelId, message, "inbound");
+    return { ok: true };
+  }
+
   async initialize(): Promise<void> {
+    // v2.30 (M5.1): one-shot ALTER TABLE adding the `policy` column. ADD
+    // COLUMN succeeds at most once on SQLite; subsequent boots throw
+    // "duplicate column name" which we swallow. Same idempotency
+    // pattern used for the M5 `auto_reply` column.
+    try {
+      this.db.exec("ALTER TABLE channels ADD COLUMN policy TEXT DEFAULT '{}'");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("duplicate column")) {
+        console.warn("[channels] policy column migration warning:", msg);
+      }
+    }
+
     // Load persisted channels from SQLite
     const rows = this.db.prepare("SELECT * FROM channels").all() as any[];
     for (const row of rows) {
       const config = JSON.parse(row.config || "{}");
+      let policy: ChannelPolicy | undefined;
+      if (row.policy && row.policy !== "{}") {
+        try {
+          const parsed = JSON.parse(row.policy);
+          const validated = validatePolicy(parsed);
+          if (validated.ok) {
+            policy = validated.policy;
+          } else {
+            console.warn(
+              `[channels] dropping invalid policy for ${row.id}: ${validated.error}`
+            );
+          }
+        } catch (e) {
+          console.warn(`[channels] policy JSON parse failed for ${row.id}:`, e);
+        }
+      }
       const protocol = PROTOCOL_REGISTRY[row.type];
       if (protocol) {
         this.channels.set(row.id, {
@@ -282,12 +409,55 @@ export class ChannelManager {
           type: row.type,
           name: row.name,
           connected: !!row.connected,
+          autoReply: !!row.auto_reply,
+          policy,
           config,
           protocol,
         });
       }
     }
     console.log(`[channels] Loaded ${this.channels.size} persisted channels`);
+  }
+
+  /** M5.1: read the current policy for a channel. Returns undefined if
+   * no policy is set OR the channel doesn't exist. Callers should treat
+   * "no policy" as "allow everything" (legacy compatibility). */
+  getPolicy(channelId: string): ChannelPolicy | undefined {
+    return this.channels.get(channelId)?.policy;
+  }
+
+  /** M5.1: set/replace the policy for a channel. Validates input and
+   * persists to SQLite. Returns the sanitized policy on success.
+   *
+   * Pass `null` (or an empty object) to clear the policy and revert to
+   * legacy "allow everything" behavior. */
+  async setPolicy(
+    channelId: string,
+    rawPolicy: unknown
+  ): Promise<{ ok: boolean; policy?: ChannelPolicy; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+
+    // null / empty object → clear
+    if (rawPolicy === null) {
+      channel.policy = undefined;
+      const stmt = this.db.prepare(
+        "UPDATE channels SET policy = ?, updated_at = ? WHERE id = ?"
+      );
+      stmt.run("{}", new Date().toISOString(), channelId);
+      return { ok: true, policy: {} };
+    }
+
+    const validation = validatePolicy(rawPolicy);
+    if (!validation.ok) {
+      return { ok: false, error: validation.error };
+    }
+    channel.policy = validation.policy;
+    const stmt = this.db.prepare(
+      "UPDATE channels SET policy = ?, updated_at = ? WHERE id = ?"
+    );
+    stmt.run(JSON.stringify(validation.policy), new Date().toISOString(), channelId);
+    return { ok: true, policy: validation.policy };
   }
 
   async connect(channelType: string, config: ChannelConfig): Promise<{ ok: boolean; channel_id?: string; error?: string }> {
@@ -306,8 +476,9 @@ export class ChannelManager {
     const channel: Channel = {
       id,
       type: channelType,
-      name: config.channelId || channelType,
+      name: (config.channelId as string) || channelType,
       connected: true,
+      autoReply: false,
       config,
       protocol,
     };
@@ -316,11 +487,36 @@ export class ChannelManager {
 
     // Persist to SQLite
     const stmt = this.db.prepare(
-      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      "INSERT OR REPLACE INTO channels (id, type, name, connected, config, auto_reply, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
-    stmt.run(id, channelType, channel.name, 1, JSON.stringify(config), new Date().toISOString(), new Date().toISOString());
+    stmt.run(
+      id,
+      channelType,
+      channel.name,
+      1,
+      JSON.stringify(config),
+      0,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
 
     return { ok: true, channel_id: id };
+  }
+
+  /** M5: toggle auto-reply state for a channel. Persists to SQLite. */
+  async setAutoReply(channelId: string, enabled: boolean): Promise<{ ok: boolean; auto_reply?: boolean; error?: string }> {
+    const channel = this.channels.get(channelId);
+    if (!channel) return { ok: false, error: "Channel not found" };
+    channel.autoReply = enabled;
+    const stmt = this.db.prepare("UPDATE channels SET auto_reply = ?, updated_at = ? WHERE id = ?");
+    stmt.run(enabled ? 1 : 0, new Date().toISOString(), channelId);
+    return { ok: true, auto_reply: enabled };
+  }
+
+  /** M5: query auto-reply state. */
+  getAutoReply(channelId: string): boolean {
+    const channel = this.channels.get(channelId);
+    return channel ? channel.autoReply : false;
   }
 
   async send(channelIdOrType: string, recipient: string, content: string): Promise<{ ok: boolean; error?: string; result?: any }> {
@@ -409,12 +605,22 @@ export class ChannelManager {
     return { ok: true };
   }
 
-  listChannels(): Array<{ id: string; name: string; type: string; connected: boolean }> {
+  listChannels(): Array<{
+    id: string;
+    name: string;
+    type: string;
+    connected: boolean;
+    auto_reply: boolean;
+    /** M5.1 (v2.30): policy summary. `null` means "no policy configured". */
+    policy: ChannelPolicy | null;
+  }> {
     return Array.from(this.channels.values()).map((c) => ({
       id: c.id,
       name: c.name,
       type: c.type,
       connected: c.connected,
+      auto_reply: c.autoReply,
+      policy: c.policy ?? null,
     }));
   }
 
@@ -433,6 +639,24 @@ export class ChannelManager {
     stmt.run(channelId, msg.sender, msg.content, msg.timestamp, direction, new Date().toISOString());
     if (this.broadcast) {
       this.broadcast({ type: "channel.message", channelId, message: { ...msg, direction } });
+    }
+    // M5: dispatch inbound messages to the registered handler (auto-reply
+    // engine). Fire-and-forget — handler errors must not break inbound
+    // message persistence. We swallow rejections after logging.
+    if (direction === "inbound" && this.inboundHandler) {
+      const channel = this.channels.get(channelId);
+      if (channel) {
+        try {
+          const result = this.inboundHandler(channelId, channel.type, msg);
+          if (result && typeof (result as Promise<void>).then === "function") {
+            (result as Promise<void>).catch((err) =>
+              console.error(`[channel-manager] inbound handler failed for ${channelId}:`, err),
+            );
+          }
+        } catch (err) {
+          console.error(`[channel-manager] inbound handler threw for ${channelId}:`, err);
+        }
+      }
     }
   }
 
@@ -495,10 +719,15 @@ export class ChannelManager {
             if (update.message) {
               const from = update.message.from || {};
               const sender = [from.first_name, from.last_name].filter(Boolean).join(" ").trim() || from.username || "unknown";
+              // chat.id is the reply target. For private chats it equals the
+              // user id; for groups it's the group id. Either way, this is
+              // what `sendMessage` needs.
+              const replyTo = update.message.chat?.id != null ? String(update.message.chat.id) : sender;
               this.storeMessage(channel.id, {
                 sender,
                 content: update.message.text || "",
                 timestamp: new Date(update.message.date * 1000).toISOString(),
+                reply_to: replyTo,
               });
             }
             offset = update.update_id + 1;
@@ -574,6 +803,8 @@ export class ChannelManager {
                   sender: author.username || author.global_name || "unknown",
                   content: payload.d.content || "",
                   timestamp: new Date(payload.d.timestamp || Date.now()).toISOString(),
+                  // Discord's reply target is the channel the message arrived in.
+                  reply_to: payload.d.channel_id || undefined,
                 });
               }
               break;
@@ -674,6 +905,8 @@ export class ChannelManager {
               sender: msg.user,
               content: msg.text || "",
               timestamp: new Date(parseFloat(msg.ts) * 1000).toISOString(),
+              // Slack replies go to the conversation id, not the user.
+              reply_to: conv.id,
             });
           }
         }

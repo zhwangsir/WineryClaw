@@ -1,5 +1,22 @@
 import { useState, useEffect, useMemo } from "react";
-import { Input, Button, List, Tag, Empty, Spin, Card, Statistic, Row, Col, Drawer, Form, Select, Slider, message, Modal } from "antd";
+import {
+  Input,
+  Button,
+  List,
+  Tag,
+  Empty,
+  Spin,
+  Card,
+  Statistic,
+  Row,
+  Col,
+  Drawer,
+  Form,
+  Select,
+  Slider,
+  message,
+  Modal,
+} from "antd";
 import {
   ShareAltOutlined,
   DatabaseOutlined,
@@ -44,8 +61,20 @@ const relationTypes = [
 ];
 
 export default function KnowledgeGraphPage() {
-  const { entities, selectedEntity, entityRelations, stats, loading, fetchEntities, selectEntity, search, fetchStats, addEntity, addRelation, deleteEntity } =
-    useKgStore();
+  const {
+    entities,
+    selectedEntity,
+    entityRelations,
+    stats,
+    loading,
+    fetchEntities,
+    selectEntity,
+    search,
+    fetchStats,
+    addEntity,
+    addRelation,
+    deleteEntity,
+  } = useKgStore();
 
   const [query, setQuery] = useState("");
   const [selectedType, setSelectedType] = useState<string>("");
@@ -117,7 +146,7 @@ export default function KnowledgeGraphPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="实体数"
@@ -129,7 +158,7 @@ export default function KnowledgeGraphPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="关系数"
@@ -141,7 +170,7 @@ export default function KnowledgeGraphPage() {
         <Col xs={12} md={6}>
           <Card
             style={{ borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
-            bodyStyle={{ padding: 32 }}
+            styles={{ body: { padding: 32 } }}
           >
             <Statistic
               title="实体类型"
@@ -201,7 +230,7 @@ export default function KnowledgeGraphPage() {
             border: "1px solid var(--c-border)",
             boxShadow: "var(--shadow)",
           }}
-          bodyStyle={{ padding: 32 }}
+          styles={{ body: { padding: 32 } }}
         >
           <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
             <div>
@@ -294,7 +323,7 @@ export default function KnowledgeGraphPage() {
                   borderLeft: `3px solid ${typeColors[e.type] || "var(--c-text-3)"}`,
                   cursor: "pointer",
                 }}
-                bodyStyle={{ padding: 24 }}
+                styles={{ body: { padding: 24 } }}
               >
                 <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6, color: "var(--c-text)" }}>{e.name}</div>
                 <Tag

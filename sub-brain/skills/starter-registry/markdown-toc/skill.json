@@ -1,0 +1,15 @@
+{
+  "id": "starter-markdown-toc",
+  "name": "Markdown TOC",
+  "description": "Extract H1-H6 headings from a markdown string and render a nested table of contents with GitHub-style anchor links. Ignores headings inside fenced code blocks. Returns { toc, heading_count }.",
+  "triggerPatterns": ["markdown toc ", "table of contents ", "toc "],
+  "code": "import re\nmd = params.get('markdown') or params.get('text') or params.get('input') or ''\nif not isinstance(md, str) or not md.strip():\n    result = {'error': 'pass params.markdown'}\nelse:\n    # Strip fenced code blocks so we don't pick up '# comments' inside code.\n    no_fence = re.sub(r'```[\\s\\S]*?```', '', md, flags=re.MULTILINE)\n    heading_re = re.compile(r'^(#{1,6})\\s+(.+?)\\s*$', re.MULTILINE)\n    seen = {}\n    lines = []\n    count = 0\n    for m in heading_re.finditer(no_fence):\n        level = len(m.group(1))\n        title = m.group(2).strip()\n        # GitHub-style anchor: lower, replace non-word with dash, dedupe.\n        anchor = re.sub(r'[^\\w\\u4e00-\\u9fff\\u3040-\\u30ff -]', '', title.lower()).strip().replace(' ', '-')\n        anchor = re.sub(r'-+', '-', anchor) or 'heading'\n        if anchor in seen:\n            seen[anchor] += 1\n            anchor = f'{anchor}-{seen[anchor]}'\n        else:\n            seen[anchor] = 0\n        indent = '  ' * (level - 1)\n        lines.append(f'{indent}- [{title}](#{anchor})')\n        count += 1\n    result = {'toc': '\\n'.join(lines), 'heading_count': count}",
+  "language": "python",
+  "usageCount": 0,
+  "successRate": 0,
+  "createdBy": "webrain-starters",
+  "createdAt": "2026-05-21T00:00:00.000Z",
+  "updatedAt": "2026-05-21T00:00:00.000Z",
+  "version": 1,
+  "tags": ["markdown", "docs", "utility"]
+}

@@ -1,0 +1,10 @@
+{
+  "id": "skill-file-ops",
+  "name": "File Operations",
+  "description": "Read, write, list, append, stat local files. Actions: read | write | append | list | stat | exists | delete.",
+  "triggerPatterns": ["read file", "write file", "list files", "ls ", "file stat"],
+  "code": "const fs = require('fs');\nconst path = require('path');\nconst action = (params.action || 'read').toLowerCase();\nconst p = params.path;\nif (!p) throw new Error('params.path required');\nif (action === 'read') {\n  const max = Number(params.max_bytes ?? 102400);\n  const buf = fs.readFileSync(p);\n  const truncated = buf.length > max;\n  return { content: buf.slice(0, max).toString('utf8'), bytes: buf.length, truncated };\n}\nif (action === 'write') {\n  if (typeof params.content !== 'string') throw new Error('params.content (string) required for write');\n  fs.writeFileSync(p, params.content, 'utf8');\n  return { ok: true, bytes: Buffer.byteLength(params.content, 'utf8'), path: p };\n}\nif (action === 'append') {\n  fs.appendFileSync(p, String(params.content ?? ''), 'utf8');\n  return { ok: true, path: p };\n}\nif (action === 'list') {\n  const dir = p;\n  const entries = fs.readdirSync(dir, { withFileTypes: true });\n  return { dir, entries: entries.slice(0, 500).map(e => ({ name: e.name, type: e.isDirectory() ? 'dir' : e.isSymbolicLink() ? 'symlink' : 'file' })), total: entries.length };\n}\nif (action === 'stat') {\n  const s = fs.statSync(p);\n  return { path: p, size: s.size, isFile: s.isFile(), isDirectory: s.isDirectory(), mtime: s.mtime, ctime: s.ctime, mode: s.mode.toString(8) };\n}\nif (action === 'exists') return { path: p, exists: fs.existsSync(p) };\nif (action === 'delete') {\n  if (params.confirm !== true) throw new Error('Set params.confirm=true to confirm delete');\n  fs.rmSync(p, { recursive: true, force: true });\n  return { ok: true, path: p, deleted: true };\n}\nthrow new Error('Unknown action: ' + action);",
+  "language": "javascript",
+  "tags": ["filesystem", "io"],
+  "version": 1
+}

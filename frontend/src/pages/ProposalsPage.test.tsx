@@ -37,11 +37,17 @@ vi.mock("antd", async () => {
   return {
     ...actual,
     Popconfirm: ({ children, onConfirm }: any) => (
-      <div data-testid="popconfirm" onClick={onConfirm}>{children}</div>
+      <div data-testid="popconfirm" onClick={onConfirm}>
+        {children}
+      </div>
     ),
     Select: ({ value, onChange, options }: any) => (
       <select value={value} onChange={(e) => onChange?.(e.target.value)}>
-        {options?.map((o: any) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {options?.map((o: any) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
       </select>
     ),
   };
@@ -54,42 +60,67 @@ describe("ProposalsPage", () => {
   });
 
   it("renders page shell", () => {
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("提案")).toBeInTheDocument();
   });
 
   it("fetches proposals on mount", () => {
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     expect(fetchProposals).toHaveBeenCalled();
   });
 
   it("renders proposals table", () => {
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("Topic A")).toBeInTheDocument();
     expect(screen.getByText("Topic B")).toBeInTheDocument();
     expect(screen.getByText("2 / 3")).toBeInTheDocument();
   });
 
   it("renders proposal with unknown status and no votes", () => {
-    vi.mocked(useProposalStore).mockImplementation(() => createMockStore({
-      proposals: [
-        { id: "p3", topic: "Topic C", proposerId: "a3", status: "unknown" },
-      ],
-    }) as any);
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    vi.mocked(useProposalStore).mockImplementation(
+      () =>
+        createMockStore({
+          proposals: [{ id: "p3", topic: "Topic C", proposerId: "a3", status: "unknown" }],
+        }) as any
+    );
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("Topic C")).toBeInTheDocument();
     expect(screen.getByText("0 / 1")).toBeInTheDocument();
   });
 
   it("shows empty state when no proposals", () => {
     vi.mocked(useProposalStore).mockImplementation(() => createMockStore({ proposals: [] }) as any);
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     expect(screen.getByText("暂无提案")).toBeInTheDocument();
   });
 
   it("opens create drawer and submits", async () => {
     createProposal.mockResolvedValue(undefined);
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     fireEvent.click(screen.getByText("新建提案"));
     expect(document.querySelector(".ant-drawer")).toBeTruthy();
 
@@ -108,7 +139,11 @@ describe("ProposalsPage", () => {
 
   it("submits with default quorum when not provided", async () => {
     createProposal.mockResolvedValue(undefined);
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     fireEvent.click(screen.getByText("新建提案"));
 
     const inputs = screen.getAllByRole("textbox");
@@ -128,14 +163,22 @@ describe("ProposalsPage", () => {
   });
 
   it("opens vote drawer", () => {
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     const voteButtons = screen.getAllByText("投票");
     fireEvent.click(voteButtons[0]);
     expect(document.querySelector(".ant-drawer")).toBeTruthy();
   });
 
   it("closes proposal on confirm", () => {
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     const popconfirms = screen.getAllByTestId("popconfirm");
     if (popconfirms.length > 0) {
       fireEvent.click(popconfirms[0]);
@@ -145,7 +188,11 @@ describe("ProposalsPage", () => {
 
   it("submits vote drawer", async () => {
     vote.mockResolvedValue(undefined);
-    render(<BrowserRouter><ProposalsPage /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <ProposalsPage />
+      </BrowserRouter>
+    );
     const voteButtons = screen.getAllByText("投票");
     fireEvent.click(voteButtons[0]);
     expect(document.querySelector(".ant-drawer")).toBeTruthy();

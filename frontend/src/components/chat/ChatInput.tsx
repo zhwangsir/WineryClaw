@@ -35,6 +35,22 @@ export default function ChatInput({
     accent: "var(--c-accent)",
   };
 
+  // v2.41 — keyboard chip style for the shortcut hint row. Uses the
+  // hairline border + low-emphasis text colour so chips read as keys
+  // without competing with the input itself.
+  const kbdStyle: React.CSSProperties = {
+    display: "inline-block",
+    padding: "1px 6px",
+    fontSize: 10,
+    fontWeight: 500,
+    lineHeight: 1.4,
+    color: "var(--c-text-2)",
+    background: "var(--c-card)",
+    border: "1px solid var(--c-border-light)",
+    borderRadius: 4,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -43,9 +59,7 @@ export default function ChatInput({
   };
 
   return (
-    <div
-      style={{ borderTop: `1px solid ${C.border}`, padding: "16px 32px 24px", flexShrink: 0, background: C.pageBg }}
-    >
+    <div style={{ borderTop: `1px solid ${C.border}`, padding: "16px 32px 24px", flexShrink: 0, background: C.pageBg }}>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 10, maxWidth: 800, margin: "0 auto" }}>
         {/* Voice input button */}
         <Tooltip title={isRecording ? "停止录音" : "语音输入"}>
@@ -65,11 +79,7 @@ export default function ChatInput({
               animation: isRecording ? "pulse 1.5s infinite" : undefined,
             }}
             icon={
-              isRecording ? (
-                <AudioOutlined style={{ fontSize: 16 }} />
-              ) : (
-                <AudioMutedOutlined style={{ fontSize: 16 }} />
-              )
+              isRecording ? <AudioOutlined style={{ fontSize: 16 }} /> : <AudioMutedOutlined style={{ fontSize: 16 }} />
             }
           />
         </Tooltip>
@@ -158,17 +168,38 @@ export default function ChatInput({
           />
         )}
       </div>
+      {/* v2.41 — keyboard shortcut hint with styled <kbd> chips and an
+          en-dash separator. Plain inline text felt cramped + non-discoverable
+          (the · separator visually merged with the surrounding characters).
+          Chips communicate "this is a key" without a tooltip. */}
       <div
         style={{
           textAlign: "center",
-          marginTop: 6,
+          marginTop: 8,
           fontSize: 11,
           color: C.text3,
           maxWidth: 800,
-          margin: "6px auto 0",
+          margin: "8px auto 0",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
         }}
       >
-        Shift + Enter 换行 · Enter 发送 · 拖拽文件上传
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <kbd style={kbdStyle}>Shift</kbd>
+          <span style={{ opacity: 0.55 }}>+</span>
+          <kbd style={kbdStyle}>Enter</kbd>
+          <span style={{ marginLeft: 4 }}>换行</span>
+        </span>
+        <span style={{ opacity: 0.4 }}>·</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <kbd style={kbdStyle}>Enter</kbd>
+          <span style={{ marginLeft: 4 }}>发送</span>
+        </span>
+        <span style={{ opacity: 0.4 }}>·</span>
+        <span>拖拽文件上传</span>
       </div>
     </div>
   );

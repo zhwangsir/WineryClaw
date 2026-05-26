@@ -1,0 +1,10 @@
+{
+  "id": "skill-url-tools",
+  "name": "URL Tools",
+  "description": "Parse / build / clean URLs. Actions: parse (extract components) | build (combine parts) | clean (strip tracking params) | encode | decode.",
+  "triggerPatterns": ["url parse", "url build", "url decode", "clean url"],
+  "code": "const TRACKERS = /^(utm_|mc_|hsa_|_hs|matomo_|piwik_|vero_|mkt_)/i;\nconst NAMED = new Set(['fbclid','gclid','gclsrc','dclid','msclkid','yclid','wickedid','igshid','si','ref_src','ref_url','spm','share_source','share_medium','share_campaign','_ga','__hsfp','__hssc','__hstc']);\nconst action = (params.action || 'parse').toLowerCase();\nconst input = params.url || params.input;\nif (action === 'parse') {\n  if (!input) throw new Error('params.url required');\n  const u = new URL(input);\n  const params_obj = {};\n  u.searchParams.forEach((v, k) => { params_obj[k] = v; });\n  return { protocol: u.protocol, hostname: u.hostname, port: u.port, pathname: u.pathname, search: u.search, hash: u.hash, params: params_obj, origin: u.origin };\n}\nif (action === 'build') {\n  const parts = params.parts || {};\n  const u = new URL(parts.origin || (parts.protocol + '//' + parts.hostname + (parts.port ? ':' + parts.port : '')));\n  if (parts.pathname) u.pathname = parts.pathname;\n  if (parts.params) for (const [k, v] of Object.entries(parts.params)) u.searchParams.set(k, String(v));\n  if (parts.hash) u.hash = parts.hash;\n  return { url: u.toString() };\n}\nif (action === 'clean') {\n  if (!input) throw new Error('params.url required');\n  const u = new URL(input);\n  const removed = [];\n  for (const key of [...u.searchParams.keys()]) {\n    if (NAMED.has(key.toLowerCase()) || TRACKERS.test(key)) { removed.push(key); u.searchParams.delete(key); }\n  }\n  return { original: input, cleaned: u.toString(), removed };\n}\nif (action === 'encode') return { encoded: encodeURIComponent(input) };\nif (action === 'decode') return { decoded: decodeURIComponent(input) };\nthrow new Error('Unknown action: ' + action);",
+  "language": "javascript",
+  "tags": ["url", "web", "utility"],
+  "version": 1
+}

@@ -55,7 +55,7 @@ class SkillImprovementCycle:
         self.sub_brain_url = (
             sub_brain_url
             or os.environ.get("WEBRAIN_SUB_BRAIN_URL")
-            or "http://localhost:3000"
+            or "http://localhost:3456"
         ).rstrip("/")
         self.timeout_s = timeout_s
 

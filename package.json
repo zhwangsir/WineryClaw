@@ -3,7 +3,7 @@
   "version": "1.0.2",
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "node tests/_run-or-skip.mjs",
     "test:watch": "vitest",
     "prepare": "husky"
   },

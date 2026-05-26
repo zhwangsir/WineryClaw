@@ -70,14 +70,24 @@ export function registerSkillhubRoutes(app: FastifyInstance, deps: SkillhubRoute
     // Accept both `slug` (frontend convention) and `skillId` (canonical).
     const id = String(body.skillId ?? body.slug ?? "");
     if (!id) return { ok: false, error: "Missing skillId/slug" };
-    return skillHubClient.install(id, body.registry);
+    const res = await skillHubClient.install(id, body.registry);
+    // Tell the in-process SkillManager about the new skill so
+    // /api/skills/<id>/invoke works immediately. Without this, the
+    // hub-installed skill is on disk but the in-memory registry is
+    // stale until the next sub-brain restart.
+    if (res.ok) skillManager.reloadInstalledHubSkills();
+    return res;
   });
 
   app.post("/api/skillhub/uninstall", async (request) => {
     const body = (request.body as { slug?: string; skillId?: string }) ?? {};
     const id = String(body.skillId ?? body.slug ?? "");
     if (!id) return { ok: false, error: "Missing skillId/slug" };
-    return skillHubClient.uninstall(id);
+    const res = await skillHubClient.uninstall(id);
+    // Mirror install: drop the in-memory copy so the user-visible state
+    // matches disk immediately.
+    if (res.ok) skillManager.reloadInstalledHubSkills();
+    return res;
   });
 
   app.get("/api/skillhub/installed", async () => ({
@@ -103,6 +113,24 @@ export function registerSkillhubRoutes(app: FastifyInstance, deps: SkillhubRoute
       url: String(body.url),
       enabled: body.enabled !== false,
       priority: typeof body.priority === "number" ? body.priority : undefined,
+    });
+  });
+
+  // v2.39: PATCH lets users flip the v2.35 seed entries (default
+  // `enabled: false`) on/off without removing+re-adding. Body is a
+  // partial { enabled?, priority?, url? }; omitted fields are
+  // preserved. Returns ok:false with reason when name is unknown.
+  app.patch("/api/skillhub/registries/:name", async (request) => {
+    const { name } = request.params as { name: string };
+    const body = (request.body as {
+      enabled?: boolean;
+      priority?: number;
+      url?: string;
+    }) ?? {};
+    return skillHubClient.updateRegistry(String(name), {
+      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+      priority: typeof body.priority === "number" ? body.priority : undefined,
+      url: typeof body.url === "string" && body.url.length > 0 ? body.url : undefined,
     });
   });
 
@@ -134,6 +162,31 @@ export function registerSkillhubRoutes(app: FastifyInstance, deps: SkillhubRoute
   });
 
   // ---------- drafts ----------
+
+  app.post("/api/skillhub/drafts", async (request) => {
+    const body = (request.body as {
+      name?: string;
+      description?: string;
+      code?: string;
+      language?: string;
+      triggerPatterns?: string[];
+      tags?: string[];
+      reason?: string;
+    }) ?? {};
+    if (!body.name || !body.code) {
+      return { ok: false, error: "name and code required" };
+    }
+    const draft = skillManager.createDraft({
+      name: String(body.name),
+      description: String(body.description ?? ""),
+      code: String(body.code),
+      language: (body.language as any) ?? "javascript",
+      triggerPatterns: body.triggerPatterns ?? [],
+      tags: body.tags ?? [],
+      reason: String(body.reason ?? "manual"),
+    });
+    return { ok: true, skill: draft };
+  });
 
   app.get("/api/skillhub/drafts", async () => ({
     drafts: skillManager.listDrafts(),

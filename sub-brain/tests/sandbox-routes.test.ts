@@ -6,6 +6,9 @@ import type { DockerSandbox } from "../src/sandbox/docker-sandbox.js";
 import type { AgentManager } from "../src/agent/agent-manager.js";
 
 function makeFakeDocker() {
+  // In-memory workspace registry so tests can verify state across calls.
+  const workspaces = new Map<string, { workspaceId: string; image: string; memory: string; cpus: number; network: boolean; lastActiveAt: string; hostPath: string }>();
+
   return {
     execute: vi.fn(async (command: string, inputFiles?: Record<string, string>) => ({
       ok: true,
@@ -14,6 +17,32 @@ function makeFakeDocker() {
     })),
     executePython: vi.fn(async (code: string) => ({ ok: true, output: `python: ${code.length} chars` })),
     isAvailable: vi.fn(() => true),
+    // J1 workspace surface
+    listWorkspaces: vi.fn(() => [...workspaces.values()]),
+    // J2 image probe
+    resolveDefaultWorkspaceImage: vi.fn(() => "webrain-workspace:latest"),
+    ensureWorkspace: vi.fn(async (workspaceId: string, opts?: { image?: string; memory?: string; cpus?: number; network?: boolean }) => {
+      const cfg = {
+        workspaceId,
+        image: opts?.image ?? "node:20-alpine",
+        memory: opts?.memory ?? "512m",
+        cpus: opts?.cpus ?? 1.0,
+        network: opts?.network ?? false,
+        lastActiveAt: new Date().toISOString(),
+        hostPath: `/tmp/ws-${workspaceId}`,
+      };
+      workspaces.set(workspaceId, cfg);
+      return { ok: true, workspace: cfg };
+    }),
+    execInWorkspace: vi.fn(async (workspaceId: string, command: string) => ({
+      ok: true,
+      output: `ws:${workspaceId}:${command}`,
+      exitCode: 0,
+    })),
+    removeWorkspace: vi.fn(async (workspaceId: string) => {
+      workspaces.delete(workspaceId);
+      return { ok: true };
+    }),
   };
 }
 
@@ -178,6 +207,98 @@ describe("sandbox routes", () => {
       payload: { x: 1 },
     });
     expect(res.json().ok).toBe(false);
+  });
+
+  // ---- Workspace sandbox (Round J1) ----
+
+  it("GET /sandbox/workspaces returns empty list + default image initially", async () => {
+    const res = await app.inject({ method: "GET", url: "/sandbox/workspaces" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      workspaces: [],
+      defaultImage: "webrain-workspace:latest",
+    });
+  });
+
+  it("POST /sandbox/workspaces creates a workspace", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sandbox/workspaces",
+      payload: { workspaceId: "demo", network: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().workspace.workspaceId).toBe("demo");
+    expect(res.json().workspace.network).toBe(true);
+    expect(docker.ensureWorkspace).toHaveBeenCalledWith("demo", {
+      image: undefined,
+      memory: undefined,
+      cpus: undefined,
+      network: true,
+    });
+  });
+
+  it("POST /sandbox/workspaces 400s without workspaceId", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sandbox/workspaces",
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().ok).toBe(false);
+  });
+
+  it("POST /sandbox/workspaces/:id/exec runs command in workspace", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sandbox/workspaces/demo/exec",
+      payload: { command: "echo hi" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().output).toBe("ws:demo:echo hi");
+    expect(docker.execInWorkspace).toHaveBeenCalledWith("demo", "echo hi", { timeoutMs: undefined });
+  });
+
+  it("POST /sandbox/workspaces/:id/exec 400s without command", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sandbox/workspaces/demo/exec",
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().ok).toBe(false);
+  });
+
+  it("DELETE /sandbox/workspaces/:id tears down workspace", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/sandbox/workspaces",
+      payload: { workspaceId: "doomed" },
+    });
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/sandbox/workspaces/doomed",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    expect(docker.removeWorkspace).toHaveBeenCalledWith("doomed");
+  });
+
+  it("workspaces endpoint reflects ensureWorkspace state", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/sandbox/workspaces",
+      payload: { workspaceId: "ws1" },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/sandbox/workspaces",
+      payload: { workspaceId: "ws2", network: true },
+    });
+    const res = await app.inject({ method: "GET", url: "/sandbox/workspaces" });
+    const ids = res.json().workspaces.map((w: { workspaceId: string }) => w.workspaceId);
+    expect(ids).toEqual(expect.arrayContaining(["ws1", "ws2"]));
   });
 
   it("POST /sandbox/:agentId/session creates a session", async () => {

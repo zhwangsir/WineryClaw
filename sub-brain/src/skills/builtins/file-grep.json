@@ -1,0 +1,10 @@
+{
+  "id": "skill-file-grep",
+  "name": "File Grep",
+  "description": "Search for a regex pattern across files in a directory (recursive). Returns matched lines with file path + line number. Caps at 200 matches.",
+  "triggerPatterns": ["grep ", "search files", "find in files"],
+  "code": "const fs = require('fs');\nconst path = require('path');\nconst root = params.root || params.path || '.';\nconst pattern = params.pattern;\nif (!pattern) throw new Error('params.pattern required');\nconst flags = params.flags || 'i';\nconst re = new RegExp(pattern, flags);\nconst include = params.include ? new RegExp(params.include) : null;\nconst exclude = params.exclude ? new RegExp(params.exclude) : /node_modules|\\.git|venv|__pycache__|dist|build|target/;\nconst maxMatches = Number(params.max_matches ?? 200);\nconst maxDepth = Number(params.max_depth ?? 6);\nconst matches = [];\nfunction walk(dir, depth) {\n  if (depth > maxDepth || matches.length >= maxMatches) return;\n  let entries;\n  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }\n  for (const ent of entries) {\n    const p = path.join(dir, ent.name);\n    if (exclude && exclude.test(p)) continue;\n    if (ent.isDirectory()) { walk(p, depth + 1); continue; }\n    if (!ent.isFile()) continue;\n    if (include && !include.test(p)) continue;\n    let content;\n    try { content = fs.readFileSync(p, 'utf8'); } catch { continue; }\n    const lines = content.split('\\n');\n    for (let i = 0; i < lines.length; i++) {\n      if (re.test(lines[i])) {\n        matches.push({ file: p, line: i + 1, text: lines[i].slice(0, 300) });\n        if (matches.length >= maxMatches) return;\n      }\n    }\n  }\n}\nwalk(root, 0);\nreturn { pattern, root, matches, count: matches.length, truncated: matches.length >= maxMatches };",
+  "language": "javascript",
+  "tags": ["filesystem", "search", "regex"],
+  "version": 1
+}

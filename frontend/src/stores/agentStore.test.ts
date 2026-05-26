@@ -78,7 +78,10 @@ describe("agentStore", () => {
 
   it("fetchAgents keeps current agent when valid", async () => {
     useAgentStore.setState({ currentAgentId: "a1" });
-    const agents = [{ id: "a1", name: "Agent1" }, { id: "a2", name: "Agent2" }];
+    const agents = [
+      { id: "a1", name: "Agent1" },
+      { id: "a2", name: "Agent2" },
+    ];
     vi.mocked(agentsApi.list).mockResolvedValue(agents);
     await useAgentStore.getState().fetchAgents();
     expect(useAgentStore.getState().currentAgentId).toBe("a1");
@@ -86,7 +89,10 @@ describe("agentStore", () => {
 
   it("fetchAgents falls back to first agent when no default", async () => {
     useAgentStore.setState({ currentAgentId: "invalid" });
-    const agents = [{ id: "a2", name: "Agent2" }, { id: "a3", name: "Agent3" }];
+    const agents = [
+      { id: "a2", name: "Agent2" },
+      { id: "a3", name: "Agent3" },
+    ];
     vi.mocked(agentsApi.list).mockResolvedValue(agents);
     await useAgentStore.getState().fetchAgents();
     expect(useAgentStore.getState().currentAgentId).toBe("a2");
@@ -171,7 +177,10 @@ describe("agentStore", () => {
 
   it("updateAgent skips selectedAgent when different id", async () => {
     useAgentStore.setState({
-      agents: [{ id: "a1", name: "Old" }, { id: "a2", name: "Other" }],
+      agents: [
+        { id: "a1", name: "Old" },
+        { id: "a2", name: "Other" },
+      ],
       selectedAgent: { id: "a2", name: "Other" },
     });
     const updated = { id: "a1", name: "New" };

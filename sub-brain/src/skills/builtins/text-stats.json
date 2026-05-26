@@ -1,0 +1,10 @@
+{
+  "id": "skill-text-stats",
+  "name": "Text Stats",
+  "description": "Detailed text statistics: char/word/line counts, CJK char count, word frequency, reading time estimate, language detection (heuristic).",
+  "triggerPatterns": ["text stats", "word frequency", "char count", "reading time"],
+  "code": "const text = params.text || params.input || '';\nif (!text) throw new Error('params.text required');\nconst chars_total = text.length;\nconst chars_no_ws = text.replace(/\\s/g, '').length;\nconst lines = text.split('\\n');\nconst lines_count = lines.length;\nconst lines_non_empty = lines.filter(l => l.trim()).length;\nconst words_arr = text.match(/[\\w\\u00C0-\\u024F\\u4e00-\\u9fff\\u3040-\\u30ff]+/g) || [];\nconst words_count = words_arr.length;\nconst cjk = text.match(/[\\u4e00-\\u9fff\\u3040-\\u30ff\\uac00-\\ud7af]/g) || [];\nconst cjk_count = cjk.length;\n// Word frequency (top N)\nconst freq = {};\nfor (const w of words_arr) { const k = w.toLowerCase(); freq[k] = (freq[k] || 0) + 1; }\nconst topN = Number(params.top_words ?? 10);\nconst top_words = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, topN).map(([word, count]) => ({ word, count }));\n// Reading time estimate (200 wpm for English, 300 cpm for CJK)\nconst en_words = words_count - cjk_count;\nconst minutes = en_words / 200 + cjk_count / 300;\n// Language heuristic\nlet language = 'unknown';\nif (cjk_count > chars_total * 0.3) language = 'cjk';\nelse if (/[\\u0400-\\u04ff]/.test(text)) language = 'cyrillic';\nelse if (/[\\u0590-\\u05ff]/.test(text)) language = 'hebrew';\nelse if (/[\\u0600-\\u06ff]/.test(text)) language = 'arabic';\nelse if (/^[\\x00-\\x7f\\s]*$/.test(text.slice(0, 1000))) language = 'ascii/latin';\nreturn { chars_total, chars_no_ws, lines: lines_count, lines_non_empty, words: words_count, cjk_chars: cjk_count, top_words, reading_minutes: Number(minutes.toFixed(1)), language };",
+  "language": "javascript",
+  "tags": ["text", "stats", "nlp"],
+  "version": 1
+}

@@ -1,0 +1,81 @@
+{
+  "_comment": "WeBrain LLM endpoints template — copy to ~/.webrain/model-config.json (or POST to /config/model), fill in apiKey, then restart sub-brain. Field name camelCase matches the canonical persisted format. provider field switches request builder: 'anthropic' → /messages + x-api-key; 'google' → /models/{id}:generateContent?key=; everything else → OpenAI-compatible /chat/completions + Bearer. priority: higher first. timeout in seconds.",
+  "baseUrl": "https://api.openai.com/v1",
+  "modelId": "gpt-4o-mini",
+  "temperature": 0.7,
+  "maxTokens": 4096,
+  "endpoints": [
+    {
+      "name": "openai",
+      "provider": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "modelId": "gpt-4o-mini",
+      "apiKey": "<YOUR_OPENAI_API_KEY>",
+      "priority": 9,
+      "timeout": 60
+    },
+    {
+      "name": "anthropic",
+      "provider": "anthropic",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "modelId": "claude-3-5-sonnet-20241022",
+      "apiKey": "<YOUR_ANTHROPIC_API_KEY>",
+      "priority": 9,
+      "timeout": 60
+    },
+    {
+      "name": "google-gemini",
+      "provider": "google",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "modelId": "gemini-2.0-flash",
+      "apiKey": "<YOUR_GOOGLE_API_KEY>",
+      "priority": 8,
+      "timeout": 60
+    },
+    {
+      "name": "deepseek",
+      "provider": "openai",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "modelId": "deepseek-chat",
+      "apiKey": "<YOUR_DEEPSEEK_API_KEY>",
+      "priority": 7,
+      "timeout": 60
+    },
+    {
+      "name": "kimi-moonshot",
+      "provider": "openai",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "modelId": "moonshot-v1-8b",
+      "apiKey": "<YOUR_MOONSHOT_API_KEY>",
+      "priority": 6,
+      "timeout": 60
+    },
+    {
+      "name": "groq",
+      "provider": "openai",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "modelId": "llama-3.3-70b-versatile",
+      "apiKey": "<YOUR_GROQ_API_KEY>",
+      "priority": 6,
+      "timeout": 60
+    },
+    {
+      "name": "lm-studio",
+      "provider": "openai",
+      "baseUrl": "http://localhost:1234/v1",
+      "modelId": "minimax/minimax-m2.7",
+      "apiKey": "",
+      "priority": 10,
+      "timeout": 120
+    },
+    {
+      "name": "ollama",
+      "provider": "openai",
+      "baseUrl": "http://localhost:11434/v1",
+      "modelId": "llama3.2",
+      "apiKey": "",
+      "priority": 5,
+      "timeout": 120
+    }
+  ]
+}

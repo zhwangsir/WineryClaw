@@ -165,8 +165,19 @@ class RAGRetriever:
 
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
+            # v2.43 (Sprint 0.7 quick win) — RAG previously had zero
+            # PRAGMAs while MemoryManager already ran WAL. Even though
+            # rag.db sees lower write QPS than memory.db, the DELETE
+            # journal mode meant concurrent index_file + chat query
+            # serialized through the same disk fsync. Match the
+            # MemoryManager triple (WAL + synchronous=NORMAL +
+            # busy_timeout=5000) so writes don't block readers.
             conn.executescript(
                 """
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+                PRAGMA busy_timeout=5000;
+
                 CREATE TABLE IF NOT EXISTS rag_documents (
                     path TEXT PRIMARY KEY,
                     mtime REAL NOT NULL,

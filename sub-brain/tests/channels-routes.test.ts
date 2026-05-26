@@ -51,6 +51,14 @@ function makeFakeChannelManager() {
       const ok = channels.delete(id);
       return ok ? { ok: true } : { ok: false, error: "not found" };
     }),
+    // M5 — auto-reply state per channel
+    setAutoReply: vi.fn(async (id: string, enabled: boolean) => {
+      const c = channels.get(id);
+      if (!c) return { ok: false, error: "not found" };
+      (c as any).auto_reply = enabled;
+      return { ok: true, auto_reply: enabled };
+    }),
+    getAutoReply: vi.fn((id: string) => Boolean((channels.get(id) as any)?.auto_reply)),
   };
 
   return { mgr, channels };
@@ -168,5 +176,39 @@ describe("channels routes", () => {
     await app.inject({ method: "POST", url: "/channels/connect", payload: { channel: "telegram" } });
     const res = await app.inject({ method: "DELETE", url: "/channels/c-1" });
     expect(res.json()).toEqual({ ok: true });
+  });
+
+  // M5 — auto-reply toggle
+  it("POST /channels/:id/auto-reply sets enabled=true", async () => {
+    await app.inject({ method: "POST", url: "/channels/connect", payload: { channel: "telegram" } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/channels/c-1/auto-reply",
+      payload: { enabled: true },
+    });
+    expect(res.json()).toEqual({ ok: true, auto_reply: true });
+    expect(mgr.setAutoReply).toHaveBeenCalledWith("c-1", true);
+  });
+
+  it("POST /channels/:id/auto-reply with missing/false body defaults to disabled", async () => {
+    await app.inject({ method: "POST", url: "/channels/connect", payload: { channel: "telegram" } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/channels/c-1/auto-reply",
+      payload: {},
+    });
+    expect(res.json()).toEqual({ ok: true, auto_reply: false });
+    expect(mgr.setAutoReply).toHaveBeenCalledWith("c-1", false);
+  });
+
+  it("GET /channels/:id/auto-reply reports current state", async () => {
+    await app.inject({ method: "POST", url: "/channels/connect", payload: { channel: "telegram" } });
+    await app.inject({
+      method: "POST",
+      url: "/channels/c-1/auto-reply",
+      payload: { enabled: true },
+    });
+    const res = await app.inject({ method: "GET", url: "/channels/c-1/auto-reply" });
+    expect(res.json()).toEqual({ ok: true, auto_reply: true });
   });
 });

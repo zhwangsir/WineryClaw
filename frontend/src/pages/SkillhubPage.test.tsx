@@ -89,7 +89,10 @@ describe("SkillhubPage", () => {
 
   it("installed skill shows 已安装 and disabled button", () => {
     render(<SkillhubPage />);
-    expect(screen.getByText("已安装")).toBeInTheDocument();
+    // s2 has installed:true — use data-testid to disambiguate from the tab label
+    const btn = screen.getByTestId("skill-installed-s2");
+    expect(btn).toBeInTheDocument();
+    expect(btn).toBeDisabled();
   });
 
   it("search input + Enter triggers search()", () => {
@@ -110,10 +113,30 @@ describe("SkillhubPage", () => {
     expect(fetchSkills).toHaveBeenCalledTimes(2);
   });
 
-  it("shows empty hint when marketplace is empty", () => {
-    vi.mocked(useSkillhubStore).mockReturnValue(createMockStore({ skills: [] }));
+  it("v2.41: skills empty + registries empty → only RegistryPanel empty state (no double)", () => {
+    // Before v2.41 a SECOND <Empty> stacked under the RegistryPanel's own
+    // "尚未配置任何 registry" — two illustrations on top of each other read
+    // as a broken page. Now we only show the actionable RegistryPanel hint.
+    vi.mocked(useSkillhubStore).mockReturnValue(createMockStore({ skills: [], registries: [] }));
     render(<SkillhubPage />);
-    expect(screen.getByText(/无技能/)).toBeInTheDocument();
+    // RegistryPanel's own empty illustration is the single source of truth.
+    expect(screen.getByText("尚未配置任何 registry")).toBeInTheDocument();
+    // The redundant marketplace-empty state must NOT render.
+    expect(screen.queryByText(/无技能/)).toBeNull();
+  });
+
+  it("v2.41: skills empty BUT registries configured → actionable 'try refresh' card", () => {
+    vi.mocked(useSkillhubStore).mockReturnValue(
+      createMockStore({
+        skills: [],
+        registries: [{ name: "test-hub", url: "file:///path", enabled: true, priority: 100 }],
+      })
+    );
+    render(<SkillhubPage />);
+    // New contextual hint nudges the user toward the refresh button instead
+    // of a generic "无技能" line.
+    expect(screen.getByText(/这些 registry 还没有可安装的技能/)).toBeInTheDocument();
+    expect(screen.getByText(/刷新拉取最新索引/)).toBeInTheDocument();
   });
 
   it("shows registry panel + add button", () => {
@@ -126,7 +149,7 @@ describe("SkillhubPage", () => {
     vi.mocked(useSkillhubStore).mockReturnValue(
       createMockStore({
         registries: [{ name: "test-hub", url: "file:///path", enabled: true, priority: 100 }],
-      }),
+      })
     );
     render(<SkillhubPage />);
     expect(screen.getByText(/test-hub/)).toBeInTheDocument();
@@ -136,21 +159,21 @@ describe("SkillhubPage", () => {
 
   it("switching to Installed tab triggers fetchInstalled", async () => {
     render(<SkillhubPage />);
-    const installedTab = screen.getByText(/Installed/);
+    const installedTab = screen.getByRole("tab", { name: /已安装/ });
     fireEvent.click(installedTab);
     await waitFor(() => expect(fetchInstalled).toHaveBeenCalled());
   });
 
   it("switching to Improvements tab triggers fetchCandidates", async () => {
     render(<SkillhubPage />);
-    const tab = screen.getByText(/Improvements/);
+    const tab = screen.getByRole("tab", { name: /改进/ });
     fireEvent.click(tab);
     await waitFor(() => expect(fetchCandidates).toHaveBeenCalled());
   });
 
   it("switching to Drafts tab triggers fetchDrafts", async () => {
     render(<SkillhubPage />);
-    const tab = screen.getByText(/Drafts/);
+    const tab = screen.getByRole("tab", { name: /草稿/ });
     fireEvent.click(tab);
     await waitFor(() => expect(fetchDrafts).toHaveBeenCalled());
   });
@@ -178,10 +201,10 @@ describe("SkillhubPage", () => {
             hubRegistry: "test-hub",
           },
         ],
-      }),
+      })
     );
     render(<SkillhubPage />);
-    fireEvent.click(screen.getByText(/Installed/));
+    fireEvent.click(screen.getByRole("tab", { name: /已安装/ }));
     await waitFor(() => expect(screen.getByText("Skill X")).toBeInTheDocument());
     expect(screen.getByText("test-hub")).toBeInTheDocument();
   });
@@ -193,12 +216,26 @@ describe("SkillhubPage", () => {
       createMockStore({
         candidates: [
           {
-            skill: { id: "s1", name: "Failing", code: "x", language: "javascript", version: 1, usageCount: 20, successRate: 0.3, tags: [], description: "", triggerPatterns: [], createdBy: "", createdAt: "", updatedAt: "" },
+            skill: {
+              id: "s1",
+              name: "Failing",
+              code: "x",
+              language: "javascript",
+              version: 1,
+              usageCount: 20,
+              successRate: 0.3,
+              tags: [],
+              description: "",
+              triggerPatterns: [],
+              createdBy: "",
+              createdAt: "",
+              updatedAt: "",
+            },
             primaryFailureMode: { signature: "TypeError", count: 7, lastSeen: "2026-05-19", examples: [] },
             reason: "70% failure rate",
           },
         ],
-      }),
+      })
     );
     render(<SkillhubPage />);
     // The candidate count tag is visible in the tab header
@@ -209,7 +246,7 @@ describe("SkillhubPage", () => {
 
   it("Drafts tab empty state", async () => {
     render(<SkillhubPage />);
-    fireEvent.click(screen.getByText(/Drafts/));
+    fireEvent.click(screen.getByRole("tab", { name: /草稿/ }));
     await waitFor(() => expect(screen.getByText(/没有待审核草稿/)).toBeInTheDocument());
   });
 
@@ -233,10 +270,10 @@ describe("SkillhubPage", () => {
             tags: [],
           },
         ],
-      }),
+      })
     );
     render(<SkillhubPage />);
-    fireEvent.click(screen.getByText(/Drafts/));
+    fireEvent.click(screen.getByRole("tab", { name: /草稿/ }));
     // The data row rendering inside the table is enough evidence that the
     // Drafts tab content (including action column with preview/promote
     // buttons) is wired up. Asserting on per-button text inside antd's

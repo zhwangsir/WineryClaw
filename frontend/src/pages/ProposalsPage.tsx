@@ -58,21 +58,47 @@ export default function ProposalsPage() {
       {proposals.length === 0 ? (
         <Empty description="暂无提案" />
       ) : (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={proposals}
             rowKey="id"
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "主题", dataIndex: "topic", render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
-              { title: "提案人", dataIndex: "proposerId", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span> },
-              { title: "状态", dataIndex: "status", render: (v: string) => (
-                <Tag style={{ color: statusColors[v] || "var(--c-text-3)", border: "none", background: "var(--c-hover)", fontSize: 12 }}>{v}</Tag>
-              )},
-              { title: "票数", render: (_: unknown, r: { votes?: unknown[]; quorum?: number }) => (
-                <span style={{ fontSize: 12 }}>{(r.votes?.length || 0)} / {r.quorum || 1}</span>
-              )},
+              {
+                title: "主题",
+                dataIndex: "topic",
+                render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span>,
+              },
+              {
+                title: "提案人",
+                dataIndex: "proposerId",
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span>,
+              },
+              {
+                title: "状态",
+                dataIndex: "status",
+                render: (v: string) => (
+                  <Tag
+                    style={{
+                      color: statusColors[v] || "var(--c-text-3)",
+                      border: "none",
+                      background: "var(--c-hover)",
+                      fontSize: 12,
+                    }}
+                  >
+                    {v}
+                  </Tag>
+                ),
+              },
+              {
+                title: "票数",
+                render: (_: unknown, r: { votes?: unknown[]; quorum?: number }) => (
+                  <span style={{ fontSize: 12 }}>
+                    {r.votes?.length || 0} / {r.quorum || 1}
+                  </span>
+                ),
+              },
               {
                 title: "操作",
                 key: "action",
@@ -80,9 +106,13 @@ export default function ProposalsPage() {
                   <div style={{ display: "flex", gap: 8 }}>
                     {record.status === "open" && (
                       <>
-                        <Button size="small" icon={<CheckOutlined />} onClick={() => openVote(record.id)}>投票</Button>
+                        <Button size="small" icon={<CheckOutlined />} onClick={() => openVote(record.id)}>
+                          投票
+                        </Button>
                         <Popconfirm title="确认关闭" onConfirm={() => close(record.id)} okText="关闭" cancelText="取消">
-                          <Button size="small" danger icon={<CloseOutlined />}>关闭</Button>
+                          <Button size="small" danger icon={<CloseOutlined />}>
+                            关闭
+                          </Button>
                         </Popconfirm>
                       </>
                     )}
@@ -114,7 +144,9 @@ export default function ProposalsPage() {
             <Input type="number" min={1} />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>创建</Button>
+            <Button type="primary" htmlType="submit" block>
+              创建
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>
@@ -130,13 +162,20 @@ export default function ProposalsPage() {
             <Input placeholder="Agent ID" />
           </Form.Item>
           <Form.Item name="vote" label="意见" rules={[{ required: true }]}>
-            <Select options={[{ value: "yes", label: "同意" }, { value: "no", label: "反对" }]} />
+            <Select
+              options={[
+                { value: "yes", label: "同意" },
+                { value: "no", label: "反对" },
+              ]}
+            />
           </Form.Item>
           <Form.Item name="reason" label="理由">
             <Input.TextArea rows={2} placeholder="投票理由..." />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>提交</Button>
+            <Button type="primary" htmlType="submit" block>
+              提交
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>

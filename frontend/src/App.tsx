@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, useLocation } from "react-router-dom";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { GlobalProgressBar } from "./components/common/GlobalProgress";
@@ -10,6 +10,7 @@ import { useChannelStore } from "./stores/channelStore";
 import { useChatStore } from "./stores/chatStore";
 import { Loading } from "./components/common/Loading";
 
+const UserHomePage = lazy(() => import("./pages/UserHomePage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ChatPage = lazy(() => import("./pages/ChatPage"));
 const AgentsPage = lazy(() => import("./pages/AgentsPage"));
@@ -39,6 +40,7 @@ const UploadsPage = lazy(() => import("./pages/UploadsPage"));
 const HooksPage = lazy(() => import("./pages/HooksPage"));
 const MetricsPage = lazy(() => import("./pages/MetricsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const PopupChatPage = lazy(() => import("./pages/PopupChatPage"));
 
 /** Global app initializer — runs once on mount, parallelizes all store hydration */
 function AppInitializer() {
@@ -56,46 +58,94 @@ function AppInitializer() {
   return null;
 }
 
+/**
+ * Two-mode router (Round I1, 2026-05-20):
+ *   `/`            — UserHomePage. Notion-style chat + RAG sidebar.
+ *                    NO AppLayout (no admin sidebar). Gear icon in the
+ *                    UserHomePage top-right routes to `/dashboard` for
+ *                    admin mode.
+ *   everything else — AppLayout-wrapped admin pages. Sidebar nav,
+ *                     existing dense UI. `/dashboard` is the admin
+ *                     landing (formerly at `/`).
+ *
+ * We render UserHomePage as a separate branch instead of inside
+ * AppLayout so it can claim the full viewport without inheriting
+ * the admin chrome.
+ */
+function AdminShell() {
+  return (
+    <AppLayout>
+      <Suspense fallback={<Loading />}>
+        <Routes>
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/tools" element={<ToolsPage />} />
+          <Route path="/plugins" element={<PluginsPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/wiki" element={<WikiPage />} />
+          <Route path="/kg" element={<KnowledgeGraphPage />} />
+          <Route path="/channels" element={<ChannelsPage />} />
+          <Route path="/cron" element={<CronPage />} />
+          <Route path="/templates" element={<TemplatesPage />} />
+          <Route path="/workflows" element={<WorkflowsPage />} />
+          <Route path="/sandbox" element={<SandboxPage />} />
+          <Route path="/mcp" element={<McpPage />} />
+          <Route path="/browser" element={<BrowserPage />} />
+          <Route path="/identity" element={<IdentityPage />} />
+          <Route path="/ecosystem" element={<EcosystemPage />} />
+          <Route path="/dokobot" element={<DokobotPage />} />
+          <Route path="/proposals" element={<ProposalsPage />} />
+          <Route path="/a2a" element={<A2aPage />} />
+          <Route path="/cli" element={<CliPage />} />
+          <Route path="/skillhub" element={<SkillhubPage />} />
+          <Route path="/rag" element={<RAGPage />} />
+          <Route path="/config" element={<ConfigPage />} />
+          <Route path="/uploads" element={<UploadsPage />} />
+          <Route path="/hooks" element={<HooksPage />} />
+          <Route path="/metrics" element={<MetricsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Routes>
+      </Suspense>
+    </AppLayout>
+  );
+}
+
 export default function App() {
+  const location = useLocation();
+  const isUserMode = location.pathname === "/";
+  // Popup-chat: minimal compact chat surface for the macOS menu-bar tray.
+  // No admin chrome, no global progress bar, no AppInitializer (the bigger
+  // initializer fires extra fetches the popup doesn't need; the popup boots
+  // its own minimal state).
+  const isPopupChat = location.pathname === "/popup-chat";
+
+  if (isPopupChat) {
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path="/popup-chat" element={<PopupChatPage />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <ErrorBoundary>
       <GlobalProgressBar />
       <AppInitializer />
-      <AppLayout>
+      {isUserMode ? (
         <Suspense fallback={<Loading />}>
           <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/agents" element={<AgentsPage />} />
-            <Route path="/tools" element={<ToolsPage />} />
-            <Route path="/plugins" element={<PluginsPage />} />
-            <Route path="/skills" element={<SkillsPage />} />
-            <Route path="/memory" element={<MemoryPage />} />
-            <Route path="/wiki" element={<WikiPage />} />
-            <Route path="/kg" element={<KnowledgeGraphPage />} />
-            <Route path="/channels" element={<ChannelsPage />} />
-            <Route path="/cron" element={<CronPage />} />
-            <Route path="/templates" element={<TemplatesPage />} />
-            <Route path="/workflows" element={<WorkflowsPage />} />
-            <Route path="/sandbox" element={<SandboxPage />} />
-            <Route path="/mcp" element={<McpPage />} />
-            <Route path="/browser" element={<BrowserPage />} />
-            <Route path="/identity" element={<IdentityPage />} />
-            <Route path="/ecosystem" element={<EcosystemPage />} />
-            <Route path="/dokobot" element={<DokobotPage />} />
-            <Route path="/proposals" element={<ProposalsPage />} />
-            <Route path="/a2a" element={<A2aPage />} />
-            <Route path="/cli" element={<CliPage />} />
-            <Route path="/skillhub" element={<SkillhubPage />} />
-            <Route path="/rag" element={<RAGPage />} />
-            <Route path="/config" element={<ConfigPage />} />
-            <Route path="/uploads" element={<UploadsPage />} />
-            <Route path="/hooks" element={<HooksPage />} />
-            <Route path="/metrics" element={<MetricsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/" element={<UserHomePage />} />
           </Routes>
         </Suspense>
-      </AppLayout>
+      ) : (
+        <AdminShell />
+      )}
     </ErrorBoundary>
   );
 }

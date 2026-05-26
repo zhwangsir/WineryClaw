@@ -41,20 +41,49 @@ export default function A2aPage() {
       {tasks.length === 0 ? (
         <Empty description="暂无 A2A 任务" />
       ) : (
-        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} bodyStyle={{ padding: 24 }}>
+        <Card style={{ borderRadius: 12, border: "1px solid var(--c-border)" }} styles={{ body: { padding: 24 } }}>
           <Table
             dataSource={tasks}
             rowKey="taskId"
             loading={loading}
             pagination={{ pageSize: 10 }}
             columns={[
-              { title: "Task ID", dataIndex: "taskId", render: (v: string) => <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 16)}...</span> },
-              { title: "Agent", dataIndex: "agentId", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span> },
+              {
+                title: "Task ID",
+                dataIndex: "taskId",
+                render: (v: string) => (
+                  <span style={{ fontSize: 12, fontFamily: "monospace" }}>{v.slice(0, 16)}...</span>
+                ),
+              },
+              {
+                title: "Agent",
+                dataIndex: "agentId",
+                render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{v}</span>,
+              },
               { title: "类型", dataIndex: "type", render: (v: string) => <Tag style={{ fontSize: 11 }}>{v}</Tag> },
-              { title: "状态", dataIndex: "status", render: (v: string) => (
-                <Tag style={{ color: statusColors[v] || "var(--c-text-3)", border: "none", background: "var(--c-hover)", fontSize: 12 }}>{v}</Tag>
-              )},
-              { title: "创建时间", dataIndex: "createdAt", render: (v: string) => <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span> },
+              {
+                title: "状态",
+                dataIndex: "status",
+                render: (v: string) => (
+                  <Tag
+                    style={{
+                      color: statusColors[v] || "var(--c-text-3)",
+                      border: "none",
+                      background: "var(--c-hover)",
+                      fontSize: 12,
+                    }}
+                  >
+                    {v}
+                  </Tag>
+                ),
+              },
+              {
+                title: "创建时间",
+                dataIndex: "createdAt",
+                render: (v: string) => (
+                  <span style={{ fontSize: 12, color: "var(--c-text-3)" }}>{new Date(v).toLocaleString("zh-CN")}</span>
+                ),
+              },
             ]}
           />
         </Card>
@@ -77,7 +106,9 @@ export default function A2aPage() {
             <Input placeholder="例如: delegate, request" />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>发送</Button>
+            <Button type="primary" htmlType="submit" block>
+              发送
+            </Button>
           </Form.Item>
         </Form>
       </Drawer>

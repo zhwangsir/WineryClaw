@@ -40,7 +40,13 @@ describe("PluginsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(pluginsApi.list).mockResolvedValue([
-      { id: "plugin-1", name: "Test Plugin", version: "1.0.0", enabled: true, manifest: { permissions: ["read", "write"] } },
+      {
+        id: "plugin-1",
+        name: "Test Plugin",
+        version: "1.0.0",
+        enabled: true,
+        manifest: { permissions: ["read", "write"] },
+      },
       { id: "plugin-2", name: "Other Plugin", version: "2.0.0", enabled: false, manifest: { permissions: [] } },
     ]);
   });
@@ -55,7 +61,8 @@ describe("PluginsPage", () => {
   it("renders page shell", async () => {
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("Plugins")).toBeInTheDocument();
+      // Q14.3 — title changed from "Plugins" → "插件" for i18n consistency.
+      expect(screen.getByText("插件")).toBeInTheDocument();
     });
   });
 
@@ -73,14 +80,14 @@ describe("PluginsPage", () => {
     vi.mocked(pluginsApi.list).mockResolvedValue([]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("No plugins loaded")).toBeInTheDocument();
+      expect(screen.getByText("暂无已加载的插件")).toBeInTheDocument();
     });
   });
 
   it("refreshes plugins", async () => {
     renderPage();
     await waitFor(() => expect(pluginsApi.list).toHaveBeenCalled());
-    const refreshBtn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("Refresh"));
+    const refreshBtn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("刷新"));
     expect(refreshBtn).toBeTruthy();
     if (refreshBtn) fireEvent.click(refreshBtn);
     // Verify loading state is triggered
@@ -116,8 +123,8 @@ describe("PluginsPage", () => {
   it("unloads a plugin", async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("Test Plugin")).toBeInTheDocument());
-    const unloadBtn = screen.getAllByRole("button").find(b => b.textContent?.includes("Unload"));
-    if (unloadBtn) fireEvent.click(unloadBtn);
+    const unloadBtn = screen.getByTestId("unload-plugin-1");
+    fireEvent.click(unloadBtn);
     await waitFor(() => {
       expect(pluginsApi.unload).toHaveBeenCalledWith("plugin-1");
     });
@@ -159,8 +166,8 @@ describe("PluginsPage", () => {
     vi.mocked(pluginsApi.unload).mockRejectedValue(new Error("unload failed"));
     renderPage();
     await waitFor(() => expect(screen.getByText("Test Plugin")).toBeInTheDocument());
-    const unloadBtn = screen.getAllByRole("button").find(b => b.textContent?.includes("Unload"));
-    if (unloadBtn) fireEvent.click(unloadBtn);
+    const unloadBtn = screen.getByTestId("unload-plugin-1");
+    fireEvent.click(unloadBtn);
     await waitFor(() => {
       expect(pluginsApi.unload).toHaveBeenCalledWith("plugin-1");
     });
