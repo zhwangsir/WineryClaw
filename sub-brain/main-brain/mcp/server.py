@@ -17,6 +17,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+from .audit_log import write_audit_log
 from .auth import verify
 from .protocol import (
     INTERNAL_ERROR,
@@ -46,7 +47,12 @@ SERVER_INFO = {"name": "webrain-mcp", "version": "0.1.0"}
 
 
 class MCPServer:
-    def __init__(self, state: Dict[str, Any], expected_token: Optional[str] = None):
+    def __init__(
+        self,
+        state: Dict[str, Any],
+        expected_token: Optional[str] = None,
+        audit_db_path: Optional[str] = None,
+    ):
         # `state` is the live main_brain `_state` dict — handlers read
         # subsystems (memory, rag, wiki, kg) directly from it. We do not
         # copy or snapshot; handlers see whatever the brain has right now.
@@ -55,12 +61,19 @@ class MCPServer:
         # <expected_token>. Read-scope tools remain open. Pass None (e.g. in
         # tests) to keep all tools open.
         self._expected_token = expected_token
+        # M4b.2: path to SQLite audit DB. None disables audit logging.
+        self._audit_db_path = audit_db_path
 
     # -----------------------------------------------------------------------
     # Top-level dispatch (single or batch)
     # -----------------------------------------------------------------------
 
-    async def handle(self, payload: Any, bearer_token: Optional[str] = None) -> Optional[Any]:
+    async def handle(
+        self,
+        payload: Any,
+        bearer_token: Optional[str] = None,
+        client_ip: Optional[str] = None,
+    ) -> Optional[Any]:
         """Handle a parsed JSON-RPC payload.
 
         For a single request: returns the response dict (or None if it
@@ -74,17 +87,22 @@ class MCPServer:
                 return error_response(None, INVALID_REQUEST, "Empty batch")
             responses: List[Dict[str, Any]] = []
             for item in payload:
-                resp = await self._handle_one(item, bearer_token)
+                resp = await self._handle_one(item, bearer_token, client_ip)
                 if resp is not None:
                     responses.append(resp)
             return responses if responses else None
 
         if isinstance(payload, dict):
-            return await self._handle_one(payload, bearer_token)
+            return await self._handle_one(payload, bearer_token, client_ip)
 
         return error_response(None, INVALID_REQUEST, "Payload must be object or array")
 
-    async def _handle_one(self, request: Any, bearer_token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def _handle_one(
+        self,
+        request: Any,
+        bearer_token: Optional[str] = None,
+        client_ip: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Dispatch one JSON-RPC request. Returns None for notifications."""
         err = validate_request(request)
         if err is not None:
@@ -102,7 +120,7 @@ class MCPServer:
             return error_response(req_id, INVALID_PARAMS, "'params' must be an object")
 
         try:
-            result = await self._dispatch(method, params, bearer_token)
+            result = await self._dispatch(method, params, bearer_token, client_ip)
         except MCPError as e:
             if is_notification(request):
                 return None
@@ -125,7 +143,13 @@ class MCPServer:
     # Method dispatch
     # -----------------------------------------------------------------------
 
-    async def _dispatch(self, method: str, params: Dict[str, Any], bearer_token: Optional[str]) -> Any:
+    async def _dispatch(
+        self,
+        method: str,
+        params: Dict[str, Any],
+        bearer_token: Optional[str],
+        client_ip: Optional[str],
+    ) -> Any:
         if method == "initialize":
             return self._initialize(params)
         if method == "ping":
@@ -133,7 +157,7 @@ class MCPServer:
         if method == "tools/list":
             return {"tools": [t.to_dict() for t in TOOL_REGISTRY]}
         if method == "tools/call":
-            return await self._tools_call(params, bearer_token)
+            return await self._tools_call(params, bearer_token, client_ip)
         raise MCPError(METHOD_NOT_FOUND, f"unknown method: {method!r}")
 
     def _initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,118 +179,63 @@ class MCPServer:
             "serverInfo": SERVER_INFO,
         }
 
-    async def _tools_call(self, params: Dict[str, Any], bearer_token: Optional[str]) -> Dict[str, Any]:
-        # v2.29 (ROADMAP V2 P0 #3): record every tools/call in the MCP audit
-        # ledger. We're inside an asyncio handler; the ledger is best-effort
-        # (record() never raises) so this never breaks the actual call path.
-        import time as _time
-
-        try:
-            from audit.mcp_ledger import get_mcp_ledger, hash_bearer, summarize_args
-
-            _ledger = get_mcp_ledger()
-        except Exception:  # noqa: BLE001 — audit module shouldn't break MCP
-            _ledger = None
-
-            def hash_bearer(_: Optional[str]) -> Optional[str]:  # type: ignore[misc]
-                return None
-
-            def summarize_args(_: Any) -> Dict[str, Any]:  # type: ignore[misc]
-                return {}
-
-        _t0 = _time.time()
-        _bearer_id = hash_bearer(bearer_token) if bearer_token else None
-
+    async def _tools_call(
+        self,
+        params: Dict[str, Any],
+        bearer_token: Optional[str],
+        client_ip: Optional[str],
+    ) -> Dict[str, Any]:
         name = params.get("name")
-        if not isinstance(name, str):
-            # Audit the rejection too — useful when tracking down bad
-            # clients sending malformed payloads.
-            if _ledger is not None:
-                _ledger.record(
-                    tool=str(name) if name is not None else "?",
-                    scope="?",
-                    success=False,
-                    latency_ms=(_time.time() - _t0) * 1000.0,
-                    args_summary={},
-                    result_preview=None,
-                    error="INVALID_PARAMS: 'name' is required",
-                    bearer_id=_bearer_id,
-                )
-            raise MCPError(INVALID_PARAMS, "'name' is required")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
-            if _ledger is not None:
-                _ledger.record(
-                    tool=name,
-                    scope="?",
-                    success=False,
-                    latency_ms=(_time.time() - _t0) * 1000.0,
-                    args_summary={},
-                    result_preview=None,
-                    error="INVALID_PARAMS: 'arguments' must be an object",
-                    bearer_id=_bearer_id,
-                )
             raise MCPError(INVALID_PARAMS, "'arguments' must be an object")
 
-        spec = find_tool(name)
-        _args_summary = summarize_args(arguments)
-
-        # M4b.1: write-scope tools require a valid bearer token. Read-scope
-        # tools are open. Missing expected_token (e.g. dev/test) keeps all
-        # tools open — by design, since no token was configured.
-        if spec.scope == "write" and self._expected_token is not None:
-            if not verify(bearer_token, self._expected_token):
-                if _ledger is not None:
-                    _ledger.record(
-                        tool=name,
-                        scope=spec.scope,
-                        success=False,
-                        latency_ms=(_time.time() - _t0) * 1000.0,
-                        args_summary=_args_summary,
-                        result_preview=None,
-                        error="UNAUTHORIZED: missing/invalid bearer",
-                        bearer_id=_bearer_id,
-                    )
-                raise MCPError(
-                    UNAUTHORIZED,
-                    f"tool {name!r} requires authentication (Authorization: Bearer <token>)",
-                )
-
+        spec = None
+        success = True
+        error_message = None
         try:
-            result = await spec.handler(self._state, arguments)
-        except Exception as e:  # noqa: BLE001 — surface as MCPError; audit then re-raise
-            err_msg = f"{type(e).__name__}: {e}"
-            if _ledger is not None:
-                _ledger.record(
-                    tool=name,
-                    scope=spec.scope,
-                    success=False,
-                    latency_ms=(_time.time() - _t0) * 1000.0,
-                    args_summary=_args_summary,
-                    result_preview=None,
-                    error=err_msg,
-                    bearer_id=_bearer_id,
-                )
-            raise
+            if not isinstance(name, str):
+                raise MCPError(INVALID_PARAMS, "'name' is required")
 
-        # MCP convention: tool results are wrapped as content blocks. We
-        # always return a single text block containing the JSON-serialised
-        # result. Clients that want structured access parse the JSON.
-        result_text = json.dumps(result, ensure_ascii=False, default=str)
-        if _ledger is not None:
-            _ledger.record(
-                tool=name,
-                scope=spec.scope,
-                success=True,
-                latency_ms=(_time.time() - _t0) * 1000.0,
-                args_summary=_args_summary,
-                result_preview=result_text,
-                error=None,
-                bearer_id=_bearer_id,
-            )
-        return {
-            "content": [
-                {"type": "text", "text": result_text}
-            ],
-            "isError": False,
-        }
+            spec = find_tool(name)
+
+            # M4b.1: write-scope tools require a valid bearer token. Read-scope
+            # tools are open. Missing expected_token (e.g. dev/test) keeps all
+            # tools open — by design, since no token was configured.
+            if spec.scope == "write" and self._expected_token is not None:
+                if not verify(bearer_token, self._expected_token):
+                    raise MCPError(
+                        UNAUTHORIZED,
+                        f"tool {name!r} requires authentication (Authorization: Bearer <token>)",
+                    )
+
+            result = await spec.handler(self._state, arguments)
+            # MCP convention: tool results are wrapped as content blocks. We
+            # always return a single text block containing the JSON-serialised
+            # result. Clients that want structured access parse the JSON.
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(result, ensure_ascii=False, default=str)}
+                ],
+                "isError": False,
+            }
+        except MCPError as e:
+            success = False
+            error_message = e.message
+            raise
+        except Exception as e:
+            success = False
+            error_message = f"unhandled exception: {type(e).__name__}: {e}"
+            raise
+        finally:
+            if self._audit_db_path:
+                tool_name = name if isinstance(name, str) else "unknown"
+                scope = spec.scope if spec is not None else "unknown"
+                write_audit_log(
+                    self._audit_db_path,
+                    tool_name,
+                    scope,
+                    client_ip,
+                    success,
+                    error_message,
+                )

@@ -2417,8 +2417,9 @@ class ChatEngine:
     async def _load_user_profile(self) -> str:
         """S8: 持久化用户上下文 — 从 L3/L4 加载 [preference]/[goal] 事实注入系统提示。
 
-        结果按 TTL 缓存，避免每轮对话都查 DB。失败时静默降级，返回空字符串。
-        锁防止 TTL 到期瞬间多个并发请求同时穿透缓存（惊群效应）。
+        Phase 7 (v2.51 wiring from Kimi): 同时读取 ~/.webrain/user/profile.md
+        (Honcho 用户建模产物),若存在则附加。结果按 TTL 缓存,避免每轮对话都查 DB。
+        锁防止 TTL 到期瞬间多个并发请求同时穿透缓存(惊群效应)。
         """
         if not self.user_profile_enabled:
             return ""
@@ -2441,6 +2442,7 @@ class ChatEngine:
             ):
                 return self._user_profile_cache
             try:
+                # S8: L3/L4 preference/goal facts
                 results = await self.memory.query({
                     "query": "[preference] [goal]",
                     "levels": ["L3", "L4"],
@@ -2452,7 +2454,19 @@ class ChatEngine:
                     for r in results
                     if r.get("content", "").startswith(("[preference]", "[goal]"))
                 ]
-                profile_text = "\n".join([f"- {f}" for f in profile_facts]) if profile_facts else ""
+                parts: List[str] = []
+                if profile_facts:
+                    parts.append("\n".join([f"- {f}" for f in profile_facts]))
+
+                # Phase 7 (Kimi): file-based user profile from Honcho ProfileBuilder
+                from pathlib import Path
+                profile_md = Path.home() / ".webrain" / "user" / "profile.md"
+                if profile_md.exists():
+                    md_text = profile_md.read_text(encoding="utf-8")
+                    if md_text.strip():
+                        parts.append(f"## User Profile\n{md_text.strip()}")
+
+                profile_text = "\n\n".join(parts) if parts else ""
                 self._user_profile_cache = profile_text
                 self._user_profile_cached_at = now
                 return profile_text

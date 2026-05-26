@@ -40,7 +40,7 @@ from decision.decision_center import DecisionCenter
 from bridge.sub_brain_client import SubBrainClient
 from chat.chat_engine import ChatEngine
 from chat.llm_health_monitor import LLMHealthMonitor
-from mcp import MCPServer, TOOL_REGISTRY, extract_bearer, resolve_token, verify
+from mcp import MCPServer, TOOL_REGISTRY, extract_bearer, get_audit_logs, init_audit_db, resolve_token, verify
 from planner import Planner
 from wiki.wiki_engine import WikiEngine
 from memory.dreaming_engine import DreamingEngine
@@ -53,6 +53,9 @@ from observability.metrics import MetricsCollector
 from observability.logger import setup_structured_logging, log_request, LogContext
 from dependency_check import check_on_startup
 from cache.cache_manager import cache
+# v2.51 — Kimi M6b wiring (合并自 backup 分支)
+from evolution.auto_skill_creator import AutoSkillCreator
+from user_modeling import ProfileBuilder, ProfileUpdater
 
 # Configure logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -913,6 +916,23 @@ async def health_models():
         "total_count": total_count,
         "endpoints": health,
     }
+
+
+# ========== MCP Audit Log API (M4b.2 — Kimi) ==========
+
+
+@app.get("/mcp/audit")
+async def mcp_audit(limit: int = 50):
+    """Return recent MCP tool call audit records.
+
+    Drives the frontend MCPInfoPanel "Recent Calls" table.
+    v2.51 — wiring 自 Kimi backup 合并入。
+    """
+    db_path = _state.get("mcp_audit_db_path")
+    if not db_path:
+        return {"ok": False, "error": "audit log not initialized"}
+    logs = get_audit_logs(db_path, limit)
+    return {"ok": True, "logs": logs}
 
 
 # ========== LLM Router Stats (M4a) ==========
