@@ -79,7 +79,9 @@ describe("UserProfilePanel", () => {
         updated_at: "",
       },
     });
-    const deleteSpy = vi.spyOn(userProfileApi.userProfileApi, "deleteProfile").mockResolvedValue({ removed: ["profile.json"] });
+    const deleteSpy = vi
+      .spyOn(userProfileApi.userProfileApi, "deleteProfile")
+      .mockResolvedValue({ removed: ["profile.json"] });
     render(<UserProfilePanel />);
     await waitFor(() => screen.getByText("Charlie"));
     fireEvent.click(screen.getByText("重置画像"));

@@ -77,7 +77,7 @@ export const planApi = {
     params: ExecutePlanParams,
     onEvent: (event: PlanStreamEvent) => void,
     onDone?: () => void,
-    onError?: (err: Error) => void,
+    onError?: (err: Error) => void
   ) => {
     const { client, url } = api.stream("/brain/plan/execute/stream", params as Record<string, unknown>);
     client.connect(
@@ -88,7 +88,7 @@ export const planApi = {
         }
       },
       onDone,
-      onError,
+      onError
     );
     return client;
   },

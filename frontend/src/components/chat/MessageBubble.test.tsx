@@ -276,7 +276,16 @@ describe("MessageBubble", () => {
               description: "step one",
               final_output: "done",
               succeeded: true,
-              attempts: [{ attempt_idx: 1, output: "done", verification_passed: true, verification_reason: "ok", strategy: "default", duration_ms: 50 }],
+              attempts: [
+                {
+                  attempt_idx: 1,
+                  output: "done",
+                  verification_passed: true,
+                  verification_reason: "ok",
+                  strategy: "default",
+                  duration_ms: 50,
+                },
+              ],
             },
           ],
         },
@@ -293,7 +302,12 @@ describe("MessageBubble", () => {
     fireEvent.click(button);
 
     await screen.findByText(/全部通过/);
-    expect(planApi.executeStream).toHaveBeenCalledWith({ plan, verify: "presence" }, expect.any(Function), expect.any(Function), expect.any(Function));
+    expect(planApi.executeStream).toHaveBeenCalledWith(
+      { plan, verify: "presence" },
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function)
+    );
     expect(screen.getByText("done")).toBeInTheDocument();
   });
 

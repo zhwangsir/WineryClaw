@@ -334,8 +334,8 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                     </button>
                     {executing && execProgress && msg.plan && (
                       <span style={{ fontSize: 11, color: isDark ? "#a1a1aa" : "#737373" }}>
-                        Task {execProgress.currentTaskIdx + 1}/{msg.plan.tasks.length}
-                        第 {execProgress.currentAttempt} 次尝试中...
+                        Task {execProgress.currentTaskIdx + 1}/{msg.plan.tasks.length}第 {execProgress.currentAttempt}{" "}
+                        次尝试中...
                       </span>
                     )}
                     {execResult && execResult.ok && (
@@ -374,7 +374,15 @@ export default function MessageBubble({ msg, isDark, highlight }: MessageBubbleP
                             ) : i === execProgress.currentTaskIdx ? (
                               <LoadingOutlined style={{ color: isDark ? "#a1a1aa" : "#737373", fontSize: 10 }} />
                             ) : (
-                              <span style={{ width: 10, height: 10, borderRadius: "50%", background: isDark ? "#3f3f46" : "#d4d4d8", display: "inline-block" }} />
+                              <span
+                                style={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: "50%",
+                                  background: isDark ? "#3f3f46" : "#d4d4d8",
+                                  display: "inline-block",
+                                }}
+                              />
                             )}
                             <span style={{ color: isDark ? "#d4d4d8" : "#3f3f46" }}>{t.description}</span>
                           </div>

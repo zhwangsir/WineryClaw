@@ -1,10 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, Button, Spin, Empty, Tag, message } from "antd";
-import {
-  UserOutlined,
-  ReloadOutlined,
-  DeleteOutlined,
-} from "@ant-design/icons";
+import { UserOutlined, ReloadOutlined, DeleteOutlined } from "@ant-design/icons";
 import { userProfileApi, type UserProfile } from "../../api/userProfile";
 
 export default function UserProfilePanel() {
@@ -79,12 +75,7 @@ export default function UserProfilePanel() {
       style={{ marginTop: 24, borderRadius: 12, border: "1px solid var(--c-border)", boxShadow: "var(--shadow)" }}
       extra={
         <div style={{ display: "flex", gap: 8 }}>
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            loading={refreshing}
-            onClick={handleRefresh}
-          >
+          <Button size="small" icon={<ReloadOutlined />} loading={refreshing} onClick={handleRefresh}>
             立即更新
           </Button>
           <Button

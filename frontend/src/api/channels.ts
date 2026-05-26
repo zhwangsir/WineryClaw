@@ -46,8 +46,7 @@ export const channelsApi = {
       `/api/channels/${id}/policy/audit?limit=${limit}`
     ),
   // v2.51 — M5.1 per-channel agent + reply delay (合并自 Kimi backup)
-  setAgentId: (id: string, agent_id: string) =>
-    api.post<{ ok: boolean }>(`/api/channels/${id}/agent`, { agent_id }),
+  setAgentId: (id: string, agent_id: string) => api.post<{ ok: boolean }>(`/api/channels/${id}/agent`, { agent_id }),
   setReplyDelay: (id: string, delay_ms: number) =>
     api.post<{ ok: boolean }>(`/api/channels/${id}/reply-delay`, { delay_ms }),
 };

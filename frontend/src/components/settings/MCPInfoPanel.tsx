@@ -8,7 +8,14 @@
 
 import { useEffect, useState } from "react";
 import { Card, Table, Tag, Typography, Empty, message, Alert, Space, Button } from "antd";
-import { ApiOutlined, CopyOutlined, LockOutlined, UnlockOutlined, CheckCircleOutlined, CloseCircleOutlined } from "@ant-design/icons";
+import {
+  ApiOutlined,
+  CopyOutlined,
+  LockOutlined,
+  UnlockOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+} from "@ant-design/icons";
 import { mcpApi, type MCPSelfServerInfo, type MCPExposedToolSummary, type MCPAuditLogEntry } from "../../api/mcp";
 
 const { Paragraph, Text } = Typography;
@@ -241,9 +248,7 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               title: "时间",
               dataIndex: "timestamp",
               width: 180,
-              render: (ts: string) => (
-                <span style={{ fontSize: 12 }}>{ts ? new Date(ts).toLocaleString() : "-"}</span>
-              ),
+              render: (ts: string) => <span style={{ fontSize: 12 }}>{ts ? new Date(ts).toLocaleString() : "-"}</span>,
             },
             {
               title: "工具名",
@@ -286,7 +291,11 @@ python sub-brain/main-brain/tools/mcp_stdio_bridge.py \\
               title: "错误信息",
               dataIndex: "error_message",
               render: (msg: string | null) =>
-                msg ? <span style={{ fontSize: 12, color: "#ff4d4f" }}>{msg}</span> : <span style={{ fontSize: 12, color: "#bfbfbf" }}>-</span>,
+                msg ? (
+                  <span style={{ fontSize: 12, color: "#ff4d4f" }}>{msg}</span>
+                ) : (
+                  <span style={{ fontSize: 12, color: "#bfbfbf" }}>-</span>
+                ),
             },
           ]}
         />
