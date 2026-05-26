@@ -76,3 +76,8 @@ temp/
 .webrain-keeper/alerts/
 .webrain-keeper/reports/
 data/backups/
+
+# pnpm v11 sometimes auto-creates this for esbuild build approval; we don't use workspaces
+pnpm-workspace.yaml
+frontend/pnpm-workspace.yaml
+sub-brain/pnpm-workspace.yaml
