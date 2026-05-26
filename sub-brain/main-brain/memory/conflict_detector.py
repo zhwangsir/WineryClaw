@@ -49,15 +49,20 @@ import os as _os
 # contradiction. Below this they're unrelated enough that the LLM check
 # isn't worth the cost.
 #
-# **Default tuned 0.7 → 0.5 after 2026-05-20 user trial.** The multilingual
-# MiniLM model produces lower cosine sim on short CJK strings than on
-# English: two contradicting Chinese name facts ("我叫A" vs "我叫B")
-# scored ~0.5, well below the original 0.7 threshold, so conflicts were
-# never even sent to the LLM judge. 0.5 catches CJK while still excluding
-# clearly-unrelated rows (the LLM judge filters the remaining false
-# positives). Override via WEBRAIN_CONFLICT_SIMILARITY_THRESHOLD env.
+# History:
+# - 2026-05-20 user trial: dropped 0.7 → 0.5 because MiniLM gave low CJK
+#   similarity (e.g. "我叫A" vs "我叫B" scored ~0.5).
+# - 2026-05-26 v2.52.2: bumped 0.5 → 0.75 after switching to BAAI/bge-small-zh-v1.5
+#   embedder. bge-zh gives MUCH higher Chinese similarity (sim(蓝色, 红色)=0.873
+#   for contradicting colors), and 0.5 floor now lets too many semantically-related
+#   but non-contradicting rows surface — bug detected in CI when prior smoke tests
+#   polluted DB and test_judge_marks_contradicting_l3_pair joined the wrong group.
+# - 0.75 still catches all true contradicting pairs (实测 bge-zh sim ≥ 0.87 for
+#   contradiction, ≥ 0.95 for English pairs), but filters out the prior-test
+#   pollution.
+# Override via WEBRAIN_CONFLICT_SIMILARITY_THRESHOLD env.
 DEFAULT_SIMILARITY_THRESHOLD = float(
-    _os.environ.get("WEBRAIN_CONFLICT_SIMILARITY_THRESHOLD", "0.5")
+    _os.environ.get("WEBRAIN_CONFLICT_SIMILARITY_THRESHOLD", "0.75")
 )
 # Maximum number of similar candidates we'll ask the LLM about per store.
 # Caps cost at one fixed multiple of L3 writes.
